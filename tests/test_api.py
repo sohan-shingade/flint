@@ -143,3 +143,15 @@ def test_mev_liq_scan():
     })
     assert r.status_code == 200
     assert len(r.json()["opportunities"]) == 1
+
+
+def test_collector_status():
+    resp = client.get("/api/v1/collector/status")
+    assert resp.status_code == 200
+    assert "status" in resp.json()
+
+
+def test_collector_config():
+    resp = client.get("/api/v1/collector/config")
+    assert resp.status_code == 200
+    assert "markets" in resp.json()
