@@ -238,6 +238,156 @@ Interactive TradingView-quality charts with:
 </tr>
 </table>
 
+---
+
+## Data Sources
+
+Flint aggregates data from multiple sources into a local DuckDB database. **All core data is free** — no API keys required for backtesting.
+
+### Built-in Providers
+
+| Provider | Data | Auth | Coverage |
+|---|---|---|---|
+| **Drift Data API** | OHLCV candles (1m→monthly), funding rates, orderbook L2/L3 | None (free) | 48 markets, current data |
+| **Drift S3** | Historical trade records (archival backfill) | None (free) | 90+ days of raw trades |
+| **GeckoTerminal** | DEX pool OHLCV for any Solana pool | None (free) | Any Solana DEX pool |
+| **Jupiter** | Swap quotes, routing, price discovery | None (free) | Any SPL token pair |
+| **Hyperliquid** | Hourly funding rates | None (free) | 17 markets |
+| **OKX** | 8h funding rates (normalized to 1h) | None (free) | Major markets |
+| **Bybit** | 8h funding rates (normalized to 1h) | None (free) | Major markets |
+| **Binance** | 8h funding rates (normalized to 1h) | None (free) | Major markets (US geo-blocked) |
+
+### Optional Providers (API key required, all free tier)
+
+| Provider | Data | Sign Up | What It Unlocks |
+|---|---|---|---|
+| **Birdeye** | OHLCV for *any* Solana token, token metadata, price history | [birdeye.so/developers](https://birdeye.so/developers) | Backtest any SPL token, not just Drift perps |
+| **Helius** | Parsed transactions, token transfers, program events, DAS | [helius.dev](https://helius.dev) | On-chain events, whale tracking, liquidation data |
+| **Pyth Network** | Real-time oracle feeds with confidence intervals | No key needed | Sub-second price updates for 100+ assets |
+
+### Data Stored Locally
+
+All data is cached in DuckDB (`./data/flint.duckdb`). No data leaves your machine.
+
+| Table | Fields | Primary Key |
+|---|---|---|
+| `candles` | market, resolution, OHLCV | (market, resolution_s, ts) |
+| `funding_rates` | market, rate, oracle/mark price, slot | (market, ts) |
+| `oracle_prices` | market, price, slot | (market, ts) |
+| `orderbook_snapshots` | market, bid/ask prices and sizes | (market, ts) |
+| `venue_funding_rates` | venue, market, hourly rate, mark/index price | (venue, market, ts) |
+| `pool_snapshots` | pool address, dex, reserves, fee rate | (pool_address, ts) |
+
+### Cross-Venue Funding
+
+Flint normalizes funding rates across 5 venues to a common hourly format, computes a benchmark (equal-weight average), and calculates dislocation scores — enabling cross-venue funding arbitrage strategies.
+
+```
+Drift (1h native) ──┐
+Hyperliquid (1h)  ───┤
+OKX (8h → 1h)    ───┼──→ Benchmark (avg) ──→ Dislocation z-score per venue
+Bybit (8h → 1h)  ───┤
+Binance (8h → 1h) ──┘
+```
+
+---
+
+## Configuring Data Sources
+
+Every data source is opt-in and configurable via `flint.yaml`, `.env`, or CLI. Enable only what you need.
+
+### Via `flint.yaml`
+
+```yaml
+providers:
+  drift:
+    enabled: true       # always-on, no key needed
+    candles: true
+    funding_rates: true
+    orderbook: true
+
+  birdeye:
+    enabled: true       # enable Birdeye for spot token data
+    # api_key set via FLINT_BIRDEYE_API_KEY env var
+
+  helius:
+    enabled: true       # enable on-chain event tracking
+    # api_key set via FLINT_HELIUS_API_KEY env var
+
+  pyth:
+    enabled: true       # real-time oracle feeds
+
+  funding:
+    drift: true
+    hyperliquid: true
+    okx: true
+    binance: false      # geo-blocked from US
+    bybit: false
+
+dex:
+  raydium:
+    enabled: true       # track Raydium pool data
+  orca:
+    enabled: false
+```
+
+### Via `.env`
+
+```bash
+# API keys for optional providers
+FLINT_BIRDEYE_API_KEY=your_key_here
+FLINT_HELIUS_API_KEY=your_key_here
+```
+
+### Via CLI
+
+```bash
+# Enable a provider
+flint data provider enable birdeye --api-key YOUR_KEY
+
+# Disable a provider
+flint data provider disable binance
+
+# Check provider status
+flint data provider status
+
+# Download data from a specific provider
+flint data download --provider birdeye --token SOL
+flint data download --provider drift --market SOL-PERP
+
+# List available markets per provider
+flint data provider markets drift
+flint data provider markets birdeye
+```
+
+### Adding Custom Providers
+
+Implement the `DataProvider` interface and register in `flint.yaml`:
+
+```python
+from flint.providers.base import DataProvider
+
+class MyExchangeProvider(DataProvider):
+    name = "my-exchange"
+
+    def fetch_candles(self, market, resolution_s, start_ts, end_ts):
+        # Your API calls here
+        return [Candle(...), ...]
+
+    def fetch_funding_rates(self, market, start_ts, end_ts):
+        return [FundingRate(...), ...]
+```
+
+```yaml
+providers:
+  custom:
+    - module: my_providers.exchange
+      class: MyExchangeProvider
+      enabled: true
+      config:
+        api_key: ${MY_EXCHANGE_KEY}
+```
+
 ## CLI Reference
 
 ```
@@ -303,14 +453,54 @@ strategies/user/       # Your strategies go here
 |---|---|
 | Backend | Python 3.9+, FastAPI, DuckDB, Optuna |
 | Frontend | React 19, Vite, Tailwind CSS, Monaco Editor, lightweight-charts |
-| Data | Drift Data API, Drift S3 (archival), Parquet |
+| Data | Drift Data API, Drift S3, GeckoTerminal, Birdeye, Pyth, Parquet |
+| Funding | Drift, Hyperliquid, OKX, Bybit, Binance (5 venues) |
 | Execution | driftpy (Drift Protocol), Jupiter |
 | CLI | Typer + Rich |
 | Infra | Docker, WebSocket |
 
+## Roadmap
+
+### Next Up
+
+| Feature | Category | Description |
+|---|---|---|
+| **Spot token backtesting** | Breadth | Backtest strategies on any Solana SPL token via Birdeye data |
+| **LP strategy framework** | Breadth | Simulate concentrated liquidity on Raydium/Orca (IL, fee yields) |
+| **Raydium + Orca pool data** | Breadth | AMM reserves, CLMM positions, LP fee tracking |
+| **Open interest tracking** | Depth | Long/short OI from Drift for crowding and divergence signals |
+| **Liquidation detection** | Depth | Parse Drift program events via Helius for cascade detection |
+| **Whale wallet tracking** | Depth | Monitor large token movements for smart money signals |
+| **Perp-spot basis engine** | Depth | Automated basis tracking between Drift perps and spot prices |
+| **Pyth WebSocket streaming** | Operational | Sub-second oracle updates for paper/live trading |
+| **Tick-level Drift data** | Operational | Fill-level trade records for volume profile analysis |
+| **Incremental sync** | Operational | Track `last_sync_ts` per source, only fetch deltas |
+| **Data freshness dashboard** | Operational | UI showing staleness per market/source |
+| **Cross-market correlation** | Operational | Rolling correlation matrix for portfolio construction |
+| **Adaptive resolution** | Operational | Auto-select candle resolution based on backtest length |
+| **Liquidation heatmap** | UI | Visualize liquidation clusters relative to current price |
+| **Multi-venue execution** | Trading | Route orders across Drift + Jupiter for best execution |
+| **Strategy marketplace** | Community | Share/import strategies with performance badges |
+
+### Possible Future Integrations
+
+| Integration | Type | What It Enables |
+|---|---|---|
+| **Marinade Finance** | Staking | mSOL yield data for basis strategies |
+| **Jito** | MEV | Tip data, bundle analysis, priority fee markets |
+| **Tensor** | NFT | NFT floor price feeds for exotic strategies |
+| **Switchboard** | Oracle | Alternative oracle feeds, VRF |
+| **Kamino** | DeFi | Vault yields, auto-compounding data |
+| **Marginfi** | Lending | Borrow rates, utilization for carry trades |
+| **Token unlock schedules** | On-chain | Vesting account monitoring for supply pressure |
+
+Want to contribute a provider or feature? See [Adding Custom Providers](#adding-custom-providers) above.
+
+---
+
 ## Configuration
 
-Flint uses `flint.yaml` in the project root + environment variables (`FLINT_` prefix):
+Flint uses `flint.yaml` + environment variables (`FLINT_` prefix) + `.env` file:
 
 ```yaml
 db:
@@ -318,18 +508,37 @@ db:
 
 trading:
   default_capital: 10000
-  default_fee_bps: 5
+  default_fee_rate: 0.0005
+  default_markets: ["SOL-PERP", "BTC-PERP", "ETH-PERP"]
 
 collector:
-  markets: ["SOL-PERP", "BTC-PERP", "ETH-PERP"]
-  resolution_s: 3600
+  enabled: true
+  candle_backfill_days: 90
+
+providers:
+  drift:
+    enabled: true
+  birdeye:
+    enabled: false    # set FLINT_BIRDEYE_API_KEY to enable
+  helius:
+    enabled: false    # set FLINT_HELIUS_API_KEY to enable
+  pyth:
+    enabled: false
+  funding:
+    drift: true
+    hyperliquid: true
+    okx: true
+
+risk:
+  max_drawdown_pct: 0.20
+  max_open_trades: 5
 
 api:
   host: 0.0.0.0
   port: 8000
 ```
 
-See `.env.example` for environment variable options.
+See `.env.example` for all environment variable options.
 
 ## Development
 

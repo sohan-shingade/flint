@@ -26,6 +26,72 @@ risk:
   default_stop_loss_pct: 0.05
   max_open_trades: 5
 
+# ─── Data Providers ──────────────────────────────────────────────
+# Enable/disable individual data sources.
+# Each provider can be toggled on/off and configured independently.
+# API keys can also be set via environment variables (FLINT_ prefix).
+
+providers:
+  # Drift — always available, no API key needed
+  drift:
+    enabled: true
+    # Data types to collect from Drift
+    candles: true
+    funding_rates: true
+    orderbook: true
+    oracle_prices: true
+
+  # Birdeye — OHLCV for any Solana SPL token (requires free API key)
+  birdeye:
+    enabled: false
+    # api_key: ""  # or set FLINT_BIRDEYE_API_KEY env var
+    # tokens:      # specific token addresses to track
+    #   - So11111111111111111111111111111111111111112   # SOL
+    #   - EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v # USDC
+
+  # Helius — on-chain events, parsed transactions, whale tracking
+  helius:
+    enabled: false
+    # api_key: ""  # or set FLINT_HELIUS_API_KEY env var
+    # track:
+    #   liquidations: true
+    #   whale_transfers: true
+    #   token_unlocks: false
+
+  # Pyth — real-time oracle feeds, sub-second updates (no key required)
+  pyth:
+    enabled: false
+    # feed_ids:    # Pyth price feed IDs to subscribe to
+    #   - "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"  # SOL/USD
+
+  # GeckoTerminal — DEX pool OHLCV data (no key required)
+  gecko:
+    enabled: true
+    # pools:       # specific pool addresses to track
+    #   - "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE"  # SOL/USDC on Raydium
+
+  # Jupiter — DEX swap quotes and routing (no key required)
+  jupiter:
+    enabled: true
+
+  # Cross-venue funding rates
+  funding:
+    drift: true
+    hyperliquid: true
+    okx: true
+    binance: false     # geo-blocked from US IPs
+    bybit: false       # may return 403 from some regions
+
+# ─── DEX Connectors ─────────────────────────────────────────────
+# Enable/disable DEX integrations for execution and pool data.
+dex:
+  raydium:
+    enabled: false
+    # pool_data: true    # track AMM/CLMM pool reserves and fees
+  orca:
+    enabled: false
+    # whirlpools: true   # track concentrated liquidity positions
+
 # notifications:
 #   telegram_bot_token: ""
 #   telegram_chat_id: ""
