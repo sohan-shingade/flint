@@ -4,6 +4,7 @@ interface BacktestParams {
   strategy: string
   code?: string
   market: string
+  markets?: string[]
   resolution_s: number
   start_ts: number
   end_ts: number

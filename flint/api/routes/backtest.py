@@ -6,12 +6,13 @@ import uuid
 import time
 import threading
 from datetime import datetime as dt, timezone as tz
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ...backtest.engine import BacktestEngine
+from ...models import Candle
 from ...analytics.tearsheet import generate_tearsheet
 from ...analytics.monte_carlo import run_monte_carlo
 from ...data.quality import check_candle_quality
@@ -70,7 +71,8 @@ def _set_result(run_id: str, result: dict):
 class BacktestRequest(BaseModel):
     strategy: str = "ma_crossover"
     code: Optional[str] = None
-    market: str = "SOL-PERP"
+    market: str = "SOL-PERP"          # primary market (backwards compat)
+    markets: Optional[List[str]] = None  # additional markets for multi-market strategies
     resolution_s: int = 3600
     start_ts: int
     end_ts: int
@@ -165,6 +167,8 @@ def run_backtest(req: BacktestRequest, request: Request):
         try:
             # Phase 1: Build strategy (pure CPU, no DB)
             _set_progress(run_id, phase="strategy", pct=5, detail="Loading strategy...")
+
+            extra_candles: Dict[str, List[Candle]] = {}
 
             params = req.params or _DEFAULTS.get(req.strategy, {})
             strategy = _build_strategy(req.strategy, params, req.code)
@@ -277,6 +281,30 @@ def run_backtest(req: BacktestRequest, request: Request):
                                      f"or no trades occurred in this period."})
                 return
 
+            # Phase 2.6: Load extra markets for multi-market strategies
+            all_market_names = [req.market]
+            if req.markets:
+                extra_market_list = [m for m in req.markets if m != req.market]
+                all_market_names.extend(extra_market_list)
+                for i, extra_m in enumerate(extra_market_list):
+                    _set_progress(run_id, phase="data", pct=79,
+                                  detail=f"Loading {extra_m} ({i+1}/{len(extra_market_list)})...")
+                    extra_c = []
+                    if store is not None:
+                        extra_c = store.query_candles(extra_m, req.resolution_s, start_ts, end_ts)
+                    if not extra_c:
+                        # Try downloading
+                        try:
+                            api_provider = DriftCandleProvider()
+                            extra_c = api_provider.fetch_candles(extra_m, req.resolution_s, start_ts, end_ts)
+                            api_provider.close()
+                            if extra_c and store is not None:
+                                store.upsert_candles(extra_c)
+                        except Exception as e:
+                            logger.warning("Failed to load %s: %s", extra_m, e)
+                    if extra_c:
+                        extra_candles[extra_m] = extra_c
+
             # Phase 2.5: Data quality check
             quality = check_candle_quality(candles, req.resolution_s)
             data_warnings = []
@@ -297,7 +325,13 @@ def run_backtest(req: BacktestRequest, request: Request):
                           candles=len(candles))
 
             engine = BacktestEngine(strategy, req.initial_capital, req.fee_rate)
-            result = engine.run(candles)
+            if extra_candles:
+                # Multi-market: pass dict of all markets
+                all_candles = {req.market: candles}
+                all_candles.update(extra_candles)
+                result = engine.run(all_candles)
+            else:
+                result = engine.run(candles)
 
             # Phase 4: Generate tearsheet
             _set_progress(run_id, phase="tearsheet", pct=90,

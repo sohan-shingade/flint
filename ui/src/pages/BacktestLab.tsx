@@ -794,6 +794,21 @@ interface RunRecord {
   ts: number
 }
 
+/* ── helpers ────────────────────────────────────────────── */
+
+function extractMarketsFromCode(code: string): string[] {
+  const markets: string[] = []
+  // Match ctx.get_candles("MARKET-NAME") patterns
+  const regex = /get_candles\s*\(\s*["']([A-Z0-9]+-(?:PERP|[A-Z]+))["']/g
+  let match
+  while ((match = regex.exec(code)) !== null) {
+    if (!markets.includes(match[1])) {
+      markets.push(match[1])
+    }
+  }
+  return markets
+}
+
 /* ── component ─────────────────────────────────────────── */
 
 export default function BacktestLab() {
@@ -1031,10 +1046,13 @@ export default function BacktestLab() {
       return
     }
 
+    const extraMarkets = extractMarketsFromCode(codeRef.current)
+
     run({
       strategy: 'custom',
       code: codeRef.current,
       market,
+      markets: extraMarkets.length > 0 ? [market, ...extraMarkets] : undefined,
       resolution_s: res_s,
       start_ts: startTs,
       end_ts: endTs,
@@ -1291,22 +1309,24 @@ export default function BacktestLab() {
               <span className="text-[10px] text-ghost tracking-[0.2em]">CONFIG.PARAMS</span>
             </div>
             <div className="p-3 grid grid-cols-2 gap-3">
-              <div>
-                <label className={labelClass}>MARKET</label>
-                <select value={market} onChange={(e) => setMarket(e.target.value)} className={inputClass}>
-                  <optgroup label="Perp Markets">
-                    {(availableMarkets.length > 0
-                      ? availableMarkets.filter(m => m.includes('-PERP'))
-                      : PERP_MARKETS
-                    ).map(m => <option key={m}>{m}</option>)}
-                  </optgroup>
-                  <optgroup label="Spot Markets">
-                    {(availableMarkets.length > 0
-                      ? availableMarkets.filter(m => !m.includes('-PERP'))
-                      : SPOT_MARKETS
-                    ).map(m => <option key={m}>{m}</option>)}
-                  </optgroup>
-                </select>
+              <div className="col-span-2 bg-panel/80 border border-border/50 px-3 py-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] text-amber tracking-wider font-medium">MARKETS</span>
+                </div>
+                <p className="text-[10px] text-terminal/70 leading-relaxed">
+                  Define markets in your strategy code. The primary market is passed via <code className="text-amber/70 bg-void/50 px-1">candle.market</code>.
+                  Access additional markets with <code className="text-amber/70 bg-void/50 px-1">ctx.get_candles("BTC-PERP")</code>.
+                  Default: <span className="text-white/80">SOL-PERP</span>. Set in config below.
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="text-[9px] text-ghost tracking-wider">PRIMARY</label>
+                  <select value={market} onChange={(e) => setMarket(e.target.value)}
+                    className="bg-void border border-border text-[11px] text-terminal px-2 py-0.5 w-36">
+                    {(availableMarkets.length > 0 ? availableMarkets : [...PERP_MARKETS, ...SPOT_MARKETS]).map(m =>
+                      <option key={m}>{m}</option>
+                    )}
+                  </select>
+                </div>
               </div>
               <div>
                 <label className={labelClass}>TIMEFRAME</label>
