@@ -34,8 +34,14 @@ node_modules/
 # Flint local state
 .flint/
 
-# Superpowers / Claude
+# Superpowers / Claude scaffolding
 .superpowers/
+docs/superpowers/
+
+# User strategies (personal — use `flint new` to create your own)
+strategies/user/*.py
+strategies/user/*.md
+!strategies/user/.gitkeep
 
 # Status/notes (personal)
 STATUS_*.md
