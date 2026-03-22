@@ -463,7 +463,8 @@ flint optimize my_strat.py -m ETH-PERP --metric calmar --trials 200` },
         id: 'cli-data',
         title: 'flint data',
         content: `
-          <p>Manage local candle data. Two subcommands:</p>
+          <p>Manage local data and data providers.</p>
+
           <h4>flint data download</h4>
           <table>
             <tr><td>-m, --market</td><td>Market to download (default: SOL-PERP)</td></tr>
@@ -471,18 +472,48 @@ flint optimize my_strat.py -m ETH-PERP --metric calmar --trials 200` },
             <tr><td>-r, --resolution</td><td>Candle resolution in seconds (default: 3600)</td></tr>
             <tr><td>--end-date</td><td>End date YYYY-MM-DD (default: today)</td></tr>
           </table>
+
           <h4>flint data status</h4>
-          <p>Shows a table of all markets in the local database with candle counts and date ranges. Automatically uses the API if the server is running (avoids DuckDB lock conflicts).</p>
+          <p>Shows markets in the local database with candle counts and date ranges.</p>
+
+          <h4>flint data provider status</h4>
+          <p>Shows all data providers with enabled/available status, API key requirements, and supported data types.</p>
+
+          <h4>flint data provider enable &lt;name&gt;</h4>
+          <table>
+            <tr><td>name</td><td>Provider name: birdeye, helius, pyth, raydium, orca, ccxt</td></tr>
+            <tr><td>--api-key</td><td>API key (saved to .env automatically)</td></tr>
+          </table>
+
+          <h4>flint data provider disable &lt;name&gt;</h4>
+          <p>Disables a provider in flint.yaml.</p>
+
+          <h4>flint data exchanges</h4>
+          <p>Lists all CCXT-supported exchanges (requires <code>pip install flint[ccxt]</code>).</p>
+
+          <h4>flint data markets &lt;exchange&gt;</h4>
+          <table>
+            <tr><td>exchange</td><td>Exchange name: binance, bybit, okx, coinbase, kraken, etc.</td></tr>
+            <tr><td>--type</td><td>Market type: swap (perps), spot, future (default: swap)</td></tr>
+            <tr><td>--quote</td><td>Quote currency filter (default: USDT)</td></tr>
+          </table>
         `,
         codeBlocks: [
-          { language: 'bash', code: `# Download SOL-PERP data for 1 year
+          { language: 'bash', code: `# Download data
 flint data download --market SOL-PERP --days 365
+flint data status
 
-# Download BTC with specific end date
-flint data download -m BTC-PERP -d 180 --end-date 2025-06-01
+# Manage providers
+flint data provider status
+flint data provider enable birdeye --api-key YOUR_KEY
+flint data provider enable helius --api-key YOUR_KEY
+flint data provider enable pyth
+flint data provider disable binance
 
-# Check what's in the database
-flint data status` },
+# CCXT exchanges (pip install flint[ccxt])
+flint data exchanges
+flint data markets binance
+flint data markets bybit --type spot --quote USDC` },
         ],
       },
       {
@@ -822,11 +853,33 @@ result = engine.run(candles)` },
         id: 'data-sources',
         title: 'Data Sources',
         content: `
-          <p>Flint uses two data sources with automatic fallback:</p>
+          <p>Flint aggregates data from multiple sources into a local DuckDB database. All core data is free — no API keys needed for backtesting.</p>
+
+          <h4>Free — No API Keys Needed</h4>
           <table>
-            <tr><td><strong>Drift Data API</strong> (primary)</td><td>Pre-built OHLCV candles. Fast (1000/request). Current data. Free, no key.</td></tr>
-            <tr><td><strong>Drift S3</strong> (fallback)</td><td>Raw trade CSVs aggregated into candles. Archival data (may lag). Free, unlimited.</td></tr>
+            <tr><td><strong>Drift Data API</strong></td><td>OHLCV candles (1m→monthly), funding rates, orderbook L2/L3. 48 markets. Primary source.</td></tr>
+            <tr><td><strong>Drift S3</strong></td><td>Historical trade records. Archival backfill. Auto-fallback.</td></tr>
+            <tr><td><strong>Drift Open Interest</strong></td><td>Long/short OI per market. Crowding detection.</td></tr>
+            <tr><td><strong>GeckoTerminal</strong></td><td>DEX pool OHLCV for any Solana pool.</td></tr>
+            <tr><td><strong>Jupiter</strong></td><td>Swap quotes, routing, price discovery for any SPL token pair.</td></tr>
+            <tr><td><strong>Pyth Network</strong></td><td>Real-time oracle feeds for 20 pairs. Sub-second updates.</td></tr>
+            <tr><td><strong>Raydium</strong></td><td>AMM/CLMM pool data, reserves, fees, TVL, volume.</td></tr>
+            <tr><td><strong>Orca</strong></td><td>Whirlpool concentrated liquidity pool stats.</td></tr>
+            <tr><td><strong>Hyperliquid</strong></td><td>Hourly funding rates, 17 markets.</td></tr>
+            <tr><td><strong>OKX / Bybit</strong></td><td>8h funding rates (normalized to 1h). Major markets.</td></tr>
           </table>
+
+          <h4>Free API Key Required (no credit card)</h4>
+          <table>
+            <tr><td><strong>Birdeye</strong></td><td>OHLCV for <strong>any</strong> Solana token, metadata, prices. Sign up at birdeye.so/developers.</td></tr>
+            <tr><td><strong>Helius</strong></td><td>Liquidation detection, whale wallet tracking, parsed transactions. Sign up at helius.dev.</td></tr>
+          </table>
+
+          <h4>Optional Install</h4>
+          <table>
+            <tr><td><strong>CCXT</strong></td><td>100+ centralized exchanges (Binance, Bybit, OKX, Coinbase, Kraken, etc.). Install: <code>pip install flint[ccxt]</code>. No key needed for public data.</td></tr>
+          </table>
+
           <h4>How Data Loading Works</h4>
           <ol>
             <li>Check local DuckDB for the requested market + date range</li>
@@ -835,8 +888,8 @@ result = engine.run(candles)` },
             <li>If API returns nothing → fall back to Drift S3</li>
             <li>Cache everything in DuckDB for next time</li>
           </ol>
-          <h4>Available Markets (42 perp + 6 spot)</h4>
-          <p>SOL-PERP, BTC-PERP, ETH-PERP, APT-PERP, DOGE-PERP, SUI-PERP, ARB-PERP, LINK-PERP, WIF-PERP, JUP-PERP, RENDER-PERP, XRP-PERP, AVAX-PERP, INJ-PERP, TIA-PERP, PYTH-PERP, DRIFT-PERP, and 25 more perp markets. Spot: SOL, JTO, WIF, JUP, DRIFT, POPCAT.</p>
+          <h4>Available Markets (42 perp + 6 spot on Drift, unlimited via Birdeye/CCXT)</h4>
+          <p>SOL-PERP, BTC-PERP, ETH-PERP, APT-PERP, DOGE-PERP, SUI-PERP, ARB-PERP, LINK-PERP, WIF-PERP, JUP-PERP, RENDER-PERP, XRP-PERP, AVAX-PERP, INJ-PERP, TIA-PERP, PYTH-PERP, DRIFT-PERP, and 25 more perp markets. Spot: SOL, JTO, WIF, JUP, DRIFT, POPCAT. With Birdeye enabled, backtest <strong>any</strong> Solana token. With CCXT, access any market on 100+ exchanges.</p>
         `,
       },
       {
@@ -850,7 +903,13 @@ result = engine.run(candles)` },
             <tr><td>funding_rates</td><td>Drift funding rates. PK: (market, ts)</td></tr>
             <tr><td>oracle_prices</td><td>Oracle price snapshots. PK: (market, ts)</td></tr>
             <tr><td>orderbook_snapshots</td><td>L2 bid/ask arrays. PK: (market, ts)</td></tr>
+            <tr><td>venue_funding_rates</td><td>Cross-venue funding (5 venues). PK: (venue, market, ts)</td></tr>
             <tr><td>pool_snapshots</td><td>AMM pool reserves. PK: (pool_address, ts)</td></tr>
+            <tr><td>open_interest</td><td>Long/short OI from Drift. PK: (market, ts)</td></tr>
+            <tr><td>liquidations</td><td>Liquidation events from Helius. PK: (market, ts, tx_sig)</td></tr>
+            <tr><td>whale_transfers</td><td>Large token movements. PK: (token_mint, ts, tx_sig)</td></tr>
+            <tr><td>dex_volume</td><td>DEX volume per market. PK: (market, dex, ts)</td></tr>
+            <tr><td>sync_metadata</td><td>Freshness tracking per provider. PK: (provider, market, data_type)</td></tr>
             <tr><td>backtest_runs</td><td>Saved backtest results (journal)</td></tr>
             <tr><td>journal_trades</td><td>Per-trade detail for saved runs</td></tr>
           </table>
@@ -878,6 +937,77 @@ import_parquet(store, "backup/candles.parquet", "candles")` },
           </ul>
           <p>Warnings appear in the tearsheet under <code>data_quality</code> and in the progress bar.</p>
         `,
+      },
+      {
+        id: 'data-providers',
+        title: 'Configuring Providers',
+        content: `
+          <p>All data providers are configurable via <code>flint.yaml</code>, <code>.env</code>, or CLI. Enable only what you need.</p>
+
+          <h4>Quick Setup</h4>
+          <table>
+            <tr><td><strong>Birdeye</strong> (any Solana token)</td><td><code>flint data provider enable birdeye --api-key YOUR_KEY</code></td></tr>
+            <tr><td><strong>Helius</strong> (liquidations, whales)</td><td><code>flint data provider enable helius --api-key YOUR_KEY</code></td></tr>
+            <tr><td><strong>Pyth</strong> (real-time oracles)</td><td><code>flint data provider enable pyth</code></td></tr>
+            <tr><td><strong>Raydium</strong> (AMM pool data)</td><td><code>flint data provider enable raydium</code></td></tr>
+            <tr><td><strong>Orca</strong> (Whirlpool data)</td><td><code>flint data provider enable orca</code></td></tr>
+            <tr><td><strong>CCXT</strong> (100+ exchanges)</td><td><code>pip install flint[ccxt]</code> then <code>flint data provider enable ccxt</code></td></tr>
+          </table>
+
+          <h4>Where API Keys Go</h4>
+          <p>API keys are stored in <code>.env</code> (never in flint.yaml). The CLI <code>--api-key</code> flag saves them automatically.</p>
+          <table>
+            <tr><td>FLINT_BIRDEYE_API_KEY</td><td>Free at birdeye.so/developers (no credit card)</td></tr>
+            <tr><td>FLINT_HELIUS_API_KEY</td><td>Free at helius.dev (100k credits/day, no credit card)</td></tr>
+            <tr><td>FLINT_CCXT_API_KEY</td><td>Optional — only for private exchange data (balances, orders)</td></tr>
+            <tr><td>FLINT_CCXT_SECRET</td><td>Optional — exchange API secret</td></tr>
+          </table>
+
+          <h4>CCXT — Any Exchange</h4>
+          <p>With CCXT installed, pull candles, funding rates, orderbooks, and tickers from Binance, Bybit, OKX, Coinbase, Kraken, and 100+ more. Symbol mapping between Flint format (<code>SOL-PERP</code>) and exchange format (<code>SOL/USDT:USDT</code>) is automatic.</p>
+        `,
+        codeBlocks: [
+          { language: 'yaml', code: `# flint.yaml — provider configuration
+providers:
+  drift:
+    enabled: true
+  birdeye:
+    enabled: true       # needs FLINT_BIRDEYE_API_KEY in .env
+  helius:
+    enabled: true       # needs FLINT_HELIUS_API_KEY in .env
+  pyth:
+    enabled: true       # no key needed
+  raydium:
+    enabled: true       # no key needed
+  orca:
+    enabled: false
+  ccxt:
+    enabled: true
+    exchange: binance    # any CCXT-supported exchange
+  funding:
+    drift: true
+    hyperliquid: true
+    okx: true
+    binance: false       # geo-blocked from US
+    bybit: false` },
+          { language: 'python', code: `# Use providers directly in scripts
+from flint.providers import BirdeyeProvider, CCXTProvider, PythProvider
+
+# Birdeye — any Solana token
+birdeye = BirdeyeProvider(api_key="YOUR_KEY")
+candles = birdeye.fetch_candles("So111...112", 3600, start_ts, end_ts)
+meta = birdeye.fetch_token_metadata("So111...112")
+
+# CCXT — any exchange
+provider = CCXTProvider(exchange="bybit")
+candles = provider.fetch_candles("SOL/USDT", 3600, start_ts, end_ts)
+markets = provider.list_markets(quote="USDT")
+
+# Pyth — real-time oracle
+pyth = PythProvider()
+price = pyth.fetch_price("SOL/USD")  # {price: 150.25, confidence: 0.05}
+prices = pyth.fetch_prices(["SOL/USD", "BTC/USD", "ETH/USD"])` },
+        ],
       },
     ],
   },
@@ -1053,31 +1183,29 @@ curl http://localhost:8000/api/v1/backtest/abc123/results` },
         id: 'api-data',
         title: 'Data Endpoints',
         content: `
+          <h4>Core Data</h4>
           <table>
-            <tr><td><strong>GET /data/ohlcv</strong></td><td>Query OHLCV candles from local DB</td></tr>
-          </table>
-          <p>Params: <code>market</code> (required), <code>resolution_s</code> (3600), <code>start_ts</code>, <code>end_ts</code>, <code>limit</code> (1000, max 10000)</p>
-
-          <table>
-            <tr><td><strong>GET /data/funding</strong></td><td>Query Drift funding rates</td></tr>
-          </table>
-          <p>Params: <code>market</code> (SOL-PERP), <code>start_ts</code>, <code>end_ts</code>, <code>limit</code> (500, max 5000)</p>
-
-          <table>
-            <tr><td><strong>GET /data/markets</strong></td><td>List all markets with data coverage</td></tr>
-          </table>
-          <p>Returns: market name, resolution, candle count, first/last timestamp for each.</p>
-
-          <table>
-            <tr><td><strong>GET /data/check</strong></td><td>Check data availability before running a backtest</td></tr>
-          </table>
-          <p>Params: <code>market</code>, <code>resolution_s</code>, <code>start_ts</code>, <code>end_ts</code></p>
-          <p>Returns: <code>has_data</code>, <code>covers_range</code>, <code>will_download</code>, <code>candle_count</code>, <code>total_in_db</code></p>
-
-          <table>
+            <tr><td><strong>GET /data/ohlcv</strong></td><td>Query OHLCV candles. Params: market, resolution_s, start_ts, end_ts, limit</td></tr>
+            <tr><td><strong>GET /data/funding</strong></td><td>Query Drift funding rates. Params: market, start_ts, end_ts, limit</td></tr>
+            <tr><td><strong>GET /data/markets</strong></td><td>List all markets with data coverage (candle count, date range)</td></tr>
+            <tr><td><strong>GET /data/check</strong></td><td>Check data availability. Returns: has_data, covers_range, will_download</td></tr>
             <tr><td><strong>GET /data/venues</strong></td><td>List venues with cross-venue funding data</td></tr>
           </table>
-          <p>Params: <code>market</code> (optional). Returns venue name + snapshot count.</p>
+
+          <h4>Provider Management</h4>
+          <table>
+            <tr><td><strong>GET /data/providers</strong></td><td>List all data providers with enabled/available status and data types</td></tr>
+            <tr><td><strong>GET /data/freshness</strong></td><td>Data freshness report — staleness per provider/market/data type</td></tr>
+          </table>
+
+          <h4>New Data Types</h4>
+          <table>
+            <tr><td><strong>GET /data/open-interest/{market}</strong></td><td>Open interest (long/short OI). Params: start, end, limit</td></tr>
+            <tr><td><strong>GET /data/liquidations/{market}</strong></td><td>Liquidation events. Params: start, end</td></tr>
+            <tr><td><strong>GET /data/whale-transfers</strong></td><td>Large token movements. Params: token, wallet, start, end</td></tr>
+            <tr><td><strong>GET /data/dex-volume/{market}</strong></td><td>DEX volume by venue. Params: dex, start, end</td></tr>
+            <tr><td><strong>GET /data/correlation</strong></td><td>Cross-market correlation matrix. Params: markets (comma-separated), resolution</td></tr>
+          </table>
         `,
       },
       {
