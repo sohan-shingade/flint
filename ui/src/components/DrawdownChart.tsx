@@ -41,7 +41,7 @@ export default function DrawdownChart({ drawdown, height = 180 }: Props) {
       date: new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }),
       drawdown: +(val * -100).toFixed(2),
     }))
-    return downsample(full, 600)
+    return downsample(full, 200)
   }, [drawdown])
 
   return (

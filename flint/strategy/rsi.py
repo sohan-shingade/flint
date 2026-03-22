@@ -1,12 +1,15 @@
 """RSI (Relative Strength Index) mean-reversion strategy."""
 from __future__ import annotations
 
-from typing import List
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import numpy as np
 
 from ..models import Candle, Signal
 from .base import Strategy
+
+if TYPE_CHECKING:
+    from ..execution.context import ExecutionContext
 
 
 class RSIStrategy(Strategy):
@@ -25,7 +28,15 @@ class RSIStrategy(Strategy):
     def reset(self) -> None:
         self._prev_rsi = 50.0
 
-    def on_candle(self, candle: Candle, history: List[Candle]) -> Signal:
+    @classmethod
+    def parameters(cls) -> Dict[str, dict]:
+        return {
+            "period": {"type": "int", "low": 5, "high": 30, "default": 14},
+            "oversold": {"type": "float", "low": 15, "high": 40, "default": 30},
+            "overbought": {"type": "float", "low": 60, "high": 85, "default": 70},
+        }
+
+    def on_candle(self, candle: Candle, history: List[Candle], ctx: Optional["ExecutionContext"] = None) -> Signal:
         if len(history) < self.period + 1:
             return Signal.HOLD
 

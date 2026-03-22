@@ -3,17 +3,17 @@
 
 @theme {
   --color-void: #09090b;
-  --color-surface: #0c0c0f;
-  --color-panel: #111114;
-  --color-border: #1a1a1f;
-  --color-border-bright: #2a2a32;
+  --color-surface: #0e0e12;
+  --color-panel: #141418;
+  --color-border: #222228;
+  --color-border-bright: #33333d;
   --color-amber: #e8a849;
   --color-amber-dim: #b8842e;
   --color-amber-glow: rgba(232, 168, 73, 0.08);
   --color-phosphor: #c8ff57;
   --color-phosphor-dim: rgba(200, 255, 87, 0.15);
-  --color-terminal: #a0a0a8;
-  --color-ghost: #555560;
+  --color-terminal: #c0c0c8;
+  --color-ghost: #78788a;
   --color-gain: #57c84d;
   --color-loss: #e84d4d;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
@@ -46,8 +46,8 @@ body::after {
     0deg,
     transparent,
     transparent 2px,
-    rgba(0,0,0,0.03) 2px,
-    rgba(0,0,0,0.03) 4px
+    rgba(0,0,0,0.015) 2px,
+    rgba(0,0,0,0.015) 4px
   );
 }
 
@@ -58,7 +58,7 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: 9998;
-  background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.4) 100%);
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.25) 100%);
 }
 
 ::selection {

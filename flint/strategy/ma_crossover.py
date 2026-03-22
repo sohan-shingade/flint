@@ -1,12 +1,15 @@
 """Simple moving-average crossover strategy."""
 from __future__ import annotations
 
-from typing import List
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import numpy as np
 
 from ..models import Candle, Signal
 from .base import Strategy
+
+if TYPE_CHECKING:
+    from ..execution.context import ExecutionContext
 
 
 class MACrossoverStrategy(Strategy):
@@ -28,7 +31,14 @@ class MACrossoverStrategy(Strategy):
         self._prev_fast = 0.0
         self._prev_slow = 0.0
 
-    def on_candle(self, candle: Candle, history: List[Candle]) -> Signal:
+    @classmethod
+    def parameters(cls) -> Dict[str, dict]:
+        return {
+            "fast_period": {"type": "int", "low": 5, "high": 50, "default": 10},
+            "slow_period": {"type": "int", "low": 20, "high": 200, "default": 30},
+        }
+
+    def on_candle(self, candle: Candle, history: List[Candle], ctx: Optional["ExecutionContext"] = None) -> Signal:
         if len(history) < self.slow_period:
             return Signal.HOLD
 

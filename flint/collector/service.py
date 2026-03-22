@@ -18,13 +18,27 @@ from .tasks import (
 
 logger = logging.getLogger("flint.collector")
 
-write_lock = asyncio.Lock()
+
+def _config_from_flint(flint_config) -> CollectorConfig:
+    """Build a CollectorConfig from a FlintConfig instance."""
+    return CollectorConfig(
+        markets=list(flint_config.default_markets),
+        candle_backfill_days=flint_config.candle_backfill_days,
+        candle_interval_s=flint_config.candle_interval_s,
+        funding_interval_s=flint_config.funding_interval_s,
+        orderbook_interval_s=flint_config.orderbook_interval_s,
+        oracle_interval_s=flint_config.oracle_interval_s,
+    )
 
 
 class CollectorService:
-    def __init__(self, store: FlintStore, config: Optional[CollectorConfig] = None):
+    def __init__(self, store: FlintStore, config=None):
         self.store = store
-        self.config = config or CollectorConfig()
+        if config is not None and not isinstance(config, CollectorConfig):
+            # Accept FlintConfig and convert
+            self.config = _config_from_flint(config)
+        else:
+            self.config = config or CollectorConfig()
         self.status: Dict = {}
         self._running = False
 
@@ -66,8 +80,7 @@ class CollectorService:
         max_retries = 5
         while retries < max_retries:
             try:
-                async with write_lock:
-                    count = await asyncio.to_thread(task_fn)
+                count = await asyncio.to_thread(task_fn)
                 self.status[(market, data_type)]["row_count"] += count
                 self.update_status(market, data_type, "idle")
                 return
@@ -101,10 +114,9 @@ class CollectorService:
             pct = (i / total) * 100
             self.update_status(market, "candles", "backfilling", progress_pct=pct)
             try:
-                async with write_lock:
-                    count = await asyncio.to_thread(
-                        collect_candles_backfill, self.store, market, self.config.candle_backfill_days
-                    )
+                count = await asyncio.to_thread(
+                    collect_candles_backfill, self.store, market, self.config.candle_backfill_days
+                )
                 self.status[(market, "candles")]["row_count"] = count
                 self.update_status(market, "candles", "idle", progress_pct=100.0)
             except Exception as e:

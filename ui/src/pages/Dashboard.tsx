@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import AsciiFire from '../components/AsciiFire'
-import CollectorStatus from '../components/CollectorStatus'
 
 interface MarketData {
   market: string
@@ -14,11 +13,9 @@ interface MarketData {
 export default function Dashboard() {
   const [markets, setMarkets] = useState<MarketData[]>([])
   const [health, setHealth] = useState<string>('...')
-  const [entered, setEntered] = useState(false)
+  const navigate = useNavigate()
 
   useEffect(() => {
-    requestAnimationFrame(() => setEntered(true))
-
     fetch('/api/v1/health')
       .then((r) => r.json())
       .then(() => setHealth('ONLINE'))
@@ -30,253 +27,255 @@ export default function Dashboard() {
       .catch(() => {})
   }, [])
 
+  // Keyboard nav — numbers actually work now
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.key === '2') navigate('/backtest')
+      if (e.key === '3') navigate('/data')
+      if (e.key === '4') navigate('/docs')
+      if (e.key === '5') navigate('/mev')
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [navigate])
+
   const fmtDate = (ts: number) =>
-    new Date(ts * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+    new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
   const totalCandles = markets.reduce((s, m) => s + m.candle_count, 0)
+  const perpMarkets = markets.filter(m => m.market.includes('-PERP'))
+  const spotMarkets = markets.filter(m => !m.market.includes('-PERP'))
 
   return (
     <div>
-      {/* ============================================================
-          HERO — fire animation + title
-          ============================================================ */}
-      <div className={`relative -mx-6 -mt-8 px-6 transition-opacity duration-1000 ${entered ? 'opacity-100' : 'opacity-0'}`}>
-        <div className="min-h-[90vh] flex flex-col items-center justify-center relative">
-          {/* top-left system tag */}
-          <div
-            className="absolute top-8 left-6 text-[10px] text-ghost/40 tracking-[0.3em]"
-            style={{ animation: 'fadeUp 0.6s ease 0.3s both' }}
-          >
-            FLINT v0.1.0 / {new Date().getFullYear()}
+      {/* ── compact hero: fire + title + stats in one band ── */}
+      <div className="-mx-6 -mt-8 px-6 border-b border-border relative overflow-hidden">
+        <div className="flex items-center gap-8 py-6 max-w-[1400px] mx-auto">
+          {/* fire — compact, left-aligned */}
+          <div className="shrink-0 hidden md:block" style={{ marginBottom: -8 }}>
+            <AsciiFire cols={48} rows={18} />
           </div>
 
-          {/* top-right status */}
-          <div
-            className="absolute top-8 right-6 flex items-center gap-3 text-[10px] tracking-[0.2em]"
-            style={{ animation: 'fadeUp 0.6s ease 0.5s both' }}
-          >
-            <span className={health === 'ONLINE' ? 'text-phosphor' : 'text-loss'}>
-              {health}
-            </span>
-            <span className="w-1.5 h-1.5 rounded-full bg-phosphor animate-pulse" />
-          </div>
-
-          {/* fire animation — the centerpiece */}
-          <div className="mb-2" style={{ animation: 'fadeUp 0.8s ease 0.2s both' }}>
-            <AsciiFire cols={90} rows={32} />
-          </div>
-
-          {/* title below fire */}
-          <div className="text-center" style={{ animation: 'fadeUp 1s ease 5s both' }}>
-            <h1 className="font-[var(--font-display)] text-5xl sm:text-6xl md:text-7xl lg:text-8xl text-white/90 font-normal leading-[0.95] mb-2">
-              Flint
-            </h1>
-            <p className="font-[var(--font-display)] italic text-lg sm:text-xl md:text-2xl text-amber/70 mb-4">
+          {/* title + quick stats */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-4 mb-1">
+              <h1 className="font-[var(--font-display)] text-4xl text-white/90 italic leading-none">Flint</h1>
+              <span className="text-[10px] text-ghost tracking-[0.3em]">SOLANA TRADING ENGINE</span>
+            </div>
+            <p className="font-[var(--font-display)] italic text-sm text-amber/50 mb-4">
               Strike alpha on Solana
             </p>
-            <div className="flex justify-center gap-8 text-[10px] text-ghost/40 tracking-[0.2em]">
-              {['BACKTEST', 'TRADE', 'EXTRACT'].map((s) => (
-                <span key={s}>{s}</span>
-              ))}
+
+            {/* inline stats row */}
+            <div className="flex items-center gap-6 text-[11px]">
+              <div className="flex items-center gap-2">
+                <span className={`w-1.5 h-1.5 rounded-full ${health === 'ONLINE' ? 'bg-phosphor' : 'bg-loss'}`} />
+                <span className={health === 'ONLINE' ? 'text-phosphor' : 'text-loss'}>{health}</span>
+              </div>
+              <div>
+                <span className="text-ghost">MARKETS </span>
+                <span className="text-amber tabular-nums">{markets.length}</span>
+              </div>
+              <div>
+                <span className="text-ghost">CANDLES </span>
+                <span className="text-white/80 tabular-nums">{totalCandles.toLocaleString()}</span>
+              </div>
+              <div>
+                <span className="text-ghost">PROTOCOL </span>
+                <span className="text-amber">DRIFT</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* divider */}
-        <div className="h-px bg-gradient-to-r from-transparent via-amber/30 to-transparent" />
-      </div>
-
-      {/* ============================================================
-          STATUS CARDS
-          ============================================================ */}
-      <div className="mt-10 grid grid-cols-1 sm:grid-cols-4 gap-px bg-border">
-        {[
-          {
-            label: 'SYS.STATUS',
-            value: health,
-            color: health === 'ONLINE' ? 'text-phosphor' : 'text-loss',
-            sub: 'api.flint.local:8000',
-          },
-          { label: 'MARKETS', value: String(markets.length), color: 'text-amber', sub: 'perp markets indexed' },
-          { label: 'CANDLES', value: totalCandles.toLocaleString(), color: 'text-white/80', sub: '1h resolution bars' },
-          { label: 'PROTOCOL', value: 'DRIFT', color: 'text-amber', sub: 'v2 mainnet-beta' },
-        ].map((card, i) => (
-          <div
-            key={card.label}
-            className="bg-surface p-5 hover:bg-panel transition-colors relative"
-            style={{ animation: `fadeUp 0.4s ease ${1.2 + i * 0.1}s both` }}
-          >
-            <div className="text-[9px] text-ghost/50 tracking-[0.25em] mb-2">{card.label}</div>
-            <div className={`text-2xl font-semibold ${card.color} tracking-tight tabular-nums`}>{card.value}</div>
-            <div className="text-[10px] text-ghost/30 mt-1">{card.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* ============================================================
-          GUIDE — HOW TO USE
-          ============================================================ */}
-      <div className="mt-12" style={{ animation: 'fadeUp 0.6s ease 1.6s both' }}>
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-2 h-2 bg-amber/60" />
-          <h2 className="text-[11px] text-ghost tracking-[0.25em]">GETTING STARTED</h2>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-border">
-          {/* Step 1 */}
-          <div className="bg-surface p-6 group hover:bg-panel transition-colors">
-            <div className="text-[10px] text-amber/40 tracking-[0.2em] mb-3">01</div>
-            <Link to="/backtest" className="block">
-              <h3 className="text-sm text-white/80 font-medium mb-2 group-hover:text-amber transition-colors">
-                Backtest Lab
-              </h3>
+          {/* quick actions — right side */}
+          <div className="shrink-0 hidden lg:flex flex-col gap-2">
+            <Link
+              to="/backtest"
+              className="px-4 py-2 bg-amber text-void text-[11px] font-semibold tracking-[0.15em] hover:bg-amber-dim transition-colors text-center"
+            >
+              OPEN LAB
             </Link>
-            <p className="text-[11px] text-ghost/60 leading-relaxed mb-3">
-              Run strategy backtests on historical Drift perp data.
-              Configure MA crossover periods, pick a market and date range,
-              then hit run. Results show equity curves, drawdown, Sharpe,
-              Sortino, and a full trade log.
-            </p>
-            <div className="text-[10px] text-ghost/30 border-t border-border pt-2 mt-auto">
-              <span className="text-amber/50">{'->'}</span> SOL-PERP, BTC-PERP, ETH-PERP
-            </div>
-          </div>
-
-          {/* Step 2 */}
-          <div className="bg-surface p-6 group hover:bg-panel transition-colors">
-            <div className="text-[10px] text-amber/40 tracking-[0.2em] mb-3">02</div>
-            <Link to="/data" className="block">
-              <h3 className="text-sm text-white/80 font-medium mb-2 group-hover:text-amber transition-colors">
-                Data Explorer
-              </h3>
+            <Link
+              to="/data"
+              className="px-4 py-2 border border-border text-[11px] text-ghost tracking-[0.15em] hover:text-terminal hover:border-border-bright transition-colors text-center"
+            >
+              DATA EXPLORER
             </Link>
-            <p className="text-[11px] text-ghost/60 leading-relaxed mb-3">
-              Browse OHLCV candle data stored in the local DuckDB.
-              Select a market, load historical data, and view price
-              and volume charts. All data sourced free from Drift's
-              public S3 bucket.
-            </p>
-            <div className="text-[10px] text-ghost/30 border-t border-border pt-2 mt-auto">
-              <span className="text-amber/50">{'->'}</span> 1h candles, unlimited history
-            </div>
-          </div>
-
-          {/* Step 3 */}
-          <div className="bg-surface p-6 group hover:bg-panel transition-colors">
-            <div className="text-[10px] text-amber/40 tracking-[0.2em] mb-3">03</div>
-            <Link to="/mev" className="block">
-              <h3 className="text-sm text-white/80 font-medium mb-2 group-hover:text-amber transition-colors">
-                MEV Scanner
-              </h3>
-            </Link>
-            <p className="text-[11px] text-ghost/60 leading-relaxed mb-3">
-              Detect arbitrage routes across AMM pools using
-              constant-product math and DFS graph search. Scan for
-              liquidation opportunities on Drift positions. Run the
-              built-in demo or supply your own pool data.
-            </p>
-            <div className="text-[10px] text-ghost/30 border-t border-border pt-2 mt-auto">
-              <span className="text-amber/50">{'->'}</span> arb detection, liquidation scan
-            </div>
           </div>
         </div>
       </div>
 
-      {/* ============================================================
-          QUICK START TERMINAL
-          ============================================================ */}
-      <div className="mt-10" style={{ animation: 'fadeUp 0.6s ease 1.8s both' }}>
-        <div className="border border-border bg-surface/80">
-          <div className="px-4 py-2 border-b border-border flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-loss/60" />
-            <span className="w-2 h-2 rounded-full bg-amber/60" />
-            <span className="w-2 h-2 rounded-full bg-gain/60" />
-            <span className="text-[10px] text-ghost/40 tracking-wider ml-2">terminal</span>
+      {/* ── project intro ── */}
+      <div className="mt-8 border border-border bg-surface/80 p-6">
+        <h2 className="font-[var(--font-display)] italic text-xl text-white/90 mb-3">
+          What is Flint?
+        </h2>
+        <p className="text-[13px] text-terminal leading-relaxed mb-3">
+          Flint is a <span className="text-white/90">local-first algorithmic trading platform</span> built
+          for Solana. Write strategies in Python, backtest against real market data, optimize with Optuna,
+          and paper trade on Drift — all from your machine with zero cloud dependencies.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
+          <div className="border border-border/60 bg-panel/50 p-3">
+            <div className="text-amber text-[11px] tracking-wider font-medium mb-1">BACKTEST</div>
+            <p className="text-[11px] text-terminal/80 leading-relaxed">
+              Realistic fills, slippage, and fee models. Stop-loss, take-profit, limit orders.
+            </p>
           </div>
-          <div className="p-5 text-[11px] leading-relaxed">
-            <div className="text-ghost/40 mb-2"># Quick start — backtesting in 3 commands</div>
-            <div className="mb-1">
-              <span className="text-amber/60">$</span>{' '}
-              <span className="text-terminal">pip install -e ".[dev]"</span>
-              <span className="text-ghost/30 ml-4"># install flint + dependencies</span>
-            </div>
-            <div className="mb-1">
-              <span className="text-amber/60">$</span>{' '}
-              <span className="text-terminal">uvicorn flint.api.main:app --port 8000</span>
-              <span className="text-ghost/30 ml-4"># start API backend</span>
-            </div>
-            <div className="mb-1">
-              <span className="text-amber/60">$</span>{' '}
-              <span className="text-terminal">cd ui && npm run dev</span>
-              <span className="text-ghost/30 ml-4"># start this UI</span>
-            </div>
-            <div className="mt-4 text-ghost/40">
-              # Or run a backtest directly from Python:
-            </div>
-            <div className="mb-1">
-              <span className="text-amber/60">$</span>{' '}
-              <span className="text-terminal">python scripts/run_backtest.py</span>
-            </div>
-            <div className="text-ghost/30 mt-3 text-[10px]">
-              All data is free. No API keys needed for backtesting. Data from Drift's public S3 bucket.
-            </div>
+          <div className="border border-border/60 bg-panel/50 p-3">
+            <div className="text-amber text-[11px] tracking-wider font-medium mb-1">OPTIMIZE</div>
+            <p className="text-[11px] text-terminal/80 leading-relaxed">
+              Bayesian hyperparameter search via Optuna. Walk-forward analysis and Monte Carlo CI.
+            </p>
+          </div>
+          <div className="border border-border/60 bg-panel/50 p-3">
+            <div className="text-amber text-[11px] tracking-wider font-medium mb-1">PAPER TRADE</div>
+            <p className="text-[11px] text-terminal/80 leading-relaxed">
+              Same strategy code runs live against real Drift prices. No changes needed.
+            </p>
+          </div>
+          <div className="border border-border/60 bg-panel/50 p-3">
+            <div className="text-amber text-[11px] tracking-wider font-medium mb-1">FREE DATA</div>
+            <p className="text-[11px] text-terminal/80 leading-relaxed">
+              OHLCV for 48 markets auto-downloaded from Drift. Stored locally in DuckDB.
+            </p>
           </div>
         </div>
       </div>
 
-      {/* ============================================================
-          DATA TABLE
-          ============================================================ */}
-      {markets.length > 0 && (
-        <div className="mt-10" style={{ animation: 'fadeUp 0.6s ease 2s both' }}>
-          <div className="border border-border bg-surface/60 backdrop-blur">
-            <div className="px-4 py-3 border-b border-border flex items-center gap-3">
-              <span className="w-1.5 h-1.5 bg-amber/50" />
-              <span className="text-[10px] text-ghost tracking-[0.2em]">DATA.COVERAGE</span>
-              <span className="text-[10px] text-amber/40 ml-auto">{markets.length} markets</span>
+      {/* ── main content: 2-column layout ── */}
+      <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+        {/* LEFT column (2/3) — data + quick start */}
+        <div className="lg:col-span-2 space-y-4">
+
+          {/* quick start — updated CLI commands */}
+          <div className="border border-border bg-surface/80">
+            <div className="px-4 py-2 border-b border-border flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-loss/60" />
+              <span className="w-2 h-2 rounded-full bg-amber/60" />
+              <span className="w-2 h-2 rounded-full bg-gain/60" />
+              <span className="text-[10px] text-ghost/40 tracking-wider ml-2">quickstart</span>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-left text-ghost/40 border-b border-border text-[10px] tracking-[0.15em]">
-                    <th className="py-2.5 px-4">MARKET</th>
-                    <th className="py-2.5 px-4">RES</th>
-                    <th className="py-2.5 px-4 text-right">RECORDS</th>
-                    <th className="py-2.5 px-4">FIRST</th>
-                    <th className="py-2.5 px-4">LAST</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {markets.map((m, i) => (
-                    <tr
-                      key={i}
-                      className="border-b border-border/30 hover:bg-amber-glow transition-colors"
-                    >
-                      <td className="py-2 px-4 text-amber font-medium">{m.market}</td>
-                      <td className="py-2 px-4 text-ghost">
-                        {m.resolution_s >= 3600 ? `${m.resolution_s / 3600}h` : `${m.resolution_s / 60}m`}
-                      </td>
-                      <td className="py-2 px-4 text-right text-white/70 tabular-nums">{m.candle_count.toLocaleString()}</td>
-                      <td className="py-2 px-4 text-ghost/40">{fmtDate(m.first_ts)}</td>
-                      <td className="py-2 px-4 text-ghost/40">{fmtDate(m.last_ts)}</td>
+            <div className="p-4 text-[11px] leading-relaxed font-mono">
+              <div className="text-ghost mb-2"># Get started in 3 commands</div>
+              <div className="mb-1">
+                <span className="text-amber/60">$</span>{' '}
+                <span className="text-terminal">pip install -e .</span>
+              </div>
+              <div className="mb-1">
+                <span className="text-amber/60">$</span>{' '}
+                <span className="text-terminal">flint init</span>
+                <span className="text-ghost/60 ml-4"># backfills data + runs sample backtest</span>
+              </div>
+              <div className="mb-1">
+                <span className="text-amber/60">$</span>{' '}
+                <span className="text-terminal">flint serve</span>
+                <span className="text-ghost/60 ml-4"># starts this UI</span>
+              </div>
+              <div className="mt-3 pt-2 border-t border-border/30 text-ghost/60 text-[10px]">
+                flint backtest strategy.py &middot; flint optimize &middot; flint data download &middot; flint live --paper
+              </div>
+            </div>
+          </div>
+
+          {/* data coverage table */}
+          {markets.length > 0 && (
+            <div className="border border-border bg-surface/60">
+              <div className="px-4 py-2.5 border-b border-border flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 bg-amber/50" />
+                  <span className="text-[10px] text-ghost tracking-[0.2em]">DATA.COVERAGE</span>
+                </div>
+                <div className="flex items-center gap-4 text-[10px] text-ghost/40">
+                  <span>{perpMarkets.length} perp</span>
+                  {spotMarkets.length > 0 && <span>{spotMarkets.length} spot</span>}
+                </div>
+              </div>
+              <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-surface">
+                    <tr className="text-left text-ghost border-b border-border text-[9px] tracking-[0.15em]">
+                      <th className="py-2 px-4">MARKET</th>
+                      <th className="py-2 px-4">RES</th>
+                      <th className="py-2 px-4 text-right">RECORDS</th>
+                      <th className="py-2 px-4">RANGE</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {markets.map((m, i) => (
+                      <tr key={i} className="border-b border-border/20 hover:bg-amber-glow/50 transition-colors">
+                        <td className="py-1.5 px-4 text-amber/80 font-medium text-[11px]">{m.market}</td>
+                        <td className="py-1.5 px-4 text-ghost text-[10px]">
+                          {m.resolution_s >= 3600 ? `${m.resolution_s / 3600}h` : `${m.resolution_s / 60}m`}
+                        </td>
+                        <td className="py-1.5 px-4 text-right text-white/80 tabular-nums text-[11px]">{m.candle_count.toLocaleString()}</td>
+                        <td className="py-1.5 px-4 text-ghost text-[10px]">
+                          {fmtDate(m.first_ts)} — {fmtDate(m.last_ts)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          )}
         </div>
-      )}
 
-      {/* ============================================================
-          COLLECTOR STATUS
-          ============================================================ */}
-      <div className="mt-10" style={{ animation: 'fadeUp 0.6s ease 2.2s both' }}>
-        <CollectorStatus />
+        {/* RIGHT column (1/3) — navigation cards */}
+        <div className="space-y-3">
+          <Link to="/backtest" className="block group">
+            <div className="border border-border bg-surface/60 p-4 hover:bg-panel hover:border-amber/20 transition-all">
+              <div className="flex items-center justify-between mb-1.5">
+                <h3 className="text-[12px] text-white/80 font-medium group-hover:text-amber transition-colors">Strategy Lab</h3>
+                <span className="text-[9px] text-ghost/30 tracking-wider">[2]</span>
+              </div>
+              <p className="text-[10px] text-ghost leading-relaxed">
+                Write, backtest, and optimize strategies. Monaco editor, 8 templates, Monte Carlo CI.
+              </p>
+            </div>
+          </Link>
+
+          <Link to="/data" className="block group">
+            <div className="border border-border bg-surface/60 p-4 hover:bg-panel hover:border-amber/20 transition-all">
+              <div className="flex items-center justify-between mb-1.5">
+                <h3 className="text-[12px] text-white/80 font-medium group-hover:text-amber transition-colors">Data Explorer</h3>
+                <span className="text-[9px] text-ghost/30 tracking-wider">[3]</span>
+              </div>
+              <p className="text-[10px] text-ghost leading-relaxed">
+                Browse OHLCV candles. Free data from Drift S3. Auto-backfill on demand.
+              </p>
+            </div>
+          </Link>
+
+          <Link to="/docs" className="block group">
+            <div className="border border-border bg-surface/60 p-4 hover:bg-panel hover:border-amber/20 transition-all">
+              <div className="flex items-center justify-between mb-1.5">
+                <h3 className="text-[12px] text-white/80 font-medium group-hover:text-amber transition-colors">Documentation</h3>
+                <span className="text-[9px] text-ghost/30 tracking-wider">[4]</span>
+              </div>
+              <p className="text-[10px] text-ghost leading-relaxed">
+                Strategy API, CLI commands, providers, architecture guide.
+              </p>
+            </div>
+          </Link>
+
+          <Link to="/mev" className="block group">
+            <div className="border border-border bg-surface/60 p-4 hover:bg-panel hover:border-amber/20 transition-all">
+              <div className="flex items-center justify-between mb-1.5">
+                <h3 className="text-[12px] text-white/80 font-medium group-hover:text-amber transition-colors">MEV Scanner</h3>
+                <span className="text-[9px] text-ghost/30 tracking-wider">[5]</span>
+              </div>
+              <p className="text-[10px] text-ghost leading-relaxed">
+                Arb detection, liquidation scanning, JIT opportunities on Drift.
+              </p>
+            </div>
+          </Link>
+        </div>
       </div>
 
-      {/* spacer */}
-      <div className="h-16" />
+      <div className="h-8" />
     </div>
   )
 }

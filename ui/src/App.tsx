@@ -1,4 +1,4 @@
-import { Routes, Route, NavLink } from 'react-router-dom'
+import { Routes, Route, NavLink, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import AsciiBackground from './components/AsciiBackground'
 import Dashboard from './pages/Dashboard'
@@ -17,6 +17,7 @@ const navItems = [
 
 export default function App() {
   const [clock, setClock] = useState('')
+  const navigate = useNavigate()
 
   useEffect(() => {
     const tick = () => {
@@ -28,6 +29,19 @@ export default function App() {
     return () => clearInterval(id)
   }, [])
 
+  // Global keyboard navigation — press 1-5 to switch pages
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return
+      // Don't trigger in Monaco editor
+      if ((e.target as HTMLElement)?.closest?.('.monaco-editor')) return
+      const item = navItems.find(n => n.key === e.key)
+      if (item) navigate(item.to)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [navigate])
+
   return (
     <div className="min-h-screen relative">
       <AsciiBackground />
@@ -36,14 +50,11 @@ export default function App() {
       <div className="fixed top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-amber to-transparent opacity-40 z-50" />
 
       <nav className="sticky top-0 z-40 border-b border-border bg-void/90 backdrop-blur-sm">
-        <div className="max-w-[1400px] mx-auto px-6 flex items-center h-12">
+        <div className="max-w-[1400px] mx-auto px-6 flex items-center h-11">
           {/* logo */}
-          <div className="flex items-center gap-3 mr-8">
+          <NavLink to="/" className="flex items-center gap-3 mr-8">
             <span className="text-amber font-bold text-sm tracking-[0.2em]">FLINT</span>
-            <span className="text-ghost text-[10px] tracking-wider hidden md:inline">
-              //SOLANA TRADING ENGINE
-            </span>
-          </div>
+          </NavLink>
 
           {/* nav links */}
           <div className="flex items-center gap-0.5">
@@ -60,18 +71,14 @@ export default function App() {
                   }`
                 }
               >
-                [{n.key}] {n.label}
+                <span className="text-ghost/50 mr-1">{n.key}</span>{n.label}
               </NavLink>
             ))}
           </div>
 
-          {/* right side status */}
+          {/* right side */}
           <div className="ml-auto flex items-center gap-4 text-[10px] text-ghost tracking-wider">
-            <span className="hidden sm:inline">{clock}</span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-phosphor animate-pulse" />
-              LIVE
-            </span>
+            <span className="hidden sm:inline font-mono tabular-nums">{clock}</span>
           </div>
         </div>
       </nav>
@@ -87,13 +94,13 @@ export default function App() {
       </main>
 
       {/* footer */}
-      <footer className="relative z-10 border-t border-border py-4 px-6">
-        <div className="max-w-[1400px] mx-auto flex items-center justify-between text-[10px] text-ghost tracking-wider">
-          <span>FLINT v0.1.0</span>
+      <footer className="relative z-10 border-t border-border py-3 px-6">
+        <div className="max-w-[1400px] mx-auto flex items-center justify-between text-[10px] text-ghost/70 tracking-wider">
+          <span>FLINT v0.3.0</span>
           <span className="font-[var(--font-display)] italic text-[11px] text-ghost/60">
             Strike alpha on Solana
           </span>
-          <span>DRIFT / JUPITER / MEV</span>
+          <span>DRIFT &middot; JUPITER &middot; DUCKDB</span>
         </div>
       </footer>
     </div>

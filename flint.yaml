@@ -1,0 +1,40 @@
+# Flint configuration
+# Override any setting via environment variables with FLINT_ prefix
+# e.g. FLINT_DB_PATH=./data/custom.duckdb
+
+db:
+  path: ./data/flint.duckdb
+
+trading:
+  default_markets:
+    - SOL-PERP
+    - BTC-PERP
+    - ETH-PERP
+  default_fee_rate: 0.0005
+  default_capital: 10000.0
+
+collector:
+  enabled: true
+  candle_backfill_days: 90
+  oracle_interval_s: 60
+  funding_interval_s: 3600
+  orderbook_interval_s: 300
+  candle_interval_s: 3600
+
+risk:
+  max_drawdown_pct: 0.20
+  default_stop_loss_pct: 0.05
+  max_open_trades: 5
+
+# notifications:
+#   telegram_bot_token: ""
+#   telegram_chat_id: ""
+#   discord_webhook_url: ""
+
+api:
+  host: 0.0.0.0
+  port: 8000
+
+# rpc:
+#   helius_api_key: ""
+#   solana_rpc_url: https://api.mainnet-beta.solana.com

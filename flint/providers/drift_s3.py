@@ -41,15 +41,27 @@ class DriftS3Provider(CandleProvider):
         resolution_s: int,
         start_ts: int,
         end_ts: int,
+        on_progress=None,
     ) -> List[Candle]:
+        """Fetch candles from Drift S3.
+
+        Args:
+            on_progress: Optional callback ``fn(completed, total, date_str)``
+                called after each day is downloaded.
+        """
         dates = _date_range(start_ts, end_ts)
+        total = len(dates)
         all_candles: List[Candle] = []
-        for d in dates:
+        for i, d in enumerate(dates):
+            if on_progress is not None:
+                on_progress(i, total, d)
             raw = self._download_day(market, d)
             if raw is None:
                 continue
             candles = self._aggregate_trades(raw, market, resolution_s, start_ts, end_ts)
             all_candles.extend(candles)
+        if on_progress is not None:
+            on_progress(total, total, "done")
         all_candles.sort(key=lambda c: c.ts)
         return all_candles
 

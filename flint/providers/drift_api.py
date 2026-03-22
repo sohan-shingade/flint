@@ -15,10 +15,10 @@ from ..models import FundingRate, OrderbookLevel, OrderbookSnapshot
 _DATA_API = "https://data.api.drift.trade"
 _DLOB_API = "https://dlob.drift.trade"
 
-# Drift stores prices as integers with 6 decimal precision
-_PRICE_PRECISION = 1e6
-# Base asset amounts use 9 decimal precision
-_BASE_PRECISION = 1e9
+# Use centralized precision constants
+from ..precision import PRICE_PRECISION as _PRICE_PRECISION_INT, BASE_PRECISION as _BASE_PRECISION_INT
+_PRICE_PRECISION = float(_PRICE_PRECISION_INT)
+_BASE_PRECISION = float(_BASE_PRECISION_INT)
 
 
 class DriftDataProvider:

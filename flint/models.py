@@ -89,6 +89,33 @@ class BacktestResult:
     losing_trades: int
     positions: List[Position] = field(default_factory=list)
     equity_curve: List[float] = field(default_factory=list)
+    fills: List["Fill"] = field(default_factory=list)
+    total_fees: float = 0.0
+    funding_paid: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Execution context models (v0.2)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AccountState:
+    """Snapshot of account value."""
+    equity: float  # cash + unrealized PnL
+    cash: float  # available cash
+    unrealized_pnl: float = 0.0
+    margin_used: float = 0.0
+
+
+@dataclass
+class PositionInfo:
+    """Read-only view of an open position."""
+    market: str
+    side: Side
+    size: float  # always positive
+    entry_price: float
+    unrealized_pnl: float = 0.0
+    entry_ts: int = 0
 
 
 # ---------------------------------------------------------------------------

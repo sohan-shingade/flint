@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Data
+data/
+*.duckdb
+*.duckdb.wal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Flint local state
+.flint/
+
+# Superpowers / Claude
+.superpowers/
+
+# Status/notes (personal)
+STATUS_*.md
+Status_*.md
+GUIDE.md
+prompt.md
+
+# Google Cloud SDK (dev artifact)
+google-cloud-sdk/
+google-cloud-cli-*.tar.gz
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Build
+ui/dist/

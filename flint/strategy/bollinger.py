@@ -1,12 +1,15 @@
 """Bollinger Bands mean-reversion strategy."""
 from __future__ import annotations
 
-from typing import List
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import numpy as np
 
 from ..models import Candle, Signal
 from .base import Strategy
+
+if TYPE_CHECKING:
+    from ..execution.context import ExecutionContext
 
 
 class BollingerStrategy(Strategy):
@@ -23,7 +26,14 @@ class BollingerStrategy(Strategy):
     def reset(self) -> None:
         pass
 
-    def on_candle(self, candle: Candle, history: List[Candle]) -> Signal:
+    @classmethod
+    def parameters(cls) -> Dict[str, dict]:
+        return {
+            "period": {"type": "int", "low": 10, "high": 50, "default": 20},
+            "num_std": {"type": "float", "low": 1.0, "high": 3.5, "default": 2.0},
+        }
+
+    def on_candle(self, candle: Candle, history: List[Candle], ctx: Optional["ExecutionContext"] = None) -> Signal:
         if len(history) < self.period:
             return Signal.HOLD
 

@@ -14,7 +14,17 @@ from ..providers.drift_api import DriftDataProvider
 from ..providers.drift_s3 import DriftS3Provider
 from ..store import FlintStore
 
-MARKET_INDEX = {"SOL-PERP": 0, "BTC-PERP": 1, "ETH-PERP": 2}
+MARKET_INDEX = {
+    "SOL-PERP": 0, "BTC-PERP": 1, "ETH-PERP": 2, "APT-PERP": 3,
+    "1MBONK-PERP": 4, "POL-PERP": 5, "ARB-PERP": 6, "DOGE-PERP": 7,
+    "BNB-PERP": 8, "SUI-PERP": 9, "1MPEPE-PERP": 10, "OP-PERP": 11,
+    "RENDER-PERP": 12, "XRP-PERP": 13, "HNT-PERP": 14, "INJ-PERP": 15,
+    "LINK-PERP": 16, "RLB-PERP": 17, "PYTH-PERP": 18, "TIA-PERP": 19,
+    "JTO-PERP": 20, "SEI-PERP": 21, "AVAX-PERP": 22, "WIF-PERP": 23,
+    "JUP-PERP": 24, "DYM-PERP": 25, "TAO-PERP": 26, "W-PERP": 27,
+    "KMNO-PERP": 28, "TNSR-PERP": 29, "DRIFT-PERP": 30, "CLOUD-PERP": 31,
+    "IO-PERP": 32, "ZEX-PERP": 33, "POPCAT-PERP": 34, "1KWEN-PERP": 35,
+}
 
 
 @dataclass

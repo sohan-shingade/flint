@@ -1,0 +1,16 @@
+# Flint — docker compose up to start everything
+version: "3.8"
+
+services:
+  flint:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data          # persist DuckDB
+      - ./strategies:/app/strategies  # mount user strategies
+      - ./flint.yaml:/app/flint.yaml  # mount config
+    environment:
+      - FLINT_DB_PATH=/app/data/flint.duckdb
+      - FLINT_COLLECTOR_ENABLED=true
+    restart: unless-stopped

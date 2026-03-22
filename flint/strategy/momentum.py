@@ -1,10 +1,13 @@
 """Momentum / Rate-of-Change strategy."""
 from __future__ import annotations
 
-from typing import List
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from ..models import Candle, Signal
 from .base import Strategy
+
+if TYPE_CHECKING:
+    from ..execution.context import ExecutionContext
 
 
 class MomentumStrategy(Strategy):
@@ -21,7 +24,14 @@ class MomentumStrategy(Strategy):
     def reset(self) -> None:
         pass
 
-    def on_candle(self, candle: Candle, history: List[Candle]) -> Signal:
+    @classmethod
+    def parameters(cls) -> Dict[str, dict]:
+        return {
+            "lookback": {"type": "int", "low": 6, "high": 72, "default": 24},
+            "threshold_pct": {"type": "float", "low": 1.0, "high": 15.0, "default": 5.0},
+        }
+
+    def on_candle(self, candle: Candle, history: List[Candle], ctx: Optional["ExecutionContext"] = None) -> Signal:
         if len(history) <= self.lookback:
             return Signal.HOLD
 

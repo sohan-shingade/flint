@@ -47,7 +47,7 @@ export default function EquityCurve({ equity, buyHold, height = 300 }: Props) {
       equity: +val.toFixed(2),
       buyHold: buyHold?.[i]?.[1] ? +buyHold[i][1].toFixed(2) : undefined,
     }))
-    return downsample(full, 600)
+    return downsample(full, 200)
   }, [equity, buyHold])
 
   return (
