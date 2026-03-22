@@ -248,6 +248,71 @@ class OraclePrice:
     slot: Optional[int] = None
 
 
+@dataclass(frozen=True)
+class OpenInterest:
+    market: str
+    ts: int
+    long_oi: float
+    short_oi: float
+
+    @property
+    def net_oi(self) -> float:
+        return self.long_oi - self.short_oi
+
+    @property
+    def total_oi(self) -> float:
+        return self.long_oi + self.short_oi
+
+
+@dataclass(frozen=True)
+class Liquidation:
+    market: str
+    ts: int
+    side: str           # "long" or "short"
+    size: float         # base asset amount
+    price: float        # liquidation price
+    slot: int = 0
+    tx_sig: str = ""
+
+
+@dataclass(frozen=True)
+class WhaleTransfer:
+    wallet: str
+    token_mint: str
+    amount: float
+    ts: int
+    direction: str      # "in" or "out"
+    tx_sig: str = ""
+
+
+@dataclass(frozen=True)
+class DexVolume:
+    market: str         # e.g. "SOL/USDC"
+    dex: str            # "raydium", "orca", "jupiter"
+    ts: int
+    volume_usd: float
+    txn_count: int = 0
+
+
+@dataclass(frozen=True)
+class TokenUnlock:
+    token_mint: str
+    unlock_ts: int
+    amount: float
+    vesting_account: str = ""
+
+
+@dataclass(frozen=True)
+class SyncMetadata:
+    provider: str
+    market: str
+    data_type: str
+    last_sync_ts: int
+    record_count: int = 0
+    status: str = "ok"      # "ok", "error", "syncing"
+    error_msg: str = ""
+
+
 @dataclass
 class CollectorStatus:
     market: str

@@ -88,6 +88,75 @@ CREATE TABLE IF NOT EXISTS venue_funding_rates (
 );
 """
 
+_CREATE_OPEN_INTEREST = """
+CREATE TABLE IF NOT EXISTS open_interest (
+    market    VARCHAR NOT NULL,
+    ts        BIGINT  NOT NULL,
+    long_oi   DOUBLE  NOT NULL,
+    short_oi  DOUBLE  NOT NULL,
+    PRIMARY KEY (market, ts)
+);
+"""
+
+_CREATE_LIQUIDATIONS = """
+CREATE TABLE IF NOT EXISTS liquidations (
+    market  VARCHAR NOT NULL,
+    ts      BIGINT  NOT NULL,
+    side    VARCHAR NOT NULL,
+    size    DOUBLE  NOT NULL,
+    price   DOUBLE  NOT NULL,
+    slot    BIGINT  NOT NULL DEFAULT 0,
+    tx_sig  VARCHAR NOT NULL DEFAULT '',
+    PRIMARY KEY (market, ts, tx_sig)
+);
+"""
+
+_CREATE_WHALE_TRANSFERS = """
+CREATE TABLE IF NOT EXISTS whale_transfers (
+    wallet      VARCHAR NOT NULL,
+    token_mint  VARCHAR NOT NULL,
+    amount      DOUBLE  NOT NULL,
+    ts          BIGINT  NOT NULL,
+    direction   VARCHAR NOT NULL,
+    tx_sig      VARCHAR NOT NULL DEFAULT '',
+    PRIMARY KEY (token_mint, ts, tx_sig)
+);
+"""
+
+_CREATE_DEX_VOLUME = """
+CREATE TABLE IF NOT EXISTS dex_volume (
+    market     VARCHAR NOT NULL,
+    dex        VARCHAR NOT NULL,
+    ts         BIGINT  NOT NULL,
+    volume_usd DOUBLE  NOT NULL,
+    txn_count  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (market, dex, ts)
+);
+"""
+
+_CREATE_TOKEN_UNLOCKS = """
+CREATE TABLE IF NOT EXISTS token_unlocks (
+    token_mint      VARCHAR NOT NULL,
+    unlock_ts       BIGINT  NOT NULL,
+    amount          DOUBLE  NOT NULL,
+    vesting_account VARCHAR NOT NULL DEFAULT '',
+    PRIMARY KEY (token_mint, unlock_ts)
+);
+"""
+
+_CREATE_SYNC_METADATA = """
+CREATE TABLE IF NOT EXISTS sync_metadata (
+    provider     VARCHAR NOT NULL,
+    market       VARCHAR NOT NULL,
+    data_type    VARCHAR NOT NULL,
+    last_sync_ts BIGINT  NOT NULL,
+    record_count INTEGER NOT NULL DEFAULT 0,
+    status       VARCHAR NOT NULL DEFAULT 'ok',
+    error_msg    VARCHAR NOT NULL DEFAULT '',
+    PRIMARY KEY (provider, market, data_type)
+);
+"""
+
 
 class FlintStore:
     """Thread-safe DuckDB store.
@@ -113,6 +182,12 @@ class FlintStore:
         self._conn.execute(_CREATE_ORDERBOOK_SNAPSHOTS)
         self._conn.execute(_CREATE_POOL_SNAPSHOTS)
         self._conn.execute(_CREATE_VENUE_FUNDING)
+        self._conn.execute(_CREATE_OPEN_INTEREST)
+        self._conn.execute(_CREATE_LIQUIDATIONS)
+        self._conn.execute(_CREATE_WHALE_TRANSFERS)
+        self._conn.execute(_CREATE_DEX_VOLUME)
+        self._conn.execute(_CREATE_TOKEN_UNLOCKS)
+        self._conn.execute(_CREATE_SYNC_METADATA)
 
     # -- candles ---------------------------------------------------------------
 
@@ -344,6 +419,222 @@ class FlintStore:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [{"venue": r[0], "market": r[1], "count": r[2]} for r in rows]
+
+    # -- open interest -------------------------------------------------------
+
+    def upsert_open_interest(self, records: List["OpenInterest"]) -> int:
+        if not records:
+            return 0
+        rows = [(r.market, r.ts, r.long_oi, r.short_oi) for r in records]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO open_interest "
+                "(market, ts, long_oi, short_oi) VALUES (?, ?, ?, ?)",
+                rows,
+            )
+        return len(rows)
+
+    def query_open_interest(
+        self,
+        market: str,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> list:
+        sql = "SELECT market, ts, long_oi, short_oi FROM open_interest WHERE market = ?"
+        params: list = [market]
+        if start_ts is not None:
+            sql += " AND ts >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            sql += " AND ts <= ?"
+            params.append(end_ts)
+        sql += " ORDER BY ts ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        from .models import OpenInterest
+        return [OpenInterest(market=r[0], ts=r[1], long_oi=r[2], short_oi=r[3]) for r in rows]
+
+    # -- liquidations --------------------------------------------------------
+
+    def upsert_liquidations(self, records: List["Liquidation"]) -> int:
+        if not records:
+            return 0
+        rows = [(r.market, r.ts, r.side, r.size, r.price, r.slot, r.tx_sig) for r in records]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO liquidations "
+                "(market, ts, side, size, price, slot, tx_sig) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+        return len(rows)
+
+    def query_liquidations(
+        self,
+        market: str,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> list:
+        sql = "SELECT market, ts, side, size, price, slot, tx_sig FROM liquidations WHERE market = ?"
+        params: list = [market]
+        if start_ts is not None:
+            sql += " AND ts >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            sql += " AND ts <= ?"
+            params.append(end_ts)
+        sql += " ORDER BY ts ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        from .models import Liquidation
+        return [Liquidation(market=r[0], ts=r[1], side=r[2], size=r[3], price=r[4], slot=r[5], tx_sig=r[6]) for r in rows]
+
+    # -- whale transfers -----------------------------------------------------
+
+    def upsert_whale_transfers(self, records: List["WhaleTransfer"]) -> int:
+        if not records:
+            return 0
+        rows = [(r.wallet, r.token_mint, r.amount, r.ts, r.direction, r.tx_sig) for r in records]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO whale_transfers "
+                "(wallet, token_mint, amount, ts, direction, tx_sig) VALUES (?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+        return len(rows)
+
+    def query_whale_transfers(
+        self,
+        token_mint: Optional[str] = None,
+        wallet: Optional[str] = None,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> list:
+        sql = "SELECT wallet, token_mint, amount, ts, direction, tx_sig FROM whale_transfers WHERE 1=1"
+        params: list = []
+        if token_mint:
+            sql += " AND token_mint = ?"
+            params.append(token_mint)
+        if wallet:
+            sql += " AND wallet = ?"
+            params.append(wallet)
+        if start_ts is not None:
+            sql += " AND ts >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            sql += " AND ts <= ?"
+            params.append(end_ts)
+        sql += " ORDER BY ts ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        from .models import WhaleTransfer
+        return [WhaleTransfer(wallet=r[0], token_mint=r[1], amount=r[2], ts=r[3], direction=r[4], tx_sig=r[5]) for r in rows]
+
+    # -- dex volume ----------------------------------------------------------
+
+    def upsert_dex_volume(self, records: List["DexVolume"]) -> int:
+        if not records:
+            return 0
+        rows = [(r.market, r.dex, r.ts, r.volume_usd, r.txn_count) for r in records]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO dex_volume "
+                "(market, dex, ts, volume_usd, txn_count) VALUES (?, ?, ?, ?, ?)",
+                rows,
+            )
+        return len(rows)
+
+    def query_dex_volume(
+        self,
+        market: str,
+        dex: Optional[str] = None,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> list:
+        sql = "SELECT market, dex, ts, volume_usd, txn_count FROM dex_volume WHERE market = ?"
+        params: list = [market]
+        if dex:
+            sql += " AND dex = ?"
+            params.append(dex)
+        if start_ts is not None:
+            sql += " AND ts >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            sql += " AND ts <= ?"
+            params.append(end_ts)
+        sql += " ORDER BY ts ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        from .models import DexVolume
+        return [DexVolume(market=r[0], dex=r[1], ts=r[2], volume_usd=r[3], txn_count=r[4]) for r in rows]
+
+    # -- token unlocks -------------------------------------------------------
+
+    def upsert_token_unlocks(self, records: list) -> int:
+        if not records:
+            return 0
+        rows = [(r.token_mint, r.unlock_ts, r.amount, r.vesting_account) for r in records]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO token_unlocks "
+                "(token_mint, unlock_ts, amount, vesting_account) VALUES (?, ?, ?, ?)",
+                rows,
+            )
+        return len(rows)
+
+    # -- sync metadata -------------------------------------------------------
+
+    def upsert_sync_metadata(self, meta: "SyncMetadata") -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO sync_metadata "
+                "(provider, market, data_type, last_sync_ts, record_count, status, error_msg) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [meta.provider, meta.market, meta.data_type, meta.last_sync_ts,
+                 meta.record_count, meta.status, meta.error_msg],
+            )
+
+    def get_sync_metadata(self, provider: str, market: str, data_type: str) -> Optional["SyncMetadata"]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT provider, market, data_type, last_sync_ts, record_count, status, error_msg "
+                "FROM sync_metadata WHERE provider = ? AND market = ? AND data_type = ?",
+                [provider, market, data_type],
+            ).fetchone()
+        if not row:
+            return None
+        from .models import SyncMetadata
+        return SyncMetadata(provider=row[0], market=row[1], data_type=row[2],
+                            last_sync_ts=row[3], record_count=row[4],
+                            status=row[5], error_msg=row[6])
+
+    def list_sync_metadata(self, provider: Optional[str] = None) -> list:
+        sql = "SELECT provider, market, data_type, last_sync_ts, record_count, status, error_msg FROM sync_metadata"
+        params: list = []
+        if provider:
+            sql += " WHERE provider = ?"
+            params.append(provider)
+        sql += " ORDER BY provider, market, data_type"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        from .models import SyncMetadata
+        return [SyncMetadata(provider=r[0], market=r[1], data_type=r[2],
+                             last_sync_ts=r[3], record_count=r[4],
+                             status=r[5], error_msg=r[6]) for r in rows]
+
+    def get_data_freshness(self) -> list:
+        """Return freshness info for all tracked provider/market pairs."""
+        import time as _time
+        now = int(_time.time())
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT provider, market, data_type, last_sync_ts, record_count, status, error_msg "
+                "FROM sync_metadata ORDER BY last_sync_ts DESC"
+            ).fetchall()
+        return [
+            {"provider": r[0], "market": r[1], "data_type": r[2], "last_sync_ts": r[3],
+             "age_s": now - r[3], "record_count": r[4], "status": r[5], "error_msg": r[6]}
+            for r in rows
+        ]
 
     def close(self) -> None:
         with self._lock:

@@ -1,11 +1,15 @@
-"""Data query API — candles, funding rates. Thread-safe via shared store."""
+"""Data query API — candles, funding rates, OI, liquidations, whale transfers,
+DEX volume, freshness, correlation.  Thread-safe via shared store."""
 from __future__ import annotations
 
-from typing import Optional
+import time
+from typing import List, Optional
 
 from fastapi import APIRouter, Query, Request
 
 from ...store import FlintStore
+from ...providers import list_providers, get_provider_class
+from ...analytics.correlation import compute_correlation_matrix
 
 router = APIRouter()
 
@@ -158,3 +162,192 @@ def list_venues(request: Request, market: Optional[str] = Query(None)):
         return {"venues": store.list_venues(market)}
     except Exception:
         return {"venues": []}
+
+
+# ── New data endpoints ────────────────────────────────────────────────
+
+
+@router.get("/providers")
+def list_provider_status():
+    """List all registered providers and their availability status."""
+    providers_info = []
+    for name in list_providers():
+        cls = get_provider_class(name)
+        if cls is None:
+            continue
+        try:
+            instance = cls()
+            available = instance.is_available()
+        except Exception:
+            available = False
+        providers_info.append({
+            "name": name,
+            "requires_api_key": getattr(cls, "requires_api_key", False),
+            "available": available,
+        })
+    return {"providers": providers_info}
+
+
+@router.get("/open-interest/{market}")
+def get_open_interest(
+    request: Request,
+    market: str,
+    start_ts: Optional[int] = Query(None),
+    end_ts: Optional[int] = Query(None),
+    limit: int = Query(1000, le=10000),
+):
+    """Query open interest snapshots for a market."""
+    store = _get_store(request)
+    if store is None:
+        return {"market": market, "count": 0, "records": []}
+    try:
+        records = store.query_open_interest(market, start_ts, end_ts)
+        records = records[:limit]
+        return {
+            "market": market,
+            "count": len(records),
+            "records": [
+                {"ts": r.ts, "long_oi": r.long_oi, "short_oi": r.short_oi,
+                 "net_oi": r.net_oi, "total_oi": r.total_oi}
+                for r in records
+            ],
+        }
+    except Exception as e:
+        return {"market": market, "count": 0, "records": [], "error": str(e)}
+
+
+@router.get("/liquidations/{market}")
+def get_liquidations(
+    request: Request,
+    market: str,
+    start_ts: Optional[int] = Query(None),
+    end_ts: Optional[int] = Query(None),
+    limit: int = Query(500, le=5000),
+):
+    """Query liquidation events for a market."""
+    store = _get_store(request)
+    if store is None:
+        return {"market": market, "count": 0, "records": []}
+    try:
+        records = store.query_liquidations(market, start_ts, end_ts)
+        records = records[:limit]
+        return {
+            "market": market,
+            "count": len(records),
+            "records": [
+                {"ts": r.ts, "side": r.side, "size": r.size,
+                 "price": r.price, "tx_sig": r.tx_sig}
+                for r in records
+            ],
+        }
+    except Exception as e:
+        return {"market": market, "count": 0, "records": [], "error": str(e)}
+
+
+@router.get("/whale-transfers")
+def get_whale_transfers(
+    request: Request,
+    token: Optional[str] = Query(None, description="Token mint address"),
+    wallet: Optional[str] = Query(None, description="Wallet address"),
+    start_ts: Optional[int] = Query(None),
+    end_ts: Optional[int] = Query(None),
+    limit: int = Query(500, le=5000),
+):
+    """Query whale transfer events, filterable by token mint and/or wallet."""
+    store = _get_store(request)
+    if store is None:
+        return {"count": 0, "records": []}
+    try:
+        records = store.query_whale_transfers(
+            token_mint=token, wallet=wallet, start_ts=start_ts, end_ts=end_ts,
+        )
+        records = records[:limit]
+        return {
+            "count": len(records),
+            "records": [
+                {"wallet": r.wallet, "token_mint": r.token_mint,
+                 "amount": r.amount, "ts": r.ts, "direction": r.direction,
+                 "tx_sig": r.tx_sig}
+                for r in records
+            ],
+        }
+    except Exception as e:
+        return {"count": 0, "records": [], "error": str(e)}
+
+
+@router.get("/dex-volume/{market}")
+def get_dex_volume(
+    request: Request,
+    market: str,
+    dex: Optional[str] = Query(None, description="Filter by DEX name"),
+    start_ts: Optional[int] = Query(None),
+    end_ts: Optional[int] = Query(None),
+    limit: int = Query(1000, le=10000),
+):
+    """Query DEX volume snapshots for a market."""
+    store = _get_store(request)
+    if store is None:
+        return {"market": market, "count": 0, "records": []}
+    try:
+        records = store.query_dex_volume(market, dex=dex, start_ts=start_ts, end_ts=end_ts)
+        records = records[:limit]
+        return {
+            "market": market,
+            "count": len(records),
+            "records": [
+                {"dex": r.dex, "ts": r.ts, "volume_usd": r.volume_usd,
+                 "txn_count": r.txn_count}
+                for r in records
+            ],
+        }
+    except Exception as e:
+        return {"market": market, "count": 0, "records": [], "error": str(e)}
+
+
+@router.get("/freshness")
+def get_data_freshness(request: Request):
+    """Data freshness report across all providers and markets."""
+    store = _get_store(request)
+    if store is None:
+        return {"freshness": []}
+    try:
+        return {"freshness": store.get_data_freshness()}
+    except Exception as e:
+        return {"freshness": [], "error": str(e)}
+
+
+@router.get("/correlation")
+def get_correlation(
+    request: Request,
+    markets: str = Query(
+        ..., description="Comma-separated market symbols, e.g. SOL-PERP,BTC-PERP,ETH-PERP"
+    ),
+    resolution_s: int = Query(3600, description="Candle resolution in seconds"),
+    start_ts: Optional[int] = Query(None),
+    end_ts: Optional[int] = Query(None),
+):
+    """Compute pairwise correlation matrix for the requested markets."""
+    store = _get_store(request)
+    market_list = [m.strip() for m in markets.split(",") if m.strip()]
+    if not market_list:
+        return {"error": "No markets provided", "matrix": {}}
+    if store is None:
+        return {"markets": market_list, "matrix": {}, "error": "Store unavailable"}
+    try:
+        candles_by_market = {}
+        for m in market_list:
+            candles = store.query_candles(m, resolution_s, start_ts, end_ts)
+            if candles:
+                candles_by_market[m] = candles
+
+        if len(candles_by_market) < 2:
+            return {
+                "markets": market_list,
+                "matrix": {},
+                "error": "Need candle data for at least 2 markets",
+            }
+
+        matrix = compute_correlation_matrix(candles_by_market)
+        return {"markets": list(candles_by_market.keys()), "matrix": matrix}
+    except Exception as e:
+        return {"markets": market_list, "matrix": {}, "error": str(e)}

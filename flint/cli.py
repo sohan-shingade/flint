@@ -30,6 +30,9 @@ app = typer.Typer(
 data_app = typer.Typer(help="Data management commands")
 app.add_typer(data_app, name="data")
 
+provider_app = typer.Typer(help="Manage data providers")
+data_app.add_typer(provider_app, name="provider")
+
 console = Console()
 
 
@@ -726,6 +729,140 @@ def live(
         console.print("[yellow]Paper trading mode — using simulated execution[/yellow]")
         console.print("  Start the server: [bold]flint serve[/bold]")
         console.print("  Then use the API: POST /api/v1/paper/start")
+
+
+# ─── PROVIDER MANAGEMENT ──────────────────────────────────
+
+def _load_providers_yaml() -> dict:
+    """Read flint.yaml and return the providers section."""
+    import yaml
+
+    yaml_path = Path("flint.yaml")
+    if not yaml_path.exists():
+        return {}
+    with open(yaml_path) as f:
+        data = yaml.safe_load(f) or {}
+    return data.get("providers", {})
+
+
+def _build_registry(providers_cfg: dict):
+    """Create a ProviderRegistry and register all known providers."""
+    from flint.providers.registry import ProviderRegistry
+    from flint.providers.birdeye import BirdeyeProvider
+    from flint.providers.helius import HeliusProvider
+    from flint.providers.pyth import PythProvider
+    from flint.providers.raydium import RaydiumProvider
+    from flint.providers.orca import OrcaProvider
+    from flint.providers.open_interest import DriftOpenInterestProvider
+
+    registry = ProviderRegistry()
+    registry.register(BirdeyeProvider())
+    registry.register(HeliusProvider())
+    registry.register(PythProvider())
+    registry.register(RaydiumProvider())
+    registry.register(OrcaProvider())
+    registry.register(DriftOpenInterestProvider())
+    registry.load_config(providers_cfg)
+    return registry
+
+
+@provider_app.command("status")
+def provider_status():
+    """Show status of all data providers."""
+    from flint.config import load_config
+
+    providers_cfg = _load_providers_yaml()
+    registry = _build_registry(providers_cfg)
+    statuses = registry.status()
+
+    table = Table(title="Data Providers", border_style="dim")
+    table.add_column("Provider", style="bold")
+    table.add_column("Enabled", justify="center")
+    table.add_column("Available", justify="center")
+    table.add_column("API Key", justify="center")
+    table.add_column("Data Types")
+
+    for s in statuses:
+        enabled = "[green]yes[/green]" if s["enabled"] else "[dim]no[/dim]"
+        available = "[green]yes[/green]" if s["available"] else "[red]no[/red]"
+        api_key = "[yellow]required[/yellow]" if s["requires_api_key"] else "[dim]—[/dim]"
+        data_types = ", ".join(s["data_types"]) if s["data_types"] else "[dim]—[/dim]"
+        table.add_row(s["name"], enabled, available, api_key, data_types)
+
+    console.print(table)
+    console.print(f"\n  [dim]{len(statuses)} providers registered[/dim]")
+
+
+@provider_app.command("list")
+def provider_list():
+    """List all data providers (alias for status)."""
+    provider_status()
+
+
+@provider_app.command("enable")
+def provider_enable(
+    name: str = typer.Argument(..., help="Provider name to enable"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", help="API key (appended to .env)"),
+):
+    """Enable a data provider in flint.yaml."""
+    import yaml
+
+    yaml_path = Path("flint.yaml")
+    if not yaml_path.exists():
+        console.print("[red]flint.yaml not found. Run `flint init` first.[/red]")
+        raise typer.Exit(1)
+
+    with open(yaml_path) as f:
+        data = yaml.safe_load(f) or {}
+
+    providers = data.setdefault("providers", {})
+    if name not in providers:
+        providers[name] = {}
+    if isinstance(providers[name], dict):
+        providers[name]["enabled"] = True
+    else:
+        providers[name] = {"enabled": True}
+
+    with open(yaml_path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+    console.print(f"  [green]✓[/green] Enabled provider [bold]{name}[/bold] in flint.yaml")
+
+    if api_key:
+        env_path = Path(".env")
+        env_var = f"FLINT_{name.upper()}_API_KEY={api_key}\n"
+        with open(env_path, "a") as f:
+            f.write(env_var)
+        console.print(f"  [green]✓[/green] Appended {name.upper()} API key to .env")
+
+
+@provider_app.command("disable")
+def provider_disable(
+    name: str = typer.Argument(..., help="Provider name to disable"),
+):
+    """Disable a data provider in flint.yaml."""
+    import yaml
+
+    yaml_path = Path("flint.yaml")
+    if not yaml_path.exists():
+        console.print("[red]flint.yaml not found. Run `flint init` first.[/red]")
+        raise typer.Exit(1)
+
+    with open(yaml_path) as f:
+        data = yaml.safe_load(f) or {}
+
+    providers = data.setdefault("providers", {})
+    if name not in providers:
+        providers[name] = {}
+    if isinstance(providers[name], dict):
+        providers[name]["enabled"] = False
+    else:
+        providers[name] = {"enabled": False}
+
+    with open(yaml_path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+    console.print(f"  [green]✓[/green] Disabled provider [bold]{name}[/bold] in flint.yaml")
 
 
 # ─── ENTRY POINT ───────────────────────────────────────────

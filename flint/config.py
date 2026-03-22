@@ -86,8 +86,11 @@ class FlintConfig(BaseSettings):
     api_port: int = 8000
     cors_origins: List[str] = Field(default=["*"])
 
-    # --- RPC ---
+    # --- Provider API keys ---
+    birdeye_api_key: str = ""
     helius_api_key: str = ""
+
+    # --- RPC ---
     solana_rpc_url: str = "https://api.mainnet-beta.solana.com"
 
 
