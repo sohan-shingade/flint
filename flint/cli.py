@@ -588,6 +588,111 @@ def data_status():
     console.print(f"\n  [dim]{len(rows)} market/resolution pairs in database[/dim]")
 
 
+# ─── CCXT / EXCHANGE COMMANDS ──────────────────────────────
+
+@data_app.command("exchanges")
+def data_exchanges():
+    """List supported exchanges (via CCXT)."""
+    try:
+        from flint.providers.ccxt_provider import CCXTProvider, _is_ccxt_available
+    except ImportError:
+        console.print("[red]Could not import CCXTProvider[/red]")
+        raise typer.Exit(1)
+
+    common = CCXTProvider.list_exchanges()
+
+    table = Table(title="Supported Exchanges (CCXT)", border_style="dim")
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Exchange", style="bold")
+    table.add_column("Status", justify="center")
+
+    if _is_ccxt_available():
+        all_exchanges = CCXTProvider.list_all_exchanges()
+        for i, name in enumerate(common, 1):
+            table.add_row(str(i), name, "[green]available[/green]")
+        console.print(table)
+        console.print(f"\n  [dim]{len(common)} common exchanges shown. {len(all_exchanges)} total supported by CCXT.[/dim]")
+        console.print("  [dim]Use any exchange name with: flint data markets <exchange>[/dim]")
+    else:
+        for i, name in enumerate(common, 1):
+            table.add_row(str(i), name, "[yellow]ccxt not installed[/yellow]")
+        console.print(table)
+        console.print("\n  [yellow]Install CCXT for live exchange access:[/yellow]")
+        console.print("  pip install 'flint[ccxt]'  [dim]or[/dim]  pip install ccxt>=4.0")
+
+
+@data_app.command("markets")
+def data_markets(
+    exchange: str = typer.Argument(..., help="Exchange name (e.g. binance, bybit, okx)"),
+    market_type: str = typer.Option("swap", "--type", "-t", help="Market type: swap, spot, future, option"),
+    quote: str = typer.Option("USDT", "--quote", "-q", help="Quote currency filter"),
+    limit: int = typer.Option(50, "--limit", "-n", help="Max markets to display"),
+):
+    """List available markets on an exchange (via CCXT)."""
+    try:
+        from flint.providers.ccxt_provider import CCXTProvider
+    except ImportError:
+        console.print("[red]Could not import CCXTProvider[/red]")
+        raise typer.Exit(1)
+
+    try:
+        provider = CCXTProvider(exchange=exchange)
+    except Exception as e:
+        console.print(f"[red]Error creating provider: {e}[/red]")
+        raise typer.Exit(1)
+
+    with console.status(f"[bold yellow]Loading {exchange} markets...[/bold yellow]"):
+        try:
+            markets = provider.list_markets(quote=quote)
+        except ImportError:
+            console.print("\n  [yellow]CCXT is not installed.[/yellow]")
+            console.print("  pip install 'flint[ccxt]'  [dim]or[/dim]  pip install ccxt>=4.0")
+            provider.close()
+            raise typer.Exit(1)
+        except Exception as e:
+            console.print(f"\n  [red]Error loading markets: {e}[/red]")
+            provider.close()
+            raise typer.Exit(1)
+
+    # Filter by type
+    if market_type:
+        markets = [m for m in markets if m.get("type") == market_type]
+
+    if not markets:
+        console.print(f"  [yellow]No {market_type} markets with quote={quote} on {exchange}[/yellow]")
+        console.print("  [dim]Try: --type spot  or  --quote BTC  or  --type swap --quote USD[/dim]")
+        provider.close()
+        return
+
+    table = Table(
+        title=f"{exchange.title()} Markets — {market_type} / {quote} ({len(markets)} found)",
+        border_style="dim",
+    )
+    table.add_column("Symbol", style="bold")
+    table.add_column("Flint Name")
+    table.add_column("Base")
+    table.add_column("Quote")
+    table.add_column("Type", style="dim")
+    table.add_column("Active", justify="center")
+
+    for m in markets[:limit]:
+        active = "[green]yes[/green]" if m.get("active") else "[red]no[/red]"
+        table.add_row(
+            m["symbol"],
+            m.get("flint_symbol", ""),
+            m["base"],
+            m["quote"],
+            m["type"],
+            active,
+        )
+
+    console.print(table)
+    if len(markets) > limit:
+        console.print(f"\n  [dim]Showing {limit} of {len(markets)} markets. Use --limit to show more.[/dim]")
+
+    provider.close()
+
+
 # ─── NEW STRATEGY ──────────────────────────────────────────
 
 @app.command("new")
@@ -762,6 +867,18 @@ def _build_registry(providers_cfg: dict):
     registry.register(RaydiumProvider())
     registry.register(OrcaProvider())
     registry.register(DriftOpenInterestProvider())
+
+    # Register CCXT provider if configured
+    try:
+        from flint.providers.ccxt_provider import CCXTProvider
+        ccxt_cfg = providers_cfg.get("ccxt", {})
+        exchange = ccxt_cfg.get("exchange", "binance") if isinstance(ccxt_cfg, dict) else "binance"
+        api_key = ccxt_cfg.get("api_key", "") if isinstance(ccxt_cfg, dict) else ""
+        secret = ccxt_cfg.get("secret", "") if isinstance(ccxt_cfg, dict) else ""
+        registry.register(CCXTProvider(exchange=exchange, api_key=api_key, secret=secret))
+    except Exception:
+        pass  # CCXT is optional
+
     registry.load_config(providers_cfg)
     return registry
 

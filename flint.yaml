@@ -74,6 +74,13 @@ providers:
   jupiter:
     enabled: true
 
+  # CCXT — unified access to 100+ crypto exchanges (pip install flint[ccxt])
+  ccxt:
+    enabled: false
+    exchange: binance
+    # api_key: ""     # optional, for private endpoints
+    # secret: ""      # optional
+
   # Cross-venue funding rates
   funding:
     drift: true

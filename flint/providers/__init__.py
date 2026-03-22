@@ -1,5 +1,7 @@
 from .base import CandleProvider
 from .birdeye import BirdeyeProvider
+from .ccxt_markets import CCXTMarketMapper
+from .ccxt_provider import CCXTProvider
 from .drift_candles import DriftCandleProvider
 from .drift_s3 import DriftS3Provider
 from .drift_api import DriftDataProvider
@@ -25,6 +27,8 @@ __all__ = [
     "BirdeyeProvider",
     "BybitFundingProvider",
     "CandleProvider",
+    "CCXTMarketMapper",
+    "CCXTProvider",
     "CrossVenueFunding",
     "DataProvider",
     "DriftCandleProvider",

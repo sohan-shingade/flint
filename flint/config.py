@@ -90,6 +90,11 @@ class FlintConfig(BaseSettings):
     birdeye_api_key: str = ""
     helius_api_key: str = ""
 
+    # --- CCXT (optional, pip install flint[ccxt]) ---
+    ccxt_exchange: str = "binance"
+    ccxt_api_key: str = ""
+    ccxt_secret: str = ""
+
     # --- RPC ---
     solana_rpc_url: str = "https://api.mainnet-beta.solana.com"
 

@@ -12,7 +12,7 @@
   <a href="#quickstart"><img src="https://img.shields.io/badge/setup-3_commands-57c84d?style=flat-square&labelColor=141418" alt="3 commands"></a>
   <a href="#features"><img src="https://img.shields.io/badge/strategies-10_templates-e8a849?style=flat-square&labelColor=141418" alt="10 strategies"></a>
   <a href="#features"><img src="https://img.shields.io/badge/markets-48_on_Drift-8b5cf6?style=flat-square&labelColor=141418" alt="48 markets"></a>
-  <a href="#features"><img src="https://img.shields.io/badge/tests-309_passing-57c84d?style=flat-square&labelColor=141418" alt="309 tests"></a>
+  <a href="#features"><img src="https://img.shields.io/badge/tests-497_passing-57c84d?style=flat-square&labelColor=141418" alt="497 tests"></a>
   <img src="https://img.shields.io/badge/python-3.9+-3776ab?style=flat-square&labelColor=141418" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/license-MIT-gray?style=flat-square&labelColor=141418" alt="MIT License">
 </p>
@@ -256,6 +256,8 @@ Flint aggregates data from multiple sources into a local DuckDB database. **All 
 | **OKX** | 8h funding rates (normalized to 1h) | None (free) | Major markets |
 | **Bybit** | 8h funding rates (normalized to 1h) | None (free) | Major markets |
 | **Binance** | 8h funding rates (normalized to 1h) | None (free) | Major markets (US geo-blocked) |
+| **Raydium** | AMM/CLMM pool data, reserves, fees, TVL | None (free) | Largest Solana DEX |
+| **Orca** | Whirlpool CL positions, pool stats | None (free) | Second-largest Solana DEX |
 
 ### Optional Providers (API key required, all free tier)
 
@@ -264,6 +266,35 @@ Flint aggregates data from multiple sources into a local DuckDB database. **All 
 | **Birdeye** | OHLCV for *any* Solana token, token metadata, price history | [birdeye.so/developers](https://birdeye.so/developers) | Backtest any SPL token, not just Drift perps |
 | **Helius** | Parsed transactions, token transfers, program events, DAS | [helius.dev](https://helius.dev) | On-chain events, whale tracking, liquidation data |
 | **Pyth Network** | Real-time oracle feeds with confidence intervals | No key needed | Sub-second price updates for 100+ assets |
+
+### CCXT — Any Exchange
+
+Flint integrates with [CCXT](https://github.com/ccxt/ccxt) for access to **100+ centralized exchanges** through a unified API. This means you can pull candle data, funding rates, orderbooks, and tickers from Binance, Bybit, OKX, Coinbase, Kraken, KuCoin, and dozens more.
+
+```bash
+pip install flint[ccxt]          # install with CCXT support
+flint data exchanges             # list supported exchanges
+flint data markets binance       # list available markets on Binance
+```
+
+```yaml
+# flint.yaml
+providers:
+  ccxt:
+    enabled: true
+    exchange: binance            # any CCXT-supported exchange
+```
+
+```python
+# Use in strategies or scripts
+from flint.providers import CCXTProvider
+
+provider = CCXTProvider(exchange="bybit")
+candles = provider.fetch_candles("SOL/USDT", 3600, start_ts, end_ts)
+markets = provider.list_markets(quote="USDT")
+```
+
+Symbol mapping between Flint format (`SOL-PERP`) and exchange format (`SOL/USDT:USDT`) is handled automatically.
 
 ### Data Stored Locally
 
@@ -277,6 +308,12 @@ All data is cached in DuckDB (`./data/flint.duckdb`). No data leaves your machin
 | `orderbook_snapshots` | market, bid/ask prices and sizes | (market, ts) |
 | `venue_funding_rates` | venue, market, hourly rate, mark/index price | (venue, market, ts) |
 | `pool_snapshots` | pool address, dex, reserves, fee rate | (pool_address, ts) |
+| `open_interest` | market, long/short OI | (market, ts) |
+| `liquidations` | market, side, size, price, tx_sig | (market, ts, tx_sig) |
+| `whale_transfers` | wallet, token, amount, direction, tx_sig | (token_mint, ts, tx_sig) |
+| `dex_volume` | market, dex, volume USD, txn count | (market, dex, ts) |
+| `token_unlocks` | token, unlock time, amount | (token_mint, unlock_ts) |
+| `sync_metadata` | provider, market, data type, last sync | (provider, market, data_type) |
 
 ### Cross-Venue Funding
 
@@ -397,6 +434,11 @@ flint backtest <strategy.py>        # Run backtest
 flint optimize <strategy.py>        # Hyperparameter optimization
 flint data download                 # Download/update market data
 flint data status                   # Show data coverage
+flint data provider status          # Show all data providers and their status
+flint data provider enable birdeye  # Enable a provider (with --api-key)
+flint data provider disable binance # Disable a provider
+flint data exchanges                # List CCXT-supported exchanges
+flint data markets binance          # List markets on an exchange
 flint new <name>                    # Scaffold a new strategy
 flint live --paper                  # Paper trading
 ```
@@ -412,7 +454,7 @@ flint/
 ├── paper/             # Paper trading engine + broker
 ├── risk/              # Risk guards (drawdown, position, daily loss)
 ├── portfolio/         # Multi-strategy engine, allocators
-├── providers/         # Drift Data API, Drift S3, funding rates
+├── providers/         # Drift, Birdeye, Helius, Pyth, Raydium, Orca, CCXT
 ├── connectors/        # Drift (driftpy), Jupiter
 ├── analytics/         # Metrics, tearsheet, Monte Carlo
 ├── indicators.py      # 20 technical indicators
@@ -431,7 +473,7 @@ ui/                    # React 19 + Vite + Tailwind
 ├── components/        # Charts, editors, metrics cards
 └── hooks/             # useBacktest, useOptimize, useJournal
 
-tests/                 # 309 tests across 36 test files
+tests/                 # 497 tests across 44 test files
 strategies/user/       # Your strategies go here
 ```
 
@@ -453,8 +495,9 @@ strategies/user/       # Your strategies go here
 |---|---|
 | Backend | Python 3.9+, FastAPI, DuckDB, Optuna |
 | Frontend | React 19, Vite, Tailwind CSS, Monaco Editor, lightweight-charts |
-| Data | Drift Data API, Drift S3, GeckoTerminal, Birdeye, Pyth, Parquet |
-| Funding | Drift, Hyperliquid, OKX, Bybit, Binance (5 venues) |
+| Data | Drift Data API, Drift S3, GeckoTerminal, Birdeye, Pyth, CCXT (100+ exchanges), Parquet |
+| Funding | Drift, Hyperliquid, OKX, Bybit, Binance (5 venues + any via CCXT) |
+| DEX Data | Raydium (AMM/CLMM), Orca (Whirlpools), Jupiter (swaps) |
 | Execution | driftpy (Drift Protocol), Jupiter |
 | CLI | Typer + Rich |
 | Infra | Docker, WebSocket |
@@ -548,7 +591,7 @@ pip install -e ".[dev]"
 cd ui && npm install
 
 # Run tests
-pytest tests/ -v          # 309 tests
+pytest tests/ -v          # 497 tests
 
 # Dev servers
 flint serve               # API on :8000, UI on :5173
