@@ -11,8 +11,8 @@
   <br/><br/>
   <a href="#quickstart"><img src="https://img.shields.io/badge/setup-3_commands-57c84d?style=flat-square&labelColor=141418" alt="3 commands"></a>
   <a href="#features"><img src="https://img.shields.io/badge/strategies-10_templates-e8a849?style=flat-square&labelColor=141418" alt="10 strategies"></a>
-  <a href="#features"><img src="https://img.shields.io/badge/markets-48_on_Drift-8b5cf6?style=flat-square&labelColor=141418" alt="48 markets"></a>
-  <a href="#features"><img src="https://img.shields.io/badge/tests-497_passing-57c84d?style=flat-square&labelColor=141418" alt="497 tests"></a>
+  <a href="#data-sources"><img src="https://img.shields.io/badge/providers-13_data_sources-8b5cf6?style=flat-square&labelColor=141418" alt="13 providers"></a>
+  <a href="#testing"><img src="https://img.shields.io/badge/tests-497_passing-57c84d?style=flat-square&labelColor=141418" alt="497 tests"></a>
   <img src="https://img.shields.io/badge/python-3.9+-3776ab?style=flat-square&labelColor=141418" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/license-MIT-gray?style=flat-square&labelColor=141418" alt="MIT License">
 </p>
@@ -36,7 +36,7 @@
 
 Most crypto trading frameworks are built for centralized exchanges. Flint is **purpose-built for Solana DeFi** — Drift perpetuals, Jupiter swaps, on-chain data, and MEV-aware execution.
 
-**No API keys needed.** Market data is free from Drift's public data API. Install, run, and start backtesting in under a minute.
+**No API keys needed to start.** Core market data is free from Drift's public API. Install, run, and backtest in under a minute.
 
 | | Flint | Freqtrade | QuantConnect | Jesse |
 |---|:---:|:---:|:---:|:---:|
@@ -44,9 +44,10 @@ Most crypto trading frameworks are built for centralized exchanges. Flint is **p
 | Free data (no signup) | **Yes** | No | Limited | No |
 | Local-first (no cloud) | **Yes** | Yes | Cloud | Yes |
 | On-chain execution | **Drift** | CCXT (CEX) | Multi-broker | CEX |
+| CEX data via CCXT | **Yes** | Yes | No | No |
 | MEV framework | **Yes** | No | No | No |
-| Web UI included | **Yes** | FreqUI | Cloud IDE | No |
-| Strategy Lab (Monaco) | **Yes** | No | Cloud IDE | No |
+| Web UI + Monaco editor | **Yes** | FreqUI | Cloud IDE | No |
+| Multi-market strategies | **Yes** | Yes | Yes | No |
 
 <a name="quickstart"></a>
 ## Quickstart
@@ -57,29 +58,24 @@ flint init                # downloads market data, runs a sample backtest
 flint serve               # starts the web UI at localhost:5173
 ```
 
-That's it. Open [localhost:5173](http://localhost:5173) and you'll see the dashboard with your data loaded.
-
-### Your first backtest
+Open [localhost:5173](http://localhost:5173) and you'll see the dashboard with your data loaded.
 
 ```bash
-# From the CLI
+# Run a backtest from CLI
 flint backtest strategies/user/my_strategy.py --market SOL-PERP --start 2025-01-01 --end 2025-06-01
 
 # Or use the Strategy Lab UI — write code in Monaco, click Run
 flint serve
-```
 
-### Docker
-
-```bash
-docker compose up         # API + UI, data persisted in ./data/
+# Docker
+docker compose up
 ```
 
 ## What You Can Do
 
 ### Write Strategies in Python
 
-Flint has two strategy APIs — pick whichever fits your style:
+Two strategy APIs — pick whichever fits:
 
 **Simple (v1)** — return a signal, Flint handles execution:
 
@@ -105,7 +101,7 @@ class MyStrategy(Strategy):
         return Signal.HOLD
 ```
 
-**Advanced (v2)** — full control with limit orders, stop-losses, position sizing:
+**Advanced (v2)** — full control with limit orders, stop-losses, multi-market:
 
 ```python
 def on_candle(self, candle, history, ctx=None):
@@ -117,8 +113,10 @@ def on_candle(self, candle, history, ctx=None):
     r = rsi(history, 14)
     risk = atr(history, 14)
 
+    # Access other markets for cross-market strategies
+    btc = ctx.get_candles("BTC-PERP", 20)
+
     if r < 30 and not ctx.positions:
-        # Oversold — enter with stop-loss and take-profit
         ctx.market_order(candle.market, "long", size=1.0)
         ctx.stop_order(candle.market, "short", size=1.0,
                        trigger_price=candle.close - 2 * risk)
@@ -140,8 +138,9 @@ Not just bar-close fills. Flint simulates real trading conditions:
 - **Stop-loss / take-profit** — checked against high/low of each bar
 - **Limit orders** — filled when price crosses your level
 - **Funding rates** — applied to open positions (hourly, like Drift)
-- **Multi-market** — backtest across multiple markets simultaneously
+- **Multi-market** — backtest across multiple markets simultaneously, auto-detected from strategy code
 - **Monte Carlo** — 500-iteration bootstrap on every backtest with 5+ trades
+- **Data quality checks** — gap detection, outlier detection, duplicate removal before every run
 
 ### Optimize with Optuna
 
@@ -160,7 +159,7 @@ class MyStrategy(Strategy):
 flint optimize strategies/user/my_strategy.py --market SOL-PERP --trials 100 --metric sharpe
 ```
 
-Or use the **Optimize** button in Strategy Lab — results appear inline with parameter heatmaps.
+Or use the **Optimize** button in Strategy Lab — results appear inline.
 
 Walk-forward analysis validates that optimized parameters hold up out-of-sample.
 
@@ -174,12 +173,11 @@ flint live --paper --strategy strategies/user/my_strategy.py --market SOL-PERP
 
 ### Explore Data
 
-Interactive TradingView-quality charts with:
+Interactive TradingView-quality charts (lightweight-charts v5) with:
 - OHLCV candlesticks with volume
 - SMA, EMA, VWAP, Bollinger Bands, RSI overlays
 - Configurable time horizons (1W to ALL)
 - Auto-download from Drift if data isn't cached locally
-- 48 markets: 42 perps + 6 spot on Drift
 
 <a name="features"></a>
 ## Features
@@ -192,6 +190,7 @@ Interactive TradingView-quality charts with:
 - v1 signal API + v2 ExecutionContext
 - 10 built-in templates (MA, RSI, Bollinger, VWAP, grid, funding harvest, breakout, mean reversion, dual timeframe, multi-indicator)
 - 20 built-in indicators (SMA, EMA, RSI, MACD, Bollinger, ATR, VWAP, ADX, stochastic, z-score...)
+- Multi-market strategies via `ctx.get_candles()`
 - User strategy hot-loading from `strategies/user/`
 
 ### Backtesting
@@ -199,8 +198,9 @@ Interactive TradingView-quality charts with:
 - Pluggable fee models (6 venue presets)
 - Stop-loss, take-profit, limit orders
 - Funding rate simulation
-- Multi-market engine
+- Multi-market engine with auto-sync
 - Monte Carlo confidence intervals
+- Data quality checks (gaps, outliers, completeness)
 
 ### Optimization
 - Optuna bayesian/grid/random search
@@ -211,26 +211,31 @@ Interactive TradingView-quality charts with:
 </td>
 <td width="50%">
 
-### Data
-- 48 Drift markets (42 perp + 6 spot)
-- Auto-download from Drift Data API
-- DuckDB local cache (no cloud, no API keys)
-- Funding rates, oracle prices, orderbook snapshots
-- Cross-venue funding (Drift, Hyperliquid, OKX)
-- Parquet export/import
+### Data (13 Providers)
+- 48 Drift markets (42 perp + 6 spot) — free, no key
+- Birdeye — any Solana token (free API key)
+- CCXT — 100+ centralized exchanges (optional install)
+- Pyth — real-time oracle feeds for 20 pairs
+- Raydium + Orca — DEX pool data, TVL, volume
+- Cross-venue funding (Drift, Hyperliquid, OKX, Bybit, Binance)
+- Helius — liquidations, whale tracking (free API key)
+- Open interest, orderbook snapshots, oracle prices
+- Parquet export/import, incremental sync
+- Configurable per provider via `flint.yaml` / CLI
 
-### Trading
+### Trading & Risk
 - Paper trading with real Drift prices
 - Risk guards (max drawdown, position limits, daily loss)
 - Notifications (Telegram, Discord, webhooks)
 - Fixed-point precision (Decimal at boundaries)
 - WebSocket streaming
+- Cross-market correlation matrix
 
 ### Web UI
 - Strategy Lab with Monaco editor
 - Interactive charts (lightweight-charts v5)
 - Data Explorer with indicator overlays
-- Trade journal with run history
+- Trade journal with persistent run history
 - MEV Scanner dashboard
 - Built-in documentation
 
@@ -240,190 +245,122 @@ Interactive TradingView-quality charts with:
 
 ---
 
+<a name="data-sources"></a>
 ## Data Sources
 
-Flint aggregates data from multiple sources into a local DuckDB database. **All core data is free** — no API keys required for backtesting.
+Flint aggregates data from 13 providers into a local DuckDB database. **All core data is free** — no API keys required to start backtesting.
 
-### Built-in Providers
+### Free — No Keys Needed
 
-| Provider | Data | Auth | Coverage |
-|---|---|---|---|
-| **Drift Data API** | OHLCV candles (1m→monthly), funding rates, orderbook L2/L3 | None (free) | 48 markets, current data |
-| **Drift S3** | Historical trade records (archival backfill) | None (free) | 90+ days of raw trades |
-| **GeckoTerminal** | DEX pool OHLCV for any Solana pool | None (free) | Any Solana DEX pool |
-| **Jupiter** | Swap quotes, routing, price discovery | None (free) | Any SPL token pair |
-| **Hyperliquid** | Hourly funding rates | None (free) | 17 markets |
-| **OKX** | 8h funding rates (normalized to 1h) | None (free) | Major markets |
-| **Bybit** | 8h funding rates (normalized to 1h) | None (free) | Major markets |
-| **Binance** | 8h funding rates (normalized to 1h) | None (free) | Major markets (US geo-blocked) |
-| **Raydium** | AMM/CLMM pool data, reserves, fees, TVL | None (free) | Largest Solana DEX |
-| **Orca** | Whirlpool CL positions, pool stats | None (free) | Second-largest Solana DEX |
+| Provider | Data | Coverage |
+|---|---|---|
+| **Drift Data API** | OHLCV candles (1m→monthly), funding rates, orderbook L2/L3 | 48 markets, current data |
+| **Drift S3** | Historical trade records (archival backfill) | 90+ days of raw trades |
+| **Drift Open Interest** | Long/short OI per market | All Drift perp markets |
+| **Pyth Network** | Real-time oracle price feeds with confidence intervals | 20 pairs (SOL, BTC, ETH...) |
+| **GeckoTerminal** | DEX pool OHLCV for any Solana pool | Any Solana DEX pool |
+| **Jupiter** | Swap quotes, routing, price discovery | Any SPL token pair |
+| **Raydium** | AMM/CLMM pool data, reserves, fees, TVL, volume | Largest Solana DEX |
+| **Orca** | Whirlpool concentrated liquidity positions, pool stats | Second-largest Solana DEX |
+| **Hyperliquid** | Hourly funding rates | 17 markets |
+| **OKX** | 8h funding rates (normalized to 1h) | Major markets |
+| **Bybit** | 8h funding rates (normalized to 1h) | Major markets |
+| **Binance** | 8h funding rates (normalized to 1h) | Major markets (US geo-blocked) |
 
-### Optional Providers (API key required, all free tier)
+### Free API Key Required (no credit card)
 
-| Provider | Data | Sign Up | What It Unlocks |
-|---|---|---|---|
-| **Birdeye** | OHLCV for *any* Solana token, token metadata, price history | [birdeye.so/developers](https://birdeye.so/developers) | Backtest any SPL token, not just Drift perps |
-| **Helius** | Parsed transactions, token transfers, program events, DAS | [helius.dev](https://helius.dev) | On-chain events, whale tracking, liquidation data |
-| **Pyth Network** | Real-time oracle feeds with confidence intervals | No key needed | Sub-second price updates for 100+ assets |
+| Provider | Data | Sign Up |
+|---|---|---|
+| **Birdeye** | OHLCV for **any** Solana token, token metadata, price history | [birdeye.so/developers](https://birdeye.so/developers) |
+| **Helius** | Liquidation detection, whale wallet tracking, parsed transactions | [helius.dev](https://helius.dev) |
 
-### CCXT — Any Exchange
-
-Flint integrates with [CCXT](https://github.com/ccxt/ccxt) for access to **100+ centralized exchanges** through a unified API. This means you can pull candle data, funding rates, orderbooks, and tickers from Binance, Bybit, OKX, Coinbase, Kraken, KuCoin, and dozens more.
+### CCXT — 100+ Centralized Exchanges
 
 ```bash
-pip install flint[ccxt]          # install with CCXT support
+pip install flint[ccxt]          # optional install
 flint data exchanges             # list supported exchanges
-flint data markets binance       # list available markets on Binance
+flint data markets binance       # list available markets
 ```
 
-```yaml
-# flint.yaml
+Pull candles, funding rates, orderbooks, and tickers from Binance, Bybit, OKX, Coinbase, Kraken, KuCoin, and dozens more. Symbol mapping (`SOL-PERP` ↔ `SOL/USDT:USDT`) is automatic.
+
+### Local Storage
+
+All data is cached in DuckDB (`./data/flint.duckdb`). No data leaves your machine. 12 tables:
+
+| Table | What It Stores |
+|---|---|
+| `candles` | OHLCV price data |
+| `funding_rates` | Drift funding rates |
+| `oracle_prices` | Oracle price snapshots |
+| `orderbook_snapshots` | L2 bid/ask depth |
+| `venue_funding_rates` | Cross-venue funding (5 venues) |
+| `pool_snapshots` | AMM pool reserves |
+| `open_interest` | Long/short OI from Drift |
+| `liquidations` | Liquidation events (via Helius) |
+| `whale_transfers` | Large token movements (via Helius) |
+| `dex_volume` | DEX volume per market/venue |
+| `token_unlocks` | Token vesting schedules |
+| `sync_metadata` | Freshness tracking per provider |
+
+### Configuring Providers
+
+```bash
+# Enable/disable via CLI
+flint data provider status
+flint data provider enable birdeye --api-key YOUR_KEY
+flint data provider disable binance
+
+# Or via flint.yaml
 providers:
+  drift:
+    enabled: true
+  birdeye:
+    enabled: true    # needs FLINT_BIRDEYE_API_KEY in .env
   ccxt:
     enabled: true
-    exchange: binance            # any CCXT-supported exchange
-```
-
-```python
-# Use in strategies or scripts
-from flint.providers import CCXTProvider
-
-provider = CCXTProvider(exchange="bybit")
-candles = provider.fetch_candles("SOL/USDT", 3600, start_ts, end_ts)
-markets = provider.list_markets(quote="USDT")
-```
-
-Symbol mapping between Flint format (`SOL-PERP`) and exchange format (`SOL/USDT:USDT`) is handled automatically.
-
-### Data Stored Locally
-
-All data is cached in DuckDB (`./data/flint.duckdb`). No data leaves your machine.
-
-| Table | Fields | Primary Key |
-|---|---|---|
-| `candles` | market, resolution, OHLCV | (market, resolution_s, ts) |
-| `funding_rates` | market, rate, oracle/mark price, slot | (market, ts) |
-| `oracle_prices` | market, price, slot | (market, ts) |
-| `orderbook_snapshots` | market, bid/ask prices and sizes | (market, ts) |
-| `venue_funding_rates` | venue, market, hourly rate, mark/index price | (venue, market, ts) |
-| `pool_snapshots` | pool address, dex, reserves, fee rate | (pool_address, ts) |
-| `open_interest` | market, long/short OI | (market, ts) |
-| `liquidations` | market, side, size, price, tx_sig | (market, ts, tx_sig) |
-| `whale_transfers` | wallet, token, amount, direction, tx_sig | (token_mint, ts, tx_sig) |
-| `dex_volume` | market, dex, volume USD, txn count | (market, dex, ts) |
-| `token_unlocks` | token, unlock time, amount | (token_mint, unlock_ts) |
-| `sync_metadata` | provider, market, data type, last sync | (provider, market, data_type) |
-
-### Cross-Venue Funding
-
-Flint normalizes funding rates across 5 venues to a common hourly format, computes a benchmark (equal-weight average), and calculates dislocation scores — enabling cross-venue funding arbitrage strategies.
-
-```
-Drift (1h native) ──┐
-Hyperliquid (1h)  ───┤
-OKX (8h → 1h)    ───┼──→ Benchmark (avg) ──→ Dislocation z-score per venue
-Bybit (8h → 1h)  ───┤
-Binance (8h → 1h) ──┘
+    exchange: binance
 ```
 
 ---
 
-## Configuring Data Sources
+<a name="testing"></a>
+## Testing
 
-Every data source is opt-in and configurable via `flint.yaml`, `.env`, or CLI. Enable only what you need.
+Flint has **497 tests** across 44 test files covering every layer of the platform.
 
-### Via `flint.yaml`
+### Test Coverage
 
-```yaml
-providers:
-  drift:
-    enabled: true       # always-on, no key needed
-    candles: true
-    funding_rates: true
-    orderbook: true
+| Area | Tests | What's Tested |
+|---|---|---|
+| **Strategy Engine** | ~40 | v1/v2 API, signal generation, parameter validation, strategy loading, user code hot-reload |
+| **Backtest Engine** | ~35 | Fill models (close, next-open, slippage), fee models, SL/TP triggers, limit orders, multi-market sync, v1 backwards compat |
+| **Backtest Context** | ~25 | Order lifecycle, position tracking, PnL calculation, funding application, dust guards, 100-order cap |
+| **Data Providers** | ~190 | Birdeye, Helius, Pyth, Raydium, Orca, CCXT, Drift API, Drift S3, GeckoTerminal, open interest (all mock-based) |
+| **Provider Registry** | ~20 | Registration, enable/disable, config loading, data type routing, status reporting |
+| **Store (DuckDB)** | ~50 | All 12 tables — upsert, query, filtering, sync metadata, freshness, thread safety |
+| **Models** | ~30 | All dataclasses — creation, defaults, frozen immutability, computed properties |
+| **Optimization** | ~15 | Optuna integration, walk-forward, parameter search, metric objectives |
+| **Risk Management** | ~15 | Max drawdown, position limits, daily loss, circuit breaker, guard chaining |
+| **Analytics** | ~25 | Metrics, tearsheet, Monte Carlo, correlation matrix, rolling correlation |
+| **Portfolio** | ~10 | Multi-strategy engine, equal-weight/inverse-vol allocators |
+| **Notifications** | ~10 | Telegram, Discord, webhook dispatch (mock HTTP) |
+| **Paper Trading** | ~10 | Broker simulation, order matching, state persistence |
+| **API** | ~15 | Backtest submission, data endpoints, strategy CRUD, health checks |
+| **Other** | ~10 | Config loading, precision math, data quality, journal, WebSocket |
 
-  birdeye:
-    enabled: true       # enable Birdeye for spot token data
-    # api_key set via FLINT_BIRDEYE_API_KEY env var
-
-  helius:
-    enabled: true       # enable on-chain event tracking
-    # api_key set via FLINT_HELIUS_API_KEY env var
-
-  pyth:
-    enabled: true       # real-time oracle feeds
-
-  funding:
-    drift: true
-    hyperliquid: true
-    okx: true
-    binance: false      # geo-blocked from US
-    bybit: false
-
-dex:
-  raydium:
-    enabled: true       # track Raydium pool data
-  orca:
-    enabled: false
-```
-
-### Via `.env`
+### Running Tests
 
 ```bash
-# API keys for optional providers
-FLINT_BIRDEYE_API_KEY=your_key_here
-FLINT_HELIUS_API_KEY=your_key_here
+pytest tests/ -v                    # run all 497 tests
+pytest tests/test_birdeye.py -v     # run a specific test file
+pytest tests/ -k "backtest" -v      # run tests matching a keyword
+pytest tests/ -x                    # stop on first failure
 ```
 
-### Via CLI
+All tests use **mocks for external APIs** — no network calls, no API keys needed, runs in ~5 seconds.
 
-```bash
-# Enable a provider
-flint data provider enable birdeye --api-key YOUR_KEY
-
-# Disable a provider
-flint data provider disable binance
-
-# Check provider status
-flint data provider status
-
-# Download data from a specific provider
-flint data download --provider birdeye --token SOL
-flint data download --provider drift --market SOL-PERP
-
-# List available markets per provider
-flint data provider markets drift
-flint data provider markets birdeye
-```
-
-### Adding Custom Providers
-
-Implement the `DataProvider` interface and register in `flint.yaml`:
-
-```python
-from flint.providers.base import DataProvider
-
-class MyExchangeProvider(DataProvider):
-    name = "my-exchange"
-
-    def fetch_candles(self, market, resolution_s, start_ts, end_ts):
-        # Your API calls here
-        return [Candle(...), ...]
-
-    def fetch_funding_rates(self, market, start_ts, end_ts):
-        return [FundingRate(...), ...]
-```
-
-```yaml
-providers:
-  custom:
-    - module: my_providers.exchange
-      class: MyExchangeProvider
-      enabled: true
-      config:
-        api_key: ${MY_EXCHANGE_KEY}
-```
+---
 
 ## CLI Reference
 
@@ -434,11 +371,11 @@ flint backtest <strategy.py>        # Run backtest
 flint optimize <strategy.py>        # Hyperparameter optimization
 flint data download                 # Download/update market data
 flint data status                   # Show data coverage
-flint data provider status          # Show all data providers and their status
-flint data provider enable birdeye  # Enable a provider (with --api-key)
-flint data provider disable binance # Disable a provider
+flint data provider status          # Show all providers and their status
+flint data provider enable <name>   # Enable a provider (with --api-key)
+flint data provider disable <name>  # Disable a provider
 flint data exchanges                # List CCXT-supported exchanges
-flint data markets binance          # List markets on an exchange
+flint data markets <exchange>       # List markets on an exchange
 flint new <name>                    # Scaffold a new strategy
 flint live --paper                  # Paper trading
 ```
@@ -454,15 +391,15 @@ flint/
 ├── paper/             # Paper trading engine + broker
 ├── risk/              # Risk guards (drawdown, position, daily loss)
 ├── portfolio/         # Multi-strategy engine, allocators
-├── providers/         # Drift, Birdeye, Helius, Pyth, Raydium, Orca, CCXT
+├── providers/         # 13 providers: Drift, Birdeye, Helius, Pyth, Raydium, Orca, CCXT...
 ├── connectors/        # Drift (driftpy), Jupiter
-├── analytics/         # Metrics, tearsheet, Monte Carlo
+├── analytics/         # Metrics, tearsheet, Monte Carlo, correlation
 ├── indicators.py      # 20 technical indicators
 ├── precision.py       # Fixed-point math for Solana
-├── store.py           # Thread-safe DuckDB store
+├── store.py           # Thread-safe DuckDB store (12 tables)
 ├── config.py          # Pydantic settings (YAML + env)
 ├── cli.py             # Typer CLI
-├── api/               # FastAPI (25+ endpoints, WebSocket)
+├── api/               # FastAPI (30+ endpoints, WebSocket)
 │   └── routes/        # backtest, data, paper, journal, optimization
 ├── notifications/     # Telegram, Discord, webhook
 ├── journal/           # Backtest run persistence
@@ -486,7 +423,7 @@ strategies/user/       # Your strategies go here
 | `Hyperopt` | `flint optimize` (Optuna) |
 | `--dry-run` | `flint live --paper` |
 | `freqtrade download-data` | `flint data download` (or auto on first backtest) |
-| CCXT (CEX only) | Drift Protocol (Solana on-chain) |
+| CCXT exchanges | CCXT + Drift Protocol (Solana on-chain) |
 | DataFrame-based | Candle objects + indicator functions |
 
 ## Tech Stack
@@ -495,55 +432,15 @@ strategies/user/       # Your strategies go here
 |---|---|
 | Backend | Python 3.9+, FastAPI, DuckDB, Optuna |
 | Frontend | React 19, Vite, Tailwind CSS, Monaco Editor, lightweight-charts |
-| Data | Drift Data API, Drift S3, GeckoTerminal, Birdeye, Pyth, CCXT (100+ exchanges), Parquet |
-| Funding | Drift, Hyperliquid, OKX, Bybit, Binance (5 venues + any via CCXT) |
-| DEX Data | Raydium (AMM/CLMM), Orca (Whirlpools), Jupiter (swaps) |
+| Data | Drift, Birdeye, Helius, Pyth, Raydium, Orca, GeckoTerminal, CCXT |
+| Funding | Drift, Hyperliquid, OKX, Bybit, Binance (5 venues + CCXT) |
 | Execution | driftpy (Drift Protocol), Jupiter |
 | CLI | Typer + Rich |
 | Infra | Docker, WebSocket |
 
-## Roadmap
-
-### Next Up
-
-| Feature | Category | Description |
-|---|---|---|
-| **Spot token backtesting** | Breadth | Backtest strategies on any Solana SPL token via Birdeye data |
-| **LP strategy framework** | Breadth | Simulate concentrated liquidity on Raydium/Orca (IL, fee yields) |
-| **Raydium + Orca pool data** | Breadth | AMM reserves, CLMM positions, LP fee tracking |
-| **Open interest tracking** | Depth | Long/short OI from Drift for crowding and divergence signals |
-| **Liquidation detection** | Depth | Parse Drift program events via Helius for cascade detection |
-| **Whale wallet tracking** | Depth | Monitor large token movements for smart money signals |
-| **Perp-spot basis engine** | Depth | Automated basis tracking between Drift perps and spot prices |
-| **Pyth WebSocket streaming** | Operational | Sub-second oracle updates for paper/live trading |
-| **Tick-level Drift data** | Operational | Fill-level trade records for volume profile analysis |
-| **Incremental sync** | Operational | Track `last_sync_ts` per source, only fetch deltas |
-| **Data freshness dashboard** | Operational | UI showing staleness per market/source |
-| **Cross-market correlation** | Operational | Rolling correlation matrix for portfolio construction |
-| **Adaptive resolution** | Operational | Auto-select candle resolution based on backtest length |
-| **Liquidation heatmap** | UI | Visualize liquidation clusters relative to current price |
-| **Multi-venue execution** | Trading | Route orders across Drift + Jupiter for best execution |
-| **Strategy marketplace** | Community | Share/import strategies with performance badges |
-
-### Possible Future Integrations
-
-| Integration | Type | What It Enables |
-|---|---|---|
-| **Marinade Finance** | Staking | mSOL yield data for basis strategies |
-| **Jito** | MEV | Tip data, bundle analysis, priority fee markets |
-| **Tensor** | NFT | NFT floor price feeds for exotic strategies |
-| **Switchboard** | Oracle | Alternative oracle feeds, VRF |
-| **Kamino** | DeFi | Vault yields, auto-compounding data |
-| **Marginfi** | Lending | Borrow rates, utilization for carry trades |
-| **Token unlock schedules** | On-chain | Vesting account monitoring for supply pressure |
-
-Want to contribute a provider or feature? See [Adding Custom Providers](#adding-custom-providers) above.
-
----
-
 ## Configuration
 
-Flint uses `flint.yaml` + environment variables (`FLINT_` prefix) + `.env` file:
+Flint uses `flint.yaml` + environment variables (`FLINT_` prefix) + `.env`:
 
 ```yaml
 db:
@@ -554,19 +451,12 @@ trading:
   default_fee_rate: 0.0005
   default_markets: ["SOL-PERP", "BTC-PERP", "ETH-PERP"]
 
-collector:
-  enabled: true
-  candle_backfill_days: 90
-
 providers:
-  drift:
-    enabled: true
-  birdeye:
-    enabled: false    # set FLINT_BIRDEYE_API_KEY to enable
-  helius:
-    enabled: false    # set FLINT_HELIUS_API_KEY to enable
-  pyth:
-    enabled: false
+  drift: { enabled: true }
+  birdeye: { enabled: false }   # set FLINT_BIRDEYE_API_KEY in .env
+  helius: { enabled: false }    # set FLINT_HELIUS_API_KEY in .env
+  pyth: { enabled: false }
+  ccxt: { enabled: false, exchange: binance }
   funding:
     drift: true
     hyperliquid: true
@@ -586,15 +476,10 @@ See `.env.example` for all environment variable options.
 ## Development
 
 ```bash
-# Setup
-pip install -e ".[dev]"
-cd ui && npm install
-
-# Run tests
-pytest tests/ -v          # 497 tests
-
-# Dev servers
-flint serve               # API on :8000, UI on :5173
+pip install -e ".[dev]"          # install with dev dependencies
+cd ui && npm install             # install UI dependencies
+pytest tests/ -v                 # run 497 tests (~5s)
+flint serve                      # API on :8000, UI on :5173
 ```
 
 ## License
