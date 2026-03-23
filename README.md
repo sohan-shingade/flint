@@ -364,6 +364,49 @@ All tests use **mocks for external APIs** — no network calls, no API keys need
 
 ---
 
+## MCP Server (AI Integration)
+
+Flint includes an MCP (Model Context Protocol) server so AI models can directly run backtests, query data, and optimize strategies.
+
+### Setup
+
+```bash
+pip install flint[mcp]           # install with MCP support
+
+# Add to Claude Code
+claude mcp add flint -- python -m flint.mcp_server
+
+# Or run standalone
+python -m flint.mcp_server
+```
+
+### Available Tools
+
+| Tool | What It Does |
+|---|---|
+| `run_backtest` | Run a backtest with any strategy, market, and date range |
+| `optimize_strategy` | Optuna hyperparameter search for best parameters |
+| `get_candles` | Query OHLCV price data |
+| `download_market_data` | Download market data from Drift (free) |
+| `list_available_markets` | Show all 53 downloadable markets (perp + spot) |
+| `list_local_markets` | Show what data is cached locally |
+| `list_strategies` | Show built-in strategies with parameters |
+| `get_funding_rates` | Query funding rate history |
+| `get_open_interest` | Query open interest data |
+| `get_correlation` | Cross-market correlation matrix |
+| `get_data_freshness` | Check data staleness per provider |
+
+### Example AI Workflow
+
+An AI model can:
+1. Call `list_available_markets` to see what's available
+2. Call `download_market_data(market="SOL-PERP", days=180)` to fetch data
+3. Call `run_backtest(market="SOL-PERP", strategy="rsi")` to test a strategy
+4. Call `optimize_strategy(market="SOL-PERP", strategy="rsi", trials=50)` to find best params
+5. Call `run_backtest` again with the optimized parameters
+
+---
+
 ## CLI Reference
 
 ```

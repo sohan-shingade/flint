@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "flint"
 version = "0.1.0"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "duckdb>=0.9",
     "httpx>=0.25",
@@ -26,12 +26,14 @@ dependencies = [
 flint = "flint.cli:main"
 
 [project.optional-dependencies]
+mcp = ["mcp>=1.0"]
 ccxt = ["ccxt>=4.0"]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
 ]
 all = [
+    "mcp>=1.0",
     "ccxt>=4.0",
 ]
 

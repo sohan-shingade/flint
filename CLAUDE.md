@@ -107,6 +107,20 @@ pytest tests/test_birdeye.py  # single file
 
 **Modify the UI**: Edit files in `ui/src/`. Run `cd ui && npm run dev` for hot reload. Production build: `npm run build` → served by FastAPI from `ui/dist/`.
 
+## MCP Server
+
+Flint exposes an MCP server at `flint/mcp_server.py` for AI model integration.
+
+```bash
+pip install flint[mcp]                              # install MCP dependency
+python -m flint.mcp_server                          # run standalone (stdio transport)
+claude mcp add flint -- python -m flint.mcp_server  # add to Claude Code
+```
+
+Tools: `run_backtest`, `optimize_strategy`, `get_candles`, `download_market_data`, `list_available_markets`, `list_local_markets`, `list_strategies`, `get_funding_rates`, `get_open_interest`, `get_correlation`, `get_data_freshness`
+
+Resources: `flint://guide` (usage overview), `flint://markets` (market list)
+
 ## Don'ts
 
 - Don't create a new DuckDB connection — always use the shared `FlintStore` from `app.state.store`
