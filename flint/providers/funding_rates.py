@@ -485,10 +485,15 @@ class DriftFundingProvider:
                     oracle = float(r.get("oraclePriceTwap", 0))
                     mark = float(r.get("markPriceTwap", 0))
 
-                    # Normalize: Drift stores rates as raw integers (1e9 precision)
-                    rate_hourly = rate / 1e9 if abs(rate) > 1 else rate
-                    mark_price = mark / 1e6 if mark > 1000 else mark
-                    index_price = oracle / 1e6 if oracle > 1000 else oracle
+                    # Drift Data API returns human-readable prices (e.g. 70620 for BTC)
+                    # fundingRate is in dollar terms — divide by oracle to get fractional rate
+                    if oracle > 0:
+                        rate_hourly = rate / oracle
+                    else:
+                        rate_hourly = rate
+
+                    mark_price = mark
+                    index_price = oracle
 
                     all_rates.append(FundingSnapshot(
                         venue="drift",
