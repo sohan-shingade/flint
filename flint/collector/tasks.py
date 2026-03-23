@@ -14,6 +14,7 @@ from ..providers.drift_api import DriftDataProvider
 from ..providers.drift_s3 import DriftS3Provider
 from ..store import FlintStore
 
+# Drift perp market indices (from Drift Protocol)
 MARKET_INDEX = {
     "SOL-PERP": 0, "BTC-PERP": 1, "ETH-PERP": 2, "APT-PERP": 3,
     "1MBONK-PERP": 4, "POL-PERP": 5, "ARB-PERP": 6, "DOGE-PERP": 7,
@@ -24,6 +25,16 @@ MARKET_INDEX = {
     "JUP-PERP": 24, "DYM-PERP": 25, "TAO-PERP": 26, "W-PERP": 27,
     "KMNO-PERP": 28, "TNSR-PERP": 29, "DRIFT-PERP": 30, "CLOUD-PERP": 31,
     "IO-PERP": 32, "ZEX-PERP": 33, "POPCAT-PERP": 34, "1KWEN-PERP": 35,
+}
+
+# Drift spot market indices
+SPOT_MARKET_INDEX = {
+    "SOL": 1, "USDC": 0, "BTC": 2, "ETH": 3,
+    "PYTH": 4, "JTO": 5, "WIF": 6, "JUP": 7,
+    "RNDR": 8, "W": 9, "TNSR": 10, "DRIFT": 11,
+    "INF": 12, "USDY": 13, "JLP": 14, "POPCAT": 15,
+    "CLOUD": 16, "USDS": 17, "BNSOL": 18, "wBTC": 19,
+    "wETH": 20, "BONK": 21, "MOTHER": 22, "MOODENG": 23,
 }
 
 

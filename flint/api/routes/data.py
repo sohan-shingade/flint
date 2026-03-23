@@ -422,25 +422,28 @@ def download_market_data(request: Request, body: dict):
 
 @router.get("/available-markets")
 def list_available_markets():
-    """List all markets available for download from Drift."""
-    from ...collector.tasks import MARKET_INDEX
+    """List all markets available for download from Drift (perp + spot)."""
+    from ...collector.tasks import MARKET_INDEX, SPOT_MARKET_INDEX
 
     markets = []
+
+    # Perp markets
     for market, idx in sorted(MARKET_INDEX.items(), key=lambda x: x[1]):
         markets.append({
             "market": market,
             "source": "drift",
             "market_index": idx,
-            "type": "perp" if "-PERP" in market else "spot",
+            "type": "perp",
         })
 
-    # Add spot markets
-    spot_markets = ["SOL", "JTO", "WIF", "JUP", "DRIFT", "POPCAT"]
-    for m in spot_markets:
+    # Spot markets
+    for market, idx in sorted(SPOT_MARKET_INDEX.items(), key=lambda x: x[1]):
+        if market in ("USDC", "USDS", "USDY"):
+            continue  # Skip stablecoins — no useful OHLCV
         markets.append({
-            "market": m,
+            "market": market,
             "source": "drift",
-            "market_index": -1,
+            "market_index": idx,
             "type": "spot",
         })
 

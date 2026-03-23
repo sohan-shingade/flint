@@ -32,22 +32,27 @@ const RESOLUTIONS = [
 const MARKET_PACKS = {
   starter: {
     label: 'Starter Pack',
-    description: '5 major markets — fast download (~2 min)',
+    description: '5 perps — fast download (~2 min)',
     markets: ['SOL-PERP', 'BTC-PERP', 'ETH-PERP', 'WIF-PERP', 'JUP-PERP'],
   },
   defi: {
     label: 'DeFi Pack',
-    description: '10 Solana DeFi tokens — moderate download (~5 min)',
-    markets: ['SOL-PERP', 'BTC-PERP', 'ETH-PERP', 'JUP-PERP', 'DRIFT-PERP', 'PYTH-PERP', 'RENDER-PERP', 'WIF-PERP', 'POPCAT-PERP', 'JTO-PERP'],
+    description: '10 perps + 5 spot — moderate (~5 min)',
+    markets: ['SOL-PERP', 'BTC-PERP', 'ETH-PERP', 'JUP-PERP', 'DRIFT-PERP', 'PYTH-PERP', 'RENDER-PERP', 'WIF-PERP', 'POPCAT-PERP', 'JTO-PERP', 'SOL', 'BTC', 'ETH', 'JUP', 'DRIFT'],
   },
   advanced: {
     label: 'Advanced Pack',
-    description: '20 markets — longer download (~10 min)',
-    markets: ['SOL-PERP', 'BTC-PERP', 'ETH-PERP', 'WIF-PERP', 'JUP-PERP', 'DRIFT-PERP', 'PYTH-PERP', 'RENDER-PERP', 'POPCAT-PERP', 'JTO-PERP', 'SUI-PERP', 'ARB-PERP', 'LINK-PERP', 'DOGE-PERP', 'AVAX-PERP', 'XRP-PERP', 'INJ-PERP', 'TIA-PERP', 'SEI-PERP', 'OP-PERP'],
+    description: '20 perps + 10 spot — longer (~10 min)',
+    markets: [
+      'SOL-PERP', 'BTC-PERP', 'ETH-PERP', 'WIF-PERP', 'JUP-PERP', 'DRIFT-PERP', 'PYTH-PERP',
+      'RENDER-PERP', 'POPCAT-PERP', 'JTO-PERP', 'SUI-PERP', 'ARB-PERP', 'LINK-PERP', 'DOGE-PERP',
+      'AVAX-PERP', 'XRP-PERP', 'INJ-PERP', 'TIA-PERP', 'SEI-PERP', 'OP-PERP',
+      'SOL', 'BTC', 'ETH', 'JUP', 'DRIFT', 'PYTH', 'WIF', 'JTO', 'BONK', 'POPCAT',
+    ],
   },
   all: {
     label: 'Everything',
-    description: 'All 36 Drift markets — this will take a while (~20 min)',
+    description: 'All 57 Drift markets (36 perp + 21 spot) — ~20 min',
     markets: [] as string[],  // filled from API
   },
 }
