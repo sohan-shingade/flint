@@ -404,6 +404,19 @@ def download_market_data(request: Request, body: dict):
         except Exception as e:
             logger.warning("Drift S3 failed for %s: %s", market, e)
 
+    # Fallback to CoinGecko for major spot tokens without Drift data (BTC, ETH, etc.)
+    if not fetched:
+        try:
+            from ...providers.coingecko import CoinGeckoProvider
+            cg = CoinGeckoProvider()
+            if cg.resolve_id(market):
+                fetched = cg.fetch_candles(market, resolution_s, start_ts, end_ts)
+                cg.close()
+                if fetched:
+                    source = "coingecko"
+        except Exception as e:
+            logger.warning("CoinGecko failed for %s: %s", market, e)
+
     # Cache results
     cached = 0
     if fetched:
@@ -422,10 +435,11 @@ def download_market_data(request: Request, body: dict):
 
 @router.get("/available-markets")
 def list_available_markets():
-    """List all markets available for download from Drift (perp + spot)."""
+    """List all markets available for download from Drift (perp + spot) + CoinGecko."""
     from ...collector.tasks import MARKET_INDEX, SPOT_MARKET_INDEX, SPOT_WITH_CANDLES
 
     markets = []
+    seen_spot = set()
 
     # Perp markets (all have candle data)
     for market, idx in sorted(MARKET_INDEX.items(), key=lambda x: x[1]):
@@ -436,7 +450,7 @@ def list_available_markets():
             "type": "perp",
         })
 
-    # Spot markets (only those with confirmed candle data)
+    # Spot markets from Drift (those with confirmed candle data)
     for market, idx in sorted(SPOT_MARKET_INDEX.items(), key=lambda x: x[1]):
         if market not in SPOT_WITH_CANDLES:
             continue
@@ -446,5 +460,16 @@ def list_available_markets():
             "market_index": idx,
             "type": "spot",
         })
+        seen_spot.add(market)
+
+    # BTC and ETH spot from CoinGecko (Drift doesn't have spot candle data for these)
+    for symbol in ("BTC", "ETH"):
+        if symbol not in seen_spot:
+            markets.append({
+                "market": symbol,
+                "source": "coingecko",
+                "market_index": -1,
+                "type": "spot",
+            })
 
     return {"markets": markets}

@@ -297,6 +297,19 @@ def download_market_data(
         except Exception:
             pass
 
+    # Fallback to CoinGecko for BTC/ETH spot
+    if not fetched:
+        try:
+            from flint.providers.coingecko import CoinGeckoProvider
+            cg = CoinGeckoProvider()
+            if cg.resolve_id(market):
+                fetched = cg.fetch_candles(market, resolution_s, start_ts, end_ts)
+                cg.close()
+                if fetched:
+                    source = "coingecko"
+        except Exception:
+            pass
+
     cached = 0
     if fetched:
         cached = store.upsert_candles(fetched)
@@ -314,19 +327,24 @@ def download_market_data(
 
 @mcp.tool()
 def list_available_markets() -> str:
-    """List all markets available for download from Drift Protocol (perpetuals and spot)."""
+    """List all markets available for download — Drift perpetuals, Drift spot, and CoinGecko spot."""
     from flint.collector.tasks import MARKET_INDEX, SPOT_WITH_CANDLES
 
     perps = sorted(MARKET_INDEX.keys())
-    spots = sorted(SPOT_WITH_CANDLES)
+    drift_spots = sorted(SPOT_WITH_CANDLES)
+    coingecko_spots = ["BTC", "ETH"]  # Not on Drift spot, sourced from CoinGecko
+
+    all_spots = sorted(set(drift_spots) | set(coingecko_spots))
 
     return json.dumps({
         "perpetuals": perps,
         "perp_count": len(perps),
-        "spot": spots,
-        "spot_count": len(spots),
-        "total": len(perps) + len(spots),
-        "note": "All data is free from Drift Protocol. No API keys needed.",
+        "spot_drift": drift_spots,
+        "spot_coingecko": coingecko_spots,
+        "spot_all": all_spots,
+        "spot_count": len(all_spots),
+        "total": len(perps) + len(all_spots),
+        "note": "All data is free. Drift for perps + most spot. CoinGecko for BTC/ETH spot.",
     })
 
 

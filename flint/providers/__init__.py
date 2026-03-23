@@ -13,6 +13,7 @@ from .funding_rates import (
     HyperliquidFundingProvider,
     OKXFundingProvider,
 )
+from .coingecko import CoinGeckoProvider
 from .gecko import GeckoProvider
 from .helius import HeliusProvider
 from .jupiter import JupiterProvider
@@ -29,6 +30,7 @@ __all__ = [
     "CandleProvider",
     "CCXTMarketMapper",
     "CCXTProvider",
+    "CoinGeckoProvider",
     "CrossVenueFunding",
     "DataProvider",
     "DriftCandleProvider",
