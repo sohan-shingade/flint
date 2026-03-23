@@ -292,10 +292,18 @@ export default function InteractiveChart({ candles, height = 500, indicators, fu
           <div ref={rsiRef} />
         </div>
       )}
-      {indicators.funding && fundingRates.length > 0 && (
+      {indicators.funding && (
         <div className="border-t border-border">
-          <div className="text-[9px] text-amber/40 tracking-wider px-2 py-1">FUNDING RATE (bps)</div>
-          <div ref={fundingRef} />
+          <div className="text-[9px] tracking-wider px-2 py-1 flex items-center gap-2">
+            <span className="text-amber/40">FUNDING RATE (bps)</span>
+            {fundingRates.length === 0 && (
+              <span className="text-ghost/30">No funding data — only available for perp markets with recent history (~30 days from Drift)</span>
+            )}
+            {fundingRates.length > 0 && candles.length > 0 && fundingRates[0].ts > candles[0].ts + 86400 && (
+              <span className="text-ghost/30">Partial coverage — Drift funding API has ~30 days of history</span>
+            )}
+          </div>
+          {fundingRates.length > 0 && <div ref={fundingRef} />}
         </div>
       )}
     </div>

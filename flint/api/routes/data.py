@@ -64,32 +64,16 @@ def get_funding(
     try:
         rates = store.query_funding_rates(market, start_ts, end_ts)
 
-        # Auto-fetch from Drift if no/sparse local data for this market
-        if "-PERP" in market:
-            needs_fetch = not rates
-            # Also fetch if we have candle data that extends beyond funding coverage
-            if rates and not needs_fetch:
-                candles = store.query_candles(market, 3600, start_ts, end_ts)
-                if candles and rates:
-                    candle_start = candles[0].ts
-                    funding_start = rates[0].ts
-                    if funding_start > candle_start + 7200:
-                        needs_fetch = True  # Funding doesn't cover candle range
-
-            if needs_fetch:
-                try:
-                    # Determine the full range we need (candle range or requested range)
-                    fetch_start = start_ts
-                    fetch_end = end_ts
-                    candles = store.query_candles(market, 3600)
-                    if candles:
-                        fetch_start = min(fetch_start or candles[0].ts, candles[0].ts)
-                        fetch_end = max(fetch_end or candles[-1].ts, candles[-1].ts)
-
-                    _sync_funding_to_candle_range(store, market, fetch_start, fetch_end, _logger)
-                    rates = store.query_funding_rates(market, start_ts, end_ts)
-                except Exception as e:
-                    _logger.warning("Auto-fetch funding failed for %s: %s", market, e)
+        # Auto-fetch from Drift if no local funding data
+        # Note: Drift funding API only has ~30 days of history
+        if not rates and "-PERP" in market:
+            try:
+                import time as _t
+                now = int(_t.time())
+                _sync_funding_to_candle_range(store, market, now - 90 * 86400, now, _logger)
+                rates = store.query_funding_rates(market, start_ts, end_ts)
+            except Exception as e:
+                _logger.warning("Auto-fetch funding failed for %s: %s", market, e)
 
         rates = rates[:limit]
         return {

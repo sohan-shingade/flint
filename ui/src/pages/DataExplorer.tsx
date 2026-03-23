@@ -237,30 +237,13 @@ export default function DataExplorer() {
       setLoadStatus('No data available for this market')
     }
 
-    // Load funding rates — sync coverage to match candles if needed
+    // Load funding rates (auto-fetches from Drift if not cached)
     if (market.includes('-PERP')) {
       try {
-        // First, trigger a sync to ensure funding covers the candle range
-        await fetch('/api/v1/data/sync-funding', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ market }),
-        }).catch(() => {})
-
-        const fParams = new URLSearchParams({
-          market, limit: '5000',
-          ...(startTs > 0 ? { start_ts: String(startTs) } : {}),
-          ...(endTs > 0 ? { end_ts: String(endTs) } : {}),
-        })
+        const fParams = new URLSearchParams({ market, limit: '5000' })
         const fr = await fetch(`/api/v1/data/funding?${fParams}`)
         const fd = await fr.json()
-        let fRates = fd.rates || []
-        if (fRates.length === 0) {
-          const fb = await fetch(`/api/v1/data/funding?market=${market}&limit=5000`)
-          const fbd = await fb.json()
-          fRates = fbd.rates || []
-        }
-        setFundingRates(fRates)
+        setFundingRates(fd.rates || [])
       } catch { setFundingRates([]) }
     } else {
       setFundingRates([])
