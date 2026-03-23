@@ -53,7 +53,7 @@ def get_funding(
     market: str = Query("SOL-PERP"),
     start_ts: Optional[int] = Query(None),
     end_ts: Optional[int] = Query(None),
-    limit: int = Query(500, le=5000),
+    limit: int = Query(10000, le=50000),
 ):
     import logging as _logging
     _logger = _logging.getLogger("flint.api.data")
@@ -64,13 +64,15 @@ def get_funding(
     try:
         rates = store.query_funding_rates(market, start_ts, end_ts)
 
-        # Auto-fetch from Drift if no local funding data
-        # Note: Drift funding API only has ~30 days of history
+        # Auto-fetch funding if none in DB for this market
         if not rates and "-PERP" in market:
             try:
                 import time as _t
                 now = int(_t.time())
-                _sync_funding_to_candle_range(store, market, now - 90 * 86400, now, _logger)
+                # Use the widest range: either requested range or 1 year back
+                fetch_start = min(start_ts or now - 365 * 86400, now - 365 * 86400)
+                fetch_end = max(end_ts or now, now)
+                _sync_funding_to_candle_range(store, market, fetch_start, fetch_end, _logger)
                 rates = store.query_funding_rates(market, start_ts, end_ts)
             except Exception as e:
                 _logger.warning("Auto-fetch funding failed for %s: %s", market, e)
