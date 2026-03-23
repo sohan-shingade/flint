@@ -55,11 +55,31 @@ def get_funding(
     end_ts: Optional[int] = Query(None),
     limit: int = Query(500, le=5000),
 ):
+    import logging as _logging
+    _logger = _logging.getLogger("flint.api.data")
+
     store = _get_store(request)
     if store is None:
         return {"market": market, "count": 0, "rates": []}
     try:
         rates = store.query_funding_rates(market, start_ts, end_ts)
+
+        # Auto-fetch from Drift if no local data for this market
+        if not rates and "-PERP" in market:
+            try:
+                from ...collector.tasks import MARKET_INDEX
+                from ...providers.drift_api import DriftDataProvider
+                market_index = MARKET_INDEX.get(market)
+                if market_index is not None:
+                    provider = DriftDataProvider()
+                    fetched = provider.fetch_funding_rates(market_index, market, limit=500)
+                    if fetched:
+                        store.upsert_funding_rates(fetched)
+                        rates = store.query_funding_rates(market, start_ts, end_ts)
+                        _logger.info("Auto-fetched %d funding rates for %s", len(fetched), market)
+            except Exception as e:
+                _logger.warning("Auto-fetch funding failed for %s: %s", market, e)
+
         rates = rates[:limit]
         return {
             "market": market,
