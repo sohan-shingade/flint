@@ -237,10 +237,16 @@ export default function DataExplorer() {
       setLoadStatus('No data available for this market')
     }
 
-    // Load funding rates (auto-fetches from Drift if not cached)
-    if (market.includes('-PERP')) {
+    // Load funding rates — filtered to match candle date range
+    if (market.includes('-PERP') && loaded.length > 0) {
       try {
-        const fParams = new URLSearchParams({ market, limit: '5000' })
+        const candleStart = loaded[0].ts
+        const candleEnd = loaded[loaded.length - 1].ts
+        const fParams = new URLSearchParams({
+          market, limit: '10000',
+          start_ts: String(candleStart),
+          end_ts: String(candleEnd),
+        })
         const fr = await fetch(`/api/v1/data/funding?${fParams}`)
         const fd = await fr.json()
         setFundingRates(fd.rates || [])
@@ -774,6 +780,7 @@ export default function DataExplorer() {
                   <th className="py-2 px-4 text-right">CANDLES</th>
                   <th className="py-2 px-4">FROM</th>
                   <th className="py-2 px-4">TO</th>
+                  <th className="py-2 px-4"></th>
                 </tr>
               </thead>
               <tbody>
@@ -796,6 +803,22 @@ export default function DataExplorer() {
                     <td className="py-1.5 px-4 text-right text-white/60 tabular-nums">{m.candle_count.toLocaleString()}</td>
                     <td className="py-1.5 px-4 text-ghost/40 text-[10px]">{fmtDate(m.first_ts)}</td>
                     <td className="py-1.5 px-4 text-ghost/40 text-[10px]">{fmtDate(m.last_ts)}</td>
+                    <td className="py-1.5 px-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (confirm(`Delete all data for ${m.market}? You can re-download it after.`)) {
+                            fetch(`/api/v1/data/market/${encodeURIComponent(m.market)}`, { method: 'DELETE' })
+                              .then(() => refreshInventory())
+                              .catch(() => {})
+                          }
+                        }}
+                        className="text-[8px] text-ghost/30 hover:text-loss tracking-wider transition-colors"
+                        title={`Delete ${m.market} data`}
+                      >
+                        DEL
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

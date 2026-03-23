@@ -119,6 +119,44 @@ def sync_funding(request: Request, body: dict):
     return {"market": market, "synced": synced, "candle_range": [start_ts, end_ts]}
 
 
+@router.delete("/market/{market}")
+def delete_market_data(market: str, request: Request):
+    """Delete all data for a specific market (candles, funding, OI, etc.).
+
+    Use this to purge corrupted data and re-download fresh.
+    """
+    store = _get_store(request)
+    if store is None:
+        from fastapi import HTTPException
+        raise HTTPException(500, "Store not available")
+
+    deleted = {}
+    tables = [
+        ("candles", "market"),
+        ("funding_rates", "market"),
+        ("oracle_prices", "market"),
+        ("orderbook_snapshots", "market"),
+        ("open_interest", "market"),
+        ("liquidations", "market"),
+    ]
+    with store._lock:
+        for table, col in tables:
+            try:
+                before = store._conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} = ?", [market]).fetchone()[0]
+                if before > 0:
+                    store._conn.execute(f"DELETE FROM {table} WHERE {col} = ?", [market])
+                    deleted[table] = before
+            except Exception:
+                pass
+        # Also clean sync metadata
+        try:
+            store._conn.execute("DELETE FROM sync_metadata WHERE market = ?", [market])
+        except Exception:
+            pass
+
+    return {"market": market, "deleted": deleted, "total_records": sum(deleted.values())}
+
+
 @router.get("/markets")
 def list_markets(request: Request):
     """List markets with data in the store."""
