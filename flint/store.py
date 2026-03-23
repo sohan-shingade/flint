@@ -248,10 +248,14 @@ class FlintStore:
     def upsert_funding_rates(self, rates: List[FundingRate]) -> int:
         if not rates:
             return 0
+        # Reject corrupted rates — valid hourly funding is tiny (|rate| < 0.01)
         rows = [
             (r.market, r.ts, r.rate, r.oracle_price, r.mark_price, r.slot)
             for r in rates
+            if abs(r.rate) < 0.01
         ]
+        if not rows:
+            return 0
         with self._lock:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO funding_rates "
