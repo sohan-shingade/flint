@@ -238,33 +238,45 @@ export default function InteractiveChart({ candles, height = 500, indicators, fu
       })
       fundingChartRef.current = fundingChart
 
-      // Funding rate as histogram (positive = green, negative = red)
+      // Build funding data aligned to candle timestamps for perfect sync.
+      // Create a lookup of funding by timestamp, then map over candle timestamps.
+      const fundingMap = new Map<number, number>()
+      for (const r of fundingRates) {
+        fundingMap.set(r.ts, r.rate * 10000)  // bps
+      }
+
+      // For each candle timestamp, find the nearest funding rate
+      const alignedFunding = candles.map(c => {
+        // Exact match
+        let val = fundingMap.get(c.ts)
+        if (val === undefined) {
+          // Try rounding to nearest hour (funding is hourly)
+          const hourTs = Math.round(c.ts / 3600) * 3600
+          val = fundingMap.get(hourTs)
+        }
+        return {
+          time: c.ts as Time,
+          value: val ?? 0,
+          color: (val ?? 0) >= 0 ? C.up + 'aa' : C.down + 'aa',
+        }
+      })
+
       const fundingSeries = fundingChart.addSeries(HistogramSeries, {
         priceScaleId: 'funding',
         title: 'Funding (bps)',
       })
-      fundingSeries.setData(fundingRates.map(r => ({
-        time: r.ts as Time,
-        value: r.rate * 10000, // convert to bps
-        color: r.rate >= 0 ? C.up + 'aa' : C.down + 'aa',
-      })))
+      fundingSeries.setData(alignedFunding)
 
-      // Zero line
+      // Zero line using candle timestamps (same axis)
       fundingChart.addSeries(LineSeries, { color: '#ffffff15', lineWidth: 1, lineStyle: 2 })
-        .setData(fundingRates.map(r => ({ time: r.ts as Time, value: 0 })))
+        .setData(candles.map(c => ({ time: c.ts as Time, value: 0 })))
 
-      // One-way sync: main → funding (time-based, different data lengths)
-      chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-        const tr = chart.timeScale().getVisibleRange()
-        if (tr && fundingChartRef.current) {
-          try { fundingChartRef.current.timeScale().setVisibleRange(tr) } catch {}
-        }
+      fundingChart.timeScale().fitContent()
+
+      // Sync using logical range — works because both charts now have the same time axis
+      chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (range && fundingChartRef.current) fundingChartRef.current.timeScale().setVisibleLogicalRange(range)
       })
-      // Initial sync
-      const mainRange = chart.timeScale().getVisibleRange()
-      if (mainRange) {
-        try { fundingChart.timeScale().setVisibleRange(mainRange) } catch {}
-      }
 
       const fundingRo = new ResizeObserver(e => { if (e[0] && fundingChartRef.current) fundingChartRef.current.applyOptions({ width: e[0].contentRect.width }) })
       fundingRo.observe(fundingRef.current)
