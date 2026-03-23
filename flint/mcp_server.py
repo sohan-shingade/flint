@@ -273,54 +273,47 @@ def download_market_data(
     end_ts = int(time.time())
     start_ts = end_ts - days * 86400
 
-    # Check existing
+    # Check existing data and find gaps
     existing = store.query_candles(market, resolution_s, start_ts, end_ts)
+    existing_count = len(existing)
 
-    fetched = []
+    gaps = []
+    if not existing:
+        gaps.append((start_ts, end_ts))
+    else:
+        first_ts = existing[0].ts
+        last_ts = existing[-1].ts
+        if first_ts > start_ts + resolution_s:
+            gaps.append((start_ts, first_ts))
+        if last_ts < end_ts - resolution_s:
+            gaps.append((last_ts, end_ts))
+
+    if not gaps:
+        return json.dumps({
+            "market": market, "days": days, "downloaded": 0, "cached": 0,
+            "previously_existing": existing_count, "total": existing_count,
+            "source": "local", "skipped": True,
+            "note": "Data already cached — no download needed",
+        })
+
+    # Download only the missing gaps
+    total_fetched = 0
+    total_cached = 0
     source = "none"
-    try:
-        from flint.providers.drift_candles import DriftCandleProvider
-        provider = DriftCandleProvider()
-        fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
-        provider.close()
-        source = "drift_api"
-    except Exception:
-        pass
 
-    if not fetched:
-        try:
-            from flint.providers.drift_s3 import DriftS3Provider
-            provider = DriftS3Provider()
-            fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
-            provider.close()
-            source = "drift_s3"
-        except Exception:
-            pass
+    for gap_start, gap_end in gaps:
+        fetched = _download_range_mcp(market, resolution_s, gap_start, gap_end)
+        if fetched:
+            total_fetched += len(fetched)
+            total_cached += store.upsert_candles(fetched)
+            source = "drift_api"
 
-    # Fallback to CoinGecko for BTC/ETH spot
-    if not fetched:
-        try:
-            from flint.providers.coingecko import CoinGeckoProvider
-            cg = CoinGeckoProvider()
-            if cg.resolve_id(market):
-                fetched = cg.fetch_candles(market, resolution_s, start_ts, end_ts)
-                cg.close()
-                if fetched:
-                    source = "coingecko"
-        except Exception:
-            pass
-
-    cached = 0
-    if fetched:
-        cached = store.upsert_candles(fetched)
+    final_count = len(store.query_candles(market, resolution_s, start_ts, end_ts))
 
     return json.dumps({
-        "market": market,
-        "days": days,
-        "downloaded": len(fetched),
-        "cached": cached,
-        "previously_existing": len(existing),
-        "total": len(existing) + cached,
+        "market": market, "days": days,
+        "downloaded": total_fetched, "cached": total_cached,
+        "previously_existing": existing_count, "total": final_count,
         "source": source,
     })
 
@@ -592,6 +585,39 @@ Flint is a local-first algorithmic trading, backtesting, and MEV research platfo
 def flint_markets() -> str:
     """Current list of available markets with types."""
     return list_available_markets()
+
+
+def _download_range_mcp(market: str, resolution_s: int, start_ts: int, end_ts: int) -> list:
+    """Try all providers for a specific time range."""
+    try:
+        from flint.providers.drift_candles import DriftCandleProvider
+        p = DriftCandleProvider()
+        fetched = p.fetch_candles(market, resolution_s, start_ts, end_ts)
+        p.close()
+        if fetched:
+            return fetched
+    except Exception:
+        pass
+    try:
+        from flint.providers.drift_s3 import DriftS3Provider
+        p = DriftS3Provider()
+        fetched = p.fetch_candles(market, resolution_s, start_ts, end_ts)
+        p.close()
+        if fetched:
+            return fetched
+    except Exception:
+        pass
+    try:
+        from flint.providers.coingecko import CoinGeckoProvider
+        cg = CoinGeckoProvider()
+        if cg.resolve_id(market):
+            fetched = cg.fetch_candles(market, resolution_s, start_ts, end_ts)
+            cg.close()
+            if fetched:
+                return fetched
+    except Exception:
+        pass
+    return []
 
 
 # ─── Entry point ──────────────────────────────────────────────

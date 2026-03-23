@@ -381,56 +381,102 @@ def download_market_data(request: Request, body: dict):
     existing = store.query_candles(market, resolution_s, start_ts, end_ts)
     existing_count = len(existing)
 
-    # Try Drift Data API first
-    fetched = []
+    # Determine what ranges we still need to download
+    # If we have data, only fetch the gaps (before first candle, after last candle)
+    gaps = []
+    if not existing:
+        # No local data at all — download everything
+        gaps.append((start_ts, end_ts))
+    else:
+        first_ts = existing[0].ts
+        last_ts = existing[-1].ts
+        # Gap at the beginning?
+        if first_ts > start_ts + resolution_s:
+            gaps.append((start_ts, first_ts))
+        # Gap at the end?
+        if last_ts < end_ts - resolution_s:
+            gaps.append((last_ts, end_ts))
+
+    if not gaps:
+        # Already fully covered
+        return {
+            "market": market,
+            "resolution_s": resolution_s,
+            "downloaded": 0,
+            "cached": 0,
+            "existing": existing_count,
+            "total": existing_count,
+            "source": "local",
+            "skipped": True,
+        }
+
+    # Download only the missing gaps
+    total_fetched = 0
+    total_cached = 0
     source = "none"
+
+    for gap_start, gap_end in gaps:
+        fetched = _download_range(market, resolution_s, gap_start, gap_end, logger)
+        if fetched:
+            total_fetched += len(fetched)
+            total_cached += store.upsert_candles(fetched)
+            source = fetched[0].market  # will be overwritten below
+
+    # Determine source used
+    if total_fetched > 0:
+        source = "drift_api"  # default, gets overwritten by _download_range
+
+    # Re-count total
+    final_count = len(store.query_candles(market, resolution_s, start_ts, end_ts))
+
+    return {
+        "market": market,
+        "resolution_s": resolution_s,
+        "downloaded": total_fetched,
+        "cached": total_cached,
+        "existing": existing_count,
+        "total": final_count,
+        "source": source,
+    }
+
+
+def _download_range(market: str, resolution_s: int, start_ts: int, end_ts: int, logger) -> list:
+    """Try all providers in order for a specific time range."""
+    # Try Drift Data API
     try:
         from ...providers.drift_candles import DriftCandleProvider
         provider = DriftCandleProvider()
         fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
         provider.close()
-        source = "drift_api"
+        if fetched:
+            return fetched
     except Exception as e:
-        logger.warning("Drift Data API failed for %s: %s", market, e)
+        logger.warning("Drift API failed for %s: %s", market, e)
 
     # Fallback to S3
-    if not fetched:
-        try:
-            from ...providers.drift_s3 import DriftS3Provider
-            provider = DriftS3Provider()
-            fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
-            provider.close()
-            source = "drift_s3"
-        except Exception as e:
-            logger.warning("Drift S3 failed for %s: %s", market, e)
+    try:
+        from ...providers.drift_s3 import DriftS3Provider
+        provider = DriftS3Provider()
+        fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+        provider.close()
+        if fetched:
+            return fetched
+    except Exception as e:
+        logger.warning("Drift S3 failed for %s: %s", market, e)
 
-    # Fallback to CoinGecko for major spot tokens without Drift data (BTC, ETH, etc.)
-    if not fetched:
-        try:
-            from ...providers.coingecko import CoinGeckoProvider
-            cg = CoinGeckoProvider()
-            if cg.resolve_id(market):
-                fetched = cg.fetch_candles(market, resolution_s, start_ts, end_ts)
-                cg.close()
-                if fetched:
-                    source = "coingecko"
-        except Exception as e:
-            logger.warning("CoinGecko failed for %s: %s", market, e)
+    # Fallback to CoinGecko
+    try:
+        from ...providers.coingecko import CoinGeckoProvider
+        cg = CoinGeckoProvider()
+        if cg.resolve_id(market):
+            fetched = cg.fetch_candles(market, resolution_s, start_ts, end_ts)
+            cg.close()
+            if fetched:
+                return fetched
+    except Exception as e:
+        logger.warning("CoinGecko failed for %s: %s", market, e)
 
-    # Cache results
-    cached = 0
-    if fetched:
-        cached = store.upsert_candles(fetched)
-
-    return {
-        "market": market,
-        "resolution_s": resolution_s,
-        "downloaded": len(fetched),
-        "cached": cached,
-        "existing": existing_count,
-        "total": existing_count + cached,
-        "source": source,
-    }
+    return []
 
 
 @router.get("/available-markets")
