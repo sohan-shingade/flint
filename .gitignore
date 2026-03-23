@@ -60,3 +60,6 @@ htmlcov/
 
 # Build
 ui/dist/
+
+# Debug data
+db_info/
