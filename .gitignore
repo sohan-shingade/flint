@@ -12,8 +12,8 @@ build/
 .env.*
 !.env.example
 
-# Data
-data/
+# Data (top-level only — not flint/data/ Python package)
+/data/
 *.duckdb
 *.duckdb.wal
 
