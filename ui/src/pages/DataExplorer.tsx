@@ -525,40 +525,78 @@ export default function DataExplorer() {
               )}
             </div>
 
-            {/* Market grid — show available markets as checkboxes */}
+            {/* Market grid — split by type */}
             <div>
               <div className="flex items-center gap-3 mb-2">
                 <span className="text-[10px] text-ghost tracking-[0.15em]">MARKETS</span>
                 <span className="text-[9px] text-ghost/40">{selectedDownloads.length} selected</span>
-                <button onClick={() => setSelectedDownloads([])} className="text-[9px] text-ghost/40 hover:text-terminal ml-auto">Clear all</button>
+                <button onClick={() => setSelectedDownloads(availableForDownload.filter(m => m.type === 'perp').map(m => m.market))}
+                  className="text-[9px] text-ghost/40 hover:text-amber ml-auto">All perps</button>
+                <button onClick={() => setSelectedDownloads(availableForDownload.filter(m => m.type === 'spot').map(m => m.market))}
+                  className="text-[9px] text-ghost/40 hover:text-amber">All spot</button>
+                <button onClick={() => setSelectedDownloads([])} className="text-[9px] text-ghost/40 hover:text-terminal">Clear</button>
               </div>
-              <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-1 max-h-[180px] overflow-y-auto">
-                {availableForDownload.map(m => {
-                  const isSelected = selectedDownloads.includes(m.market)
-                  const isDownloaded = uniqueMarkets.includes(m.market)
-                  return (
-                    <button
-                      key={m.market}
-                      onClick={() => {
-                        if (isSelected) {
-                          setSelectedDownloads(prev => prev.filter(x => x !== m.market))
-                        } else {
-                          setSelectedDownloads(prev => [...prev, m.market])
-                        }
-                      }}
-                      className={`px-2 py-1.5 text-[9px] tracking-wider border transition-all text-left ${
-                        isSelected
-                          ? 'border-amber/50 bg-amber-glow text-amber'
-                          : isDownloaded
-                            ? 'border-gain/20 text-gain/60'
+
+              {/* Perp markets */}
+              <div className="mb-3">
+                <div className="text-[9px] text-ghost/50 tracking-wider mb-1 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 bg-amber/50" />
+                  PERPETUALS ({availableForDownload.filter(m => m.type === 'perp').length})
+                </div>
+                <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-1">
+                  {availableForDownload.filter(m => m.type === 'perp').map(m => {
+                    const isSelected = selectedDownloads.includes(m.market)
+                    const isDownloaded = uniqueMarkets.includes(m.market)
+                    return (
+                      <button
+                        key={m.market}
+                        onClick={() => {
+                          if (isSelected) setSelectedDownloads(prev => prev.filter(x => x !== m.market))
+                          else setSelectedDownloads(prev => [...prev, m.market])
+                        }}
+                        className={`px-2 py-1.5 text-[9px] tracking-wider border transition-all text-left ${
+                          isSelected ? 'border-amber/50 bg-amber-glow text-amber'
+                            : isDownloaded ? 'border-gain/20 text-gain/60'
                             : 'border-border text-ghost/50 hover:text-terminal hover:border-border-bright'
-                      }`}
-                    >
-                      {m.market.replace('-PERP', '')}
-                      {isDownloaded && <span className="text-gain/40 ml-1">&#10003;</span>}
-                    </button>
-                  )
-                })}
+                        }`}
+                      >
+                        {m.market.replace('-PERP', '')}
+                        {isDownloaded && <span className="text-gain/40 ml-1">&#10003;</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Spot markets */}
+              <div>
+                <div className="text-[9px] text-ghost/50 tracking-wider mb-1 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 bg-phosphor/50" />
+                  SPOT ({availableForDownload.filter(m => m.type === 'spot').length})
+                </div>
+                <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-1">
+                  {availableForDownload.filter(m => m.type === 'spot').map(m => {
+                    const isSelected = selectedDownloads.includes(m.market)
+                    const isDownloaded = uniqueMarkets.includes(m.market)
+                    return (
+                      <button
+                        key={m.market}
+                        onClick={() => {
+                          if (isSelected) setSelectedDownloads(prev => prev.filter(x => x !== m.market))
+                          else setSelectedDownloads(prev => [...prev, m.market])
+                        }}
+                        className={`px-2 py-1.5 text-[9px] tracking-wider border transition-all text-left ${
+                          isSelected ? 'border-phosphor/50 bg-phosphor-dim text-phosphor'
+                            : isDownloaded ? 'border-gain/20 text-gain/60'
+                            : 'border-border text-ghost/50 hover:text-terminal hover:border-border-bright'
+                        }`}
+                      >
+                        {m.market}
+                        {isDownloaded && <span className="text-gain/40 ml-1">&#10003;</span>}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
             </div>
 
@@ -729,6 +767,7 @@ export default function DataExplorer() {
               <thead className="sticky top-0 bg-surface">
                 <tr className="text-left text-ghost/40 border-b border-border text-[9px] tracking-[0.15em]">
                   <th className="py-2 px-4">MARKET</th>
+                  <th className="py-2 px-4">TYPE</th>
                   <th className="py-2 px-4">RES</th>
                   <th className="py-2 px-4 text-right">CANDLES</th>
                   <th className="py-2 px-4">FROM</th>
@@ -742,6 +781,15 @@ export default function DataExplorer() {
                     onClick={() => { setMarket(m.market); setResolution(m.resolution_s) }}
                   >
                     <td className="py-1.5 px-4 text-amber/80 font-medium">{m.market}</td>
+                    <td className="py-1.5 px-4">
+                      <span className={`text-[8px] tracking-wider px-1.5 py-0.5 border ${
+                        m.market.includes('-PERP')
+                          ? 'text-amber/60 border-amber/20'
+                          : 'text-phosphor/60 border-phosphor/20'
+                      }`}>
+                        {m.market.includes('-PERP') ? 'PERP' : 'SPOT'}
+                      </span>
+                    </td>
                     <td className="py-1.5 px-4 text-ghost/50">{fmtRes(m.resolution_s)}</td>
                     <td className="py-1.5 px-4 text-right text-white/60 tabular-nums">{m.candle_count.toLocaleString()}</td>
                     <td className="py-1.5 px-4 text-ghost/40 text-[10px]">{fmtDate(m.first_ts)}</td>
