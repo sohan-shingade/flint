@@ -252,7 +252,7 @@ def list_venues(request: Request, market: Optional[str] = Query(None)):
         return {"venues": []}
 
 
-@router.get("/funding/cross-venue")
+@router.get("/cross-venue-funding")
 def get_cross_venue_funding(
     request: Request,
     market: str = Query("SOL-PERP"),

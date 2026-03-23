@@ -744,7 +744,7 @@ export default function DataExplorer() {
                   const now = Math.floor(Date.now() / 1000)
                   const candleStart = candles.length > 0 ? candles[0].ts : now - 90 * 86400
                   const candleEnd = candles.length > 0 ? candles[candles.length - 1].ts : now
-                  fetch(`/api/v1/data/funding/cross-venue?market=${market}&venues=${fundingVenues.join(',')}&start_ts=${candleStart}&end_ts=${candleEnd}`)
+                  fetch(`/api/v1/data/cross-venue-funding?market=${market}&venues=${fundingVenues.join(',')}&start_ts=${candleStart}&end_ts=${candleEnd}`)
                     .then(r => r.json())
                     .then(d => {
                       const venues = d.venues || {}
