@@ -105,6 +105,10 @@ export default function DataExplorer() {
   const [rsiPeriod, setRsiPeriod] = useState(14)
   const [showVolume, setShowVolume] = useState(true)
   const [showFunding, setShowFunding] = useState(false)
+  // Cross-venue funding
+  const [fundingVenues, setFundingVenues] = useState<string[]>(['drift', 'hyperliquid'])
+  const [crossVenueData, setCrossVenueData] = useState<Record<string, {ts: number, rate: number}[]>>({})
+  const [crossVenueBenchmark, setCrossVenueBenchmark] = useState<{ts: number, rate: number}[]>([])
 
   const refreshInventory = useCallback(() => {
     setInventoryLoading(true)
@@ -718,11 +722,101 @@ export default function DataExplorer() {
       {/* ── funding charts ── */}
       {activeTab === 'funding' && (
         <div style={{ animation: 'fadeUp 0.3s ease' }}>
+          {/* Venue selector */}
+          {market.includes('-PERP') && (
+            <div className="border border-border bg-surface/60 p-3 mb-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-[10px] text-ghost tracking-[0.15em]">VENUES</span>
+                {['drift', 'hyperliquid', 'okx', 'bybit'].map(v => (
+                  <button key={v} onClick={() => {
+                    setFundingVenues(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v])
+                  }}
+                    className={`px-2.5 py-1 text-[9px] tracking-wider border transition-all ${
+                      fundingVenues.includes(v)
+                        ? 'border-amber/50 bg-amber-glow text-amber'
+                        : 'border-border text-ghost/50 hover:text-terminal'
+                    }`}>
+                    {v.toUpperCase()}
+                  </button>
+                ))}
+                <button onClick={() => {
+                  if (!market.includes('-PERP') || fundingVenues.length === 0) return
+                  const now = Math.floor(Date.now() / 1000)
+                  const candleStart = candles.length > 0 ? candles[0].ts : now - 90 * 86400
+                  const candleEnd = candles.length > 0 ? candles[candles.length - 1].ts : now
+                  fetch(`/api/v1/data/funding/cross-venue?market=${market}&venues=${fundingVenues.join(',')}&start_ts=${candleStart}&end_ts=${candleEnd}`)
+                    .then(r => r.json())
+                    .then(d => {
+                      const venues = d.venues || {}
+                      const parsed: Record<string, {ts: number, rate: number}[]> = {}
+                      for (const [v, info] of Object.entries(venues) as any) {
+                        parsed[v] = (info.rates || []).map((r: any) => ({ ts: r.ts, rate: r.rate * 10000 }))
+                      }
+                      setCrossVenueData(parsed)
+                      setCrossVenueBenchmark((d.benchmark || []).map((r: any) => ({ ts: r.ts, rate: r.rate * 10000 })))
+                    })
+                    .catch(() => {})
+                }}
+                  className="px-3 py-1 bg-amber text-void text-[9px] font-semibold tracking-wider hover:bg-amber-dim transition-colors ml-2">
+                  COMPARE
+                </button>
+                <span className="text-[9px] text-ghost/40 ml-auto">{fundingVenues.length} venues selected</span>
+              </div>
+            </div>
+          )}
+
+          {/* Cross-venue comparison chart */}
+          {Object.keys(crossVenueData).length > 0 && (
+            <div className="border border-border bg-surface/60 p-3 mb-3">
+              <div className="text-[10px] text-ghost tracking-[0.2em] mb-2">CROSS-VENUE FUNDING (bps)</div>
+              <ResponsiveContainer width="100%" height={280}>
+                <AreaChart>
+                  <CartesianGrid strokeDasharray="2 6" stroke="#1a1a1f" />
+                  <XAxis dataKey="ts" tick={TICK} minTickGap={80} interval="preserveStartEnd"
+                    tickFormatter={(ts: number) => fmtShort(ts)} type="number" domain={['dataMin', 'dataMax']} />
+                  <YAxis tick={TICK} width={50} />
+                  <Tooltip contentStyle={tooltipStyle}
+                    labelFormatter={(ts: any) => fmtDate(Number(ts))}
+                    formatter={(v: any, name: any) => [`${Number(v).toFixed(3)} bps`, String(name)]} />
+                  {Object.entries(crossVenueData).map(([venue, data], i) => {
+                    const colors = ['#e8a849', '#8b5cf6', '#06b6d4', '#57c84d', '#e84d4d']
+                    return <Area key={venue} data={data} type="monotone" dataKey="rate" name={venue}
+                      stroke={colors[i % colors.length]} fill={colors[i % colors.length]} fillOpacity={0.05}
+                      strokeWidth={1.5} isAnimationActive={false} dot={false} />
+                  })}
+                  {crossVenueBenchmark.length > 0 && (
+                    <Area data={crossVenueBenchmark} type="monotone" dataKey="rate" name="benchmark"
+                      stroke="#ffffff44" fill="none" strokeWidth={1} strokeDasharray="4 4"
+                      isAnimationActive={false} dot={false} />
+                  )}
+                </AreaChart>
+              </ResponsiveContainer>
+              <div className="flex gap-3 mt-2">
+                {Object.keys(crossVenueData).map((venue, i) => {
+                  const colors = ['#e8a849', '#8b5cf6', '#06b6d4', '#57c84d', '#e84d4d']
+                  const data = crossVenueData[venue]
+                  const avg = data.length > 0 ? data.reduce((s, d) => s + d.rate, 0) / data.length : 0
+                  return (
+                    <div key={venue} className="border border-border bg-surface/60 px-3 py-2 flex-1">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="w-2 h-0.5" style={{ background: colors[i % colors.length] }} />
+                        <span className="text-[8px] text-ghost/60 tracking-wider">{venue.toUpperCase()}</span>
+                      </div>
+                      <div className="text-xs font-mono text-terminal">{avg.toFixed(3)} bps avg</div>
+                      <div className="text-[9px] text-ghost/40">{data.length} points</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Single-venue funding chart (default Drift/Hyperliquid) */}
           {fundingData.length > 0 ? (
             <>
               <div className="border border-border bg-surface/60 p-3">
-                <div className="text-[10px] text-ghost tracking-[0.2em] mb-2">FUNDING RATE (bps)</div>
-                <ResponsiveContainer width="100%" height={280}>
+                <div className="text-[10px] text-ghost tracking-[0.2em] mb-2">FUNDING RATE — PRIMARY (bps)</div>
+                <ResponsiveContainer width="100%" height={220}>
                   <AreaChart data={fundingData}>
                     <CartesianGrid strokeDasharray="2 6" stroke="#1a1a1f" />
                     <XAxis dataKey="date" tick={TICK} minTickGap={50} interval="preserveStartEnd" />

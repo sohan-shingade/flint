@@ -252,6 +252,104 @@ def list_venues(request: Request, market: Optional[str] = Query(None)):
         return {"venues": []}
 
 
+@router.get("/funding/cross-venue")
+def get_cross_venue_funding(
+    request: Request,
+    market: str = Query("SOL-PERP"),
+    venues: str = Query("drift,hyperliquid", description="Comma-separated venue names"),
+    start_ts: Optional[int] = Query(None),
+    end_ts: Optional[int] = Query(None),
+):
+    """Fetch funding rates from multiple venues for comparison.
+
+    Available venues: drift, hyperliquid, okx, bybit, binance (US geo-blocked).
+    Returns per-venue rates normalized to hourly, plus a benchmark average.
+    """
+    import logging
+    _logger = logging.getLogger("flint.api.data")
+
+    store = _get_store(request)
+    venue_list = [v.strip().lower() for v in venues.split(",") if v.strip()]
+
+    if not venue_list:
+        return {"market": market, "venues": {}, "benchmark": []}
+
+    import time as _time
+    now = int(_time.time())
+    if not start_ts:
+        start_ts = now - 90 * 86400
+    if not end_ts:
+        end_ts = now
+
+    # Check local venue_funding_rates table first
+    result: dict = {}
+    needs_fetch = []
+
+    for venue in venue_list:
+        local = store.query_venue_funding(venue, market, start_ts, end_ts)
+        if local:
+            result[venue] = [{"ts": r["ts"], "rate": r["rate_hourly"], "mark": r["mark_price"]} for r in local]
+        else:
+            needs_fetch.append(venue)
+
+    # Fetch missing venues from providers
+    if needs_fetch:
+        from ...providers.funding_rates import (
+            DriftFundingProvider, HyperliquidFundingProvider,
+            OKXFundingProvider, BybitFundingProvider, BinanceFundingProvider,
+        )
+        providers_map = {
+            "drift": DriftFundingProvider,
+            "hyperliquid": HyperliquidFundingProvider,
+            "okx": OKXFundingProvider,
+            "bybit": BybitFundingProvider,
+            "binance": BinanceFundingProvider,
+        }
+
+        for venue in needs_fetch:
+            cls = providers_map.get(venue)
+            if not cls:
+                continue
+            try:
+                provider = cls()
+                snapshots = provider.fetch_funding(market, start_ts, end_ts)
+                provider.close()
+
+                if snapshots:
+                    # Store in venue_funding_rates table
+                    store.upsert_venue_funding(snapshots)
+                    result[venue] = [
+                        {"ts": s.ts, "rate": s.rate_hourly, "mark": s.mark_price}
+                        for s in snapshots
+                    ]
+                    _logger.info("Fetched %d %s funding rates for %s", len(snapshots), venue, market)
+            except Exception as e:
+                _logger.warning("Failed to fetch %s funding for %s: %s", venue, market, e)
+                result[venue] = []
+
+    # Compute benchmark (average across venues per hour)
+    benchmark: list = []
+    if len(result) >= 2:
+        all_hours: dict = {}
+        for venue, rates in result.items():
+            for r in rates:
+                hour = (r["ts"] // 3600) * 3600
+                if hour not in all_hours:
+                    all_hours[hour] = []
+                all_hours[hour].append(r["rate"])
+        for hour in sorted(all_hours.keys()):
+            vals = all_hours[hour]
+            if len(vals) >= 2:
+                benchmark.append({"ts": hour, "rate": sum(vals) / len(vals)})
+
+    return {
+        "market": market,
+        "venues": {v: {"count": len(r), "rates": r} for v, r in result.items()},
+        "benchmark": benchmark,
+        "available_venues": ["drift", "hyperliquid", "okx", "bybit", "binance"],
+    }
+
+
 # ── New data endpoints ────────────────────────────────────────────────
 
 
