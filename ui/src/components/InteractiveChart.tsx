@@ -239,25 +239,21 @@ export default function InteractiveChart({ candles, height = 500, indicators, fu
       fundingChartRef.current = fundingChart
 
       // Build funding data aligned to candle timestamps for perfect sync.
-      // Create a lookup of funding by timestamp, then map over candle timestamps.
+      // Round funding timestamps to nearest hour to match candle timestamps.
       const fundingMap = new Map<number, number>()
       for (const r of fundingRates) {
-        fundingMap.set(r.ts, r.rate * 10000)  // bps
+        const hourKey = Math.floor(r.ts / 3600) * 3600
+        fundingMap.set(hourKey, r.rate * 10000)  // bps, keyed by rounded hour
       }
 
-      // For each candle timestamp, find the nearest funding rate
+      // Map funding onto candle timestamps
       const alignedFunding = candles.map(c => {
-        // Exact match
-        let val = fundingMap.get(c.ts)
-        if (val === undefined) {
-          // Try rounding to nearest hour (funding is hourly)
-          const hourTs = Math.round(c.ts / 3600) * 3600
-          val = fundingMap.get(hourTs)
-        }
+        const hourKey = Math.floor(c.ts / 3600) * 3600
+        const val = fundingMap.get(hourKey) ?? fundingMap.get(c.ts) ?? 0
         return {
           time: c.ts as Time,
-          value: val ?? 0,
-          color: (val ?? 0) >= 0 ? C.up + 'aa' : C.down + 'aa',
+          value: val,
+          color: val >= 0 ? C.up + 'aa' : C.down + 'aa',
         }
       })
 
