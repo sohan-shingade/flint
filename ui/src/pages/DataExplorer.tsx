@@ -766,40 +766,55 @@ export default function DataExplorer() {
           )}
 
           {/* Cross-venue comparison chart */}
-          {Object.keys(crossVenueData).length > 0 && (
+          {Object.keys(crossVenueData).length > 0 && (() => {
+            // Merge all venues into one dataset keyed by hour
+            const venueNames = Object.keys(crossVenueData)
+            const merged: Record<number, any> = {}
+            for (const venue of venueNames) {
+              for (const pt of crossVenueData[venue]) {
+                const hour = Math.floor(pt.ts / 3600) * 3600
+                if (!merged[hour]) merged[hour] = { ts: hour, date: fmtShort(hour) }
+                merged[hour][venue] = pt.rate
+              }
+            }
+            for (const pt of crossVenueBenchmark) {
+              const hour = Math.floor(pt.ts / 3600) * 3600
+              if (!merged[hour]) merged[hour] = { ts: hour, date: fmtShort(hour) }
+              merged[hour].benchmark = pt.rate
+            }
+            const chartData = downsample(Object.values(merged).sort((a, b) => a.ts - b.ts), 500)
+            const colors: Record<string, string> = { drift: '#e8a849', hyperliquid: '#8b5cf6', okx: '#06b6d4', bybit: '#57c84d', binance: '#e84d4d' }
+
+            return (
             <div className="border border-border bg-surface/60 p-3 mb-3">
               <div className="text-[10px] text-ghost tracking-[0.2em] mb-2">CROSS-VENUE FUNDING (bps)</div>
               <ResponsiveContainer width="100%" height={280}>
-                <AreaChart>
+                <AreaChart data={chartData}>
                   <CartesianGrid strokeDasharray="2 6" stroke="#1a1a1f" />
-                  <XAxis dataKey="ts" tick={TICK} minTickGap={80} interval="preserveStartEnd"
-                    tickFormatter={(ts: number) => fmtShort(ts)} type="number" domain={['dataMin', 'dataMax']} />
+                  <XAxis dataKey="date" tick={TICK} minTickGap={50} interval="preserveStartEnd" />
                   <YAxis tick={TICK} width={50} />
                   <Tooltip contentStyle={tooltipStyle}
-                    labelFormatter={(ts: any) => fmtDate(Number(ts))}
-                    formatter={(v: any, name: any) => [`${Number(v).toFixed(3)} bps`, String(name)]} />
-                  {Object.entries(crossVenueData).map(([venue, data], i) => {
-                    const colors = ['#e8a849', '#8b5cf6', '#06b6d4', '#57c84d', '#e84d4d']
-                    return <Area key={venue} data={data} type="monotone" dataKey="rate" name={venue}
-                      stroke={colors[i % colors.length]} fill={colors[i % colors.length]} fillOpacity={0.05}
-                      strokeWidth={1.5} isAnimationActive={false} dot={false} />
-                  })}
+                    formatter={(v: any, name: any) => [v != null ? `${Number(v).toFixed(3)} bps` : '—', String(name)]} />
+                  {venueNames.map(venue => (
+                    <Area key={venue} type="monotone" dataKey={venue} name={venue}
+                      stroke={colors[venue] || '#888'} fill={colors[venue] || '#888'} fillOpacity={0.05}
+                      strokeWidth={1.5} isAnimationActive={false} dot={false} connectNulls={false} />
+                  ))}
                   {crossVenueBenchmark.length > 0 && (
-                    <Area data={crossVenueBenchmark} type="monotone" dataKey="rate" name="benchmark"
+                    <Area type="monotone" dataKey="benchmark" name="benchmark"
                       stroke="#ffffff44" fill="none" strokeWidth={1} strokeDasharray="4 4"
-                      isAnimationActive={false} dot={false} />
+                      isAnimationActive={false} dot={false} connectNulls={false} />
                   )}
                 </AreaChart>
               </ResponsiveContainer>
               <div className="flex gap-3 mt-2">
-                {Object.keys(crossVenueData).map((venue, i) => {
-                  const colors = ['#e8a849', '#8b5cf6', '#06b6d4', '#57c84d', '#e84d4d']
+                {venueNames.map(venue => {
                   const data = crossVenueData[venue]
                   const avg = data.length > 0 ? data.reduce((s, d) => s + d.rate, 0) / data.length : 0
                   return (
                     <div key={venue} className="border border-border bg-surface/60 px-3 py-2 flex-1">
                       <div className="flex items-center gap-1.5 mb-1">
-                        <span className="w-2 h-0.5" style={{ background: colors[i % colors.length] }} />
+                        <span className="w-2 h-0.5" style={{ background: colors[venue] || '#888' }} />
                         <span className="text-[8px] text-ghost/60 tracking-wider">{venue.toUpperCase()}</span>
                       </div>
                       <div className="text-xs font-mono text-terminal">{avg.toFixed(3)} bps avg</div>
@@ -809,7 +824,8 @@ export default function DataExplorer() {
                 })}
               </div>
             </div>
-          )}
+            )
+          })()}
 
           {/* Single-venue funding chart (default Drift/Hyperliquid) */}
           {fundingData.length > 0 ? (
