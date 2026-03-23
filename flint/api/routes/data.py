@@ -351,3 +351,97 @@ def get_correlation(
         return {"markets": list(candles_by_market.keys()), "matrix": matrix}
     except Exception as e:
         return {"markets": market_list, "matrix": {}, "error": str(e)}
+
+
+@router.post("/download")
+def download_market_data(request: Request, body: dict):
+    """Download market data from Drift for a specific market and date range.
+
+    Body: { "market": "SOL-PERP", "resolution_s": 3600, "start_ts": ..., "end_ts": ... }
+    Returns: { "market": ..., "downloaded": N, "cached": N, "source": "drift_api" | "drift_s3" }
+    """
+    import logging
+    logger = logging.getLogger("flint.api.data")
+
+    market = body.get("market", "SOL-PERP")
+    resolution_s = body.get("resolution_s", 3600)
+    start_ts = body.get("start_ts")
+    end_ts = body.get("end_ts")
+
+    if not start_ts or not end_ts or start_ts >= end_ts:
+        from fastapi import HTTPException
+        raise HTTPException(400, "Invalid date range — start_ts and end_ts required, start < end")
+
+    store = _get_store(request)
+    if store is None:
+        from fastapi import HTTPException
+        raise HTTPException(500, "Store not available")
+
+    # Check what we already have
+    existing = store.query_candles(market, resolution_s, start_ts, end_ts)
+    existing_count = len(existing)
+
+    # Try Drift Data API first
+    fetched = []
+    source = "none"
+    try:
+        from ...providers.drift_candles import DriftCandleProvider
+        provider = DriftCandleProvider()
+        fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+        provider.close()
+        source = "drift_api"
+    except Exception as e:
+        logger.warning("Drift Data API failed for %s: %s", market, e)
+
+    # Fallback to S3
+    if not fetched:
+        try:
+            from ...providers.drift_s3 import DriftS3Provider
+            provider = DriftS3Provider()
+            fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+            provider.close()
+            source = "drift_s3"
+        except Exception as e:
+            logger.warning("Drift S3 failed for %s: %s", market, e)
+
+    # Cache results
+    cached = 0
+    if fetched:
+        cached = store.upsert_candles(fetched)
+
+    return {
+        "market": market,
+        "resolution_s": resolution_s,
+        "downloaded": len(fetched),
+        "cached": cached,
+        "existing": existing_count,
+        "total": existing_count + cached,
+        "source": source,
+    }
+
+
+@router.get("/available-markets")
+def list_available_markets():
+    """List all markets available for download from Drift."""
+    from ...collector.tasks import MARKET_INDEX
+
+    markets = []
+    for market, idx in sorted(MARKET_INDEX.items(), key=lambda x: x[1]):
+        markets.append({
+            "market": market,
+            "source": "drift",
+            "market_index": idx,
+            "type": "perp" if "-PERP" in market else "spot",
+        })
+
+    # Add spot markets
+    spot_markets = ["SOL", "JTO", "WIF", "JUP", "DRIFT", "POPCAT"]
+    for m in spot_markets:
+        markets.append({
+            "market": m,
+            "source": "drift",
+            "market_index": -1,
+            "type": "spot",
+        })
+
+    return {"markets": markets}

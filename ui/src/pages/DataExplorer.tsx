@@ -29,6 +29,37 @@ const RESOLUTIONS = [
   { label: '1d', value: 86400 },
 ]
 
+const MARKET_PACKS = {
+  starter: {
+    label: 'Starter Pack',
+    description: '5 major markets — fast download (~2 min)',
+    markets: ['SOL-PERP', 'BTC-PERP', 'ETH-PERP', 'WIF-PERP', 'JUP-PERP'],
+  },
+  defi: {
+    label: 'DeFi Pack',
+    description: '10 Solana DeFi tokens — moderate download (~5 min)',
+    markets: ['SOL-PERP', 'BTC-PERP', 'ETH-PERP', 'JUP-PERP', 'DRIFT-PERP', 'PYTH-PERP', 'RENDER-PERP', 'WIF-PERP', 'POPCAT-PERP', 'JTO-PERP'],
+  },
+  advanced: {
+    label: 'Advanced Pack',
+    description: '20 markets — longer download (~10 min)',
+    markets: ['SOL-PERP', 'BTC-PERP', 'ETH-PERP', 'WIF-PERP', 'JUP-PERP', 'DRIFT-PERP', 'PYTH-PERP', 'RENDER-PERP', 'POPCAT-PERP', 'JTO-PERP', 'SUI-PERP', 'ARB-PERP', 'LINK-PERP', 'DOGE-PERP', 'AVAX-PERP', 'XRP-PERP', 'INJ-PERP', 'TIA-PERP', 'SEI-PERP', 'OP-PERP'],
+  },
+  all: {
+    label: 'Everything',
+    description: 'All 36 Drift markets — this will take a while (~20 min)',
+    markets: [] as string[],  // filled from API
+  },
+}
+
+const DOWNLOAD_RANGES: Record<string, {label: string, days: number}> = {
+  '1m': { label: '1 Month', days: 30 },
+  '3m': { label: '3 Months', days: 90 },
+  '6m': { label: '6 Months', days: 180 },
+  '1y': { label: '1 Year', days: 365 },
+  'custom': { label: 'Custom', days: 0 },
+}
+
 function downsample(data: any[], max: number) {
   if (data.length <= max) return data
   const step = Math.ceil(data.length / max)
@@ -44,11 +75,19 @@ export default function DataExplorer() {
   const [endDate, setEndDate] = useState('')
   const [candles, setCandles] = useState<CandleData[]>([])
   const [loading, setLoading] = useState(false)
-  const [downloading, setDownloading] = useState(false)
   const [loadStatus, setLoadStatus] = useState('')  // status message during load
   const [inventoryLoading, setInventoryLoading] = useState(true)
   const [fundingRates, setFundingRates] = useState<any[]>([])
   const [activeTab, setActiveTab] = useState<'price' | 'funding'>('price')
+  // Add Markets panel
+  const [showAddMarkets, setShowAddMarkets] = useState(false)
+  const [availableForDownload, setAvailableForDownload] = useState<{market: string, source: string, type: string}[]>([])
+  const [selectedDownloads, setSelectedDownloads] = useState<string[]>([])
+  const [downloadRange, setDownloadRange] = useState('3m')  // preset
+  const [dlStartDate, setDlStartDate] = useState('')
+  const [dlEndDate, setDlEndDate] = useState('')
+  const [downloadProgress, setDownloadProgress] = useState<{market: string, status: string}[]>([])
+  const [isDownloading, setIsDownloading] = useState(false)
   // Indicators
   const [showSMA, setShowSMA] = useState(false)
   const [smaPeriod, setSmaPeriod] = useState(20)
@@ -71,6 +110,17 @@ export default function DataExplorer() {
   }, [])
 
   useEffect(() => { refreshInventory() }, [refreshInventory])
+
+  useEffect(() => {
+    fetch('/api/v1/data/available-markets')
+      .then(r => r.json())
+      .then(d => {
+        const mkts = d.markets || []
+        setAvailableForDownload(mkts)
+        MARKET_PACKS.all.markets = mkts.map((m: any) => m.market)
+      })
+      .catch(() => {})
+  }, [])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -205,26 +255,50 @@ export default function DataExplorer() {
   // Auto-load on mount and when config changes
   useEffect(() => { loadData() }, [loadData])
 
-  const handleDownload = async () => {
-    setDownloading(true)
-    try {
-      // Trigger a backtest with the current market to force download
-      const now = Math.floor(Date.now() / 1000)
-      const startTs = now - 365 * 86400
-      await fetch('/api/v1/backtest/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          strategy: 'ma_crossover', market, resolution_s: 3600,
-          start_ts: startTs, end_ts: now, initial_capital: 1000, fee_rate: 0,
-        }),
-      })
-      // Wait a bit for download to complete then refresh
-      await new Promise(r => setTimeout(r, 3000))
-      refreshInventory()
-      loadData()
-    } catch {}
-    setDownloading(false)
+  const handleBulkDownload = async () => {
+    if (selectedDownloads.length === 0) return
+    setIsDownloading(true)
+
+    const now = Math.floor(Date.now() / 1000)
+    let startTs: number, endTs: number
+
+    if (downloadRange === 'custom' && dlStartDate && dlEndDate) {
+      startTs = Math.floor(new Date(dlStartDate + 'T00:00:00Z').getTime() / 1000)
+      endTs = Math.floor(new Date(dlEndDate + 'T23:59:59Z').getTime() / 1000)
+    } else {
+      const days = DOWNLOAD_RANGES[downloadRange]?.days || 90
+      endTs = now
+      startTs = now - days * 86400
+    }
+
+    const progress: {market: string, status: string}[] = selectedDownloads.map(m => ({ market: m, status: 'pending' }))
+    setDownloadProgress([...progress])
+
+    for (let i = 0; i < selectedDownloads.length; i++) {
+      const mkt = selectedDownloads[i]
+      progress[i].status = 'downloading...'
+      setDownloadProgress([...progress])
+
+      try {
+        const res = await fetch('/api/v1/data/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ market: mkt, resolution_s: 3600, start_ts: startTs, end_ts: endTs }),
+        })
+        const data = await res.json()
+        if (data.downloaded > 0 || data.existing > 0) {
+          progress[i].status = `${(data.downloaded + data.existing).toLocaleString()} candles`
+        } else {
+          progress[i].status = 'no data found'
+        }
+      } catch {
+        progress[i].status = 'failed'
+      }
+      setDownloadProgress([...progress])
+    }
+
+    setIsDownloading(false)
+    refreshInventory()
   }
 
   const uniqueMarkets = Array.from(new Set(markets.map(m => m.market))).sort()
@@ -297,11 +371,14 @@ export default function DataExplorer() {
             {loading ? 'LOADING...' : 'LOAD'}
           </button>
           <button
-            onClick={handleDownload}
-            disabled={downloading}
-            className="px-4 py-2 border border-border text-[11px] text-ghost tracking-[0.1em] hover:text-amber hover:border-amber/30 disabled:opacity-40 transition-all"
+            onClick={() => setShowAddMarkets(!showAddMarkets)}
+            className={`px-4 py-2 border text-[11px] tracking-[0.1em] transition-all ${
+              showAddMarkets
+                ? 'border-amber/50 text-amber bg-amber-glow'
+                : 'border-border text-ghost hover:text-amber hover:border-amber/30'
+            }`}
           >
-            {downloading ? 'DOWNLOADING...' : 'DOWNLOAD 1Y'}
+            {showAddMarkets ? 'HIDE' : 'ADD MARKETS'}
           </button>
           {candles.length > 0 && (
             <span className="text-[10px] text-amber/60">{candles.length} candles</span>
@@ -379,6 +456,146 @@ export default function DataExplorer() {
         )}
       </div>
 
+      {/* ── add markets panel ── */}
+      {showAddMarkets && (
+        <div className="border border-amber/20 bg-surface/80 backdrop-blur" style={{ animation: 'fadeUp 0.2s ease' }}>
+          <div className="px-4 py-2.5 border-b border-border flex items-center gap-2">
+            <span className="w-2 h-2 bg-amber/60" />
+            <span className="text-[10px] text-amber tracking-[0.2em]">ADD.MARKETS</span>
+            <span className="ml-auto text-[10px] text-ghost/40">Select markets and time range to download</span>
+          </div>
+
+          <div className="p-4 space-y-4">
+            {/* Presets */}
+            <div>
+              <div className="text-[10px] text-ghost tracking-[0.15em] mb-2">PRESETS</div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                {Object.entries(MARKET_PACKS).map(([key, pack]) => (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedDownloads(pack.markets.length > 0 ? pack.markets : availableForDownload.map(m => m.market))}
+                    className="border border-border hover:border-amber/30 p-3 text-left transition-all group"
+                  >
+                    <div className="text-[11px] text-white/80 group-hover:text-amber font-medium">{pack.label}</div>
+                    <div className="text-[9px] text-ghost/50 mt-0.5">{pack.description}</div>
+                    <div className="text-[9px] text-amber/40 mt-1">{pack.markets.length || availableForDownload.length} markets</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Time range */}
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <div className="text-[10px] text-ghost tracking-[0.15em] mb-2">TIME RANGE</div>
+                <div className="flex gap-0.5">
+                  {Object.entries(DOWNLOAD_RANGES).map(([key, r]) => (
+                    <button
+                      key={key}
+                      onClick={() => setDownloadRange(key)}
+                      className={`px-2.5 py-1.5 text-[10px] tracking-wider border transition-all ${
+                        downloadRange === key
+                          ? 'border-amber/50 bg-amber-glow text-amber'
+                          : 'border-border text-ghost hover:text-terminal'
+                      }`}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {downloadRange === 'custom' && (
+                <>
+                  <div>
+                    <label className="block text-[9px] text-ghost tracking-wider mb-1">FROM</label>
+                    <input type="date" value={dlStartDate} onChange={e => setDlStartDate(e.target.value)}
+                      className="bg-void border border-border text-terminal text-xs px-2.5 py-1.5" />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] text-ghost tracking-wider mb-1">TO</label>
+                    <input type="date" value={dlEndDate} onChange={e => setDlEndDate(e.target.value)}
+                      className="bg-void border border-border text-terminal text-xs px-2.5 py-1.5" />
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Market grid — show available markets as checkboxes */}
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-[10px] text-ghost tracking-[0.15em]">MARKETS</span>
+                <span className="text-[9px] text-ghost/40">{selectedDownloads.length} selected</span>
+                <button onClick={() => setSelectedDownloads([])} className="text-[9px] text-ghost/40 hover:text-terminal ml-auto">Clear all</button>
+              </div>
+              <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-1 max-h-[180px] overflow-y-auto">
+                {availableForDownload.map(m => {
+                  const isSelected = selectedDownloads.includes(m.market)
+                  const isDownloaded = uniqueMarkets.includes(m.market)
+                  return (
+                    <button
+                      key={m.market}
+                      onClick={() => {
+                        if (isSelected) {
+                          setSelectedDownloads(prev => prev.filter(x => x !== m.market))
+                        } else {
+                          setSelectedDownloads(prev => [...prev, m.market])
+                        }
+                      }}
+                      className={`px-2 py-1.5 text-[9px] tracking-wider border transition-all text-left ${
+                        isSelected
+                          ? 'border-amber/50 bg-amber-glow text-amber'
+                          : isDownloaded
+                            ? 'border-gain/20 text-gain/60'
+                            : 'border-border text-ghost/50 hover:text-terminal hover:border-border-bright'
+                      }`}
+                    >
+                      {m.market.replace('-PERP', '')}
+                      {isDownloaded && <span className="text-gain/40 ml-1">&#10003;</span>}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Download button + progress */}
+            <div className="flex items-center gap-3 pt-2 border-t border-border/30">
+              <button
+                onClick={handleBulkDownload}
+                disabled={isDownloading || selectedDownloads.length === 0}
+                className="px-5 py-2 bg-amber text-void text-[11px] font-semibold tracking-[0.15em] hover:bg-amber-dim disabled:bg-border disabled:text-ghost transition-all"
+              >
+                {isDownloading ? 'DOWNLOADING...' : `DOWNLOAD ${selectedDownloads.length} MARKET${selectedDownloads.length !== 1 ? 'S' : ''}`}
+              </button>
+              {selectedDownloads.length > 10 && !isDownloading && (
+                <span className="text-[9px] text-loss/60">This may take several minutes</span>
+              )}
+              {selectedDownloads.length > 20 && !isDownloading && (
+                <span className="text-[9px] text-loss/60">Large download — grab a coffee</span>
+              )}
+            </div>
+
+            {/* Download progress */}
+            {downloadProgress.length > 0 && (
+              <div className="max-h-[200px] overflow-y-auto">
+                <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1">
+                  {downloadProgress.map(p => (
+                    <div key={p.market} className={`px-2 py-1 text-[9px] border ${
+                      p.status === 'pending' ? 'border-border text-ghost/30' :
+                      p.status.includes('downloading') ? 'border-amber/30 text-amber animate-pulse' :
+                      p.status === 'failed' || p.status === 'no data found' ? 'border-loss/30 text-loss/60' :
+                      'border-gain/30 text-gain/60'
+                    }`}>
+                      <div className="font-medium">{p.market.replace('-PERP', '')}</div>
+                      <div className="text-[8px] truncate">{p.status}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── loading status ── */}
       {loading && (
         <div className="border border-amber/30 bg-amber/5 px-4 py-3">
@@ -396,7 +613,7 @@ export default function DataExplorer() {
       {!loading && candles.length === 0 && loadStatus && (
         <div className="border border-border/50 py-8 text-center">
           <div className="text-ghost/40 text-xs tracking-wider">{loadStatus}</div>
-          <div className="text-ghost/20 text-[10px] mt-2">Try a different market or click DOWNLOAD 1Y</div>
+          <div className="text-ghost/20 text-[10px] mt-2">Try a different market or click ADD MARKETS</div>
         </div>
       )}
 
@@ -500,7 +717,7 @@ export default function DataExplorer() {
         {inventoryLoading ? (
           <div className="p-6 text-center text-[11px] text-ghost/40">SCANNING...</div>
         ) : markets.length === 0 ? (
-          <div className="p-6 text-center text-ghost/30 text-xs">No data — click DOWNLOAD 1Y or run <code>flint init</code></div>
+          <div className="p-6 text-center text-ghost/30 text-xs">No data — click ADD MARKETS or run <code>flint init</code></div>
         ) : (
           <div className="overflow-x-auto max-h-[350px] overflow-y-auto">
             <table className="w-full text-xs">
