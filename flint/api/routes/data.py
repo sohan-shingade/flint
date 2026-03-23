@@ -64,21 +64,32 @@ def get_funding(
     try:
         rates = store.query_funding_rates(market, start_ts, end_ts)
 
-        # Auto-fetch from Drift if no local data for this market
-        if not rates and "-PERP" in market:
-            try:
-                from ...collector.tasks import MARKET_INDEX
-                from ...providers.drift_api import DriftDataProvider
-                market_index = MARKET_INDEX.get(market)
-                if market_index is not None:
-                    provider = DriftDataProvider()
-                    fetched = provider.fetch_funding_rates(market_index, market, limit=500)
-                    if fetched:
-                        store.upsert_funding_rates(fetched)
-                        rates = store.query_funding_rates(market, start_ts, end_ts)
-                        _logger.info("Auto-fetched %d funding rates for %s", len(fetched), market)
-            except Exception as e:
-                _logger.warning("Auto-fetch funding failed for %s: %s", market, e)
+        # Auto-fetch from Drift if no/sparse local data for this market
+        if "-PERP" in market:
+            needs_fetch = not rates
+            # Also fetch if we have candle data that extends beyond funding coverage
+            if rates and not needs_fetch:
+                candles = store.query_candles(market, 3600, start_ts, end_ts)
+                if candles and rates:
+                    candle_start = candles[0].ts
+                    funding_start = rates[0].ts
+                    if funding_start > candle_start + 7200:
+                        needs_fetch = True  # Funding doesn't cover candle range
+
+            if needs_fetch:
+                try:
+                    # Determine the full range we need (candle range or requested range)
+                    fetch_start = start_ts
+                    fetch_end = end_ts
+                    candles = store.query_candles(market, 3600)
+                    if candles:
+                        fetch_start = min(fetch_start or candles[0].ts, candles[0].ts)
+                        fetch_end = max(fetch_end or candles[-1].ts, candles[-1].ts)
+
+                    _sync_funding_to_candle_range(store, market, fetch_start, fetch_end, _logger)
+                    rates = store.query_funding_rates(market, start_ts, end_ts)
+                except Exception as e:
+                    _logger.warning("Auto-fetch funding failed for %s: %s", market, e)
 
         rates = rates[:limit]
         return {
@@ -449,6 +460,11 @@ def download_market_data(request: Request, body: dict):
     # Re-count total
     final_count = len(store.query_candles(market, resolution_s, start_ts, end_ts))
 
+    # Also fetch funding rates for perp markets to match candle coverage
+    funding_fetched = 0
+    if "-PERP" in market:
+        funding_fetched = _sync_funding_to_candle_range(store, market, start_ts, end_ts, logger)
+
     return {
         "market": market,
         "resolution_s": resolution_s,
@@ -456,6 +472,7 @@ def download_market_data(request: Request, body: dict):
         "cached": total_cached,
         "existing": existing_count,
         "total": final_count,
+        "funding_fetched": funding_fetched,
         "source": source,
     }
 
@@ -497,6 +514,55 @@ def _download_range(market: str, resolution_s: int, start_ts: int, end_ts: int, 
         logger.warning("CoinGecko failed for %s: %s", market, e)
 
     return []
+
+
+def _sync_funding_to_candle_range(store, market: str, start_ts: int, end_ts: int, logger) -> int:
+    """Ensure funding rate data covers the same range as candle data.
+
+    Checks local funding coverage vs the requested candle range and
+    fetches missing funding data from Drift to fill gaps.
+    """
+    from ...collector.tasks import MARKET_INDEX
+
+    market_index = MARKET_INDEX.get(market)
+    if market_index is None:
+        return 0
+
+    existing_funding = store.query_funding_rates(market, start_ts, end_ts)
+    total_fetched = 0
+
+    # Determine funding gaps relative to the candle range
+    funding_gaps = []
+    if not existing_funding:
+        funding_gaps.append((start_ts, end_ts))
+    else:
+        first_funding = existing_funding[0].ts
+        last_funding = existing_funding[-1].ts
+        if first_funding > start_ts + 7200:  # gap > 2h at start
+            funding_gaps.append((start_ts, first_funding))
+        if last_funding < end_ts - 7200:  # gap > 2h at end
+            funding_gaps.append((last_funding, end_ts))
+
+    if not funding_gaps:
+        return 0
+
+    try:
+        from ...providers.drift_api import DriftDataProvider
+        provider = DriftDataProvider()
+        for gap_start, gap_end in funding_gaps:
+            # Drift funding API uses limit-based pagination, fetch in chunks
+            rates = provider.fetch_funding_rates(market_index, market, limit=1000)
+            if rates:
+                # Filter to gap range
+                in_range = [r for r in rates if gap_start <= r.ts <= gap_end]
+                if in_range:
+                    stored = store.upsert_funding_rates(in_range)
+                    total_fetched += stored
+                    logger.info("Fetched %d funding rates for %s (%d-%d)", stored, market, gap_start, gap_end)
+    except Exception as e:
+        logger.warning("Funding sync failed for %s: %s", market, e)
+
+    return total_fetched
 
 
 @router.get("/available-markets")
