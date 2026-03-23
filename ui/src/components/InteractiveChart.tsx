@@ -256,15 +256,32 @@ export default function InteractiveChart({ candles, height = 500, indicators, fu
       fundingChart.addSeries(LineSeries, { color: '#ffffff15', lineWidth: 1, lineStyle: 2 })
         .setData(fundingRates.map(r => ({ time: r.ts as Time, value: 0 })))
 
-      fundingChart.timeScale().fitContent()
-
-      // Sync time scales with main chart
-      chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-        if (range && fundingChartRef.current) fundingChartRef.current.timeScale().setVisibleLogicalRange(range)
+      // Sync funding chart to main chart using TIME range (not logical index)
+      // Logical ranges don't align because the datasets have different lengths
+      let syncing = false
+      chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+        if (syncing) return
+        syncing = true
+        const tr = chart.timeScale().getVisibleRange()
+        if (tr && fundingChartRef.current) {
+          fundingChartRef.current.timeScale().setVisibleRange(tr)
+        }
+        syncing = false
       })
-      fundingChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-        if (range && chartRef.current) chartRef.current.timeScale().setVisibleLogicalRange(range)
+      fundingChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+        if (syncing) return
+        syncing = true
+        const tr = fundingChart.timeScale().getVisibleRange()
+        if (tr && chartRef.current) {
+          chartRef.current.timeScale().setVisibleRange(tr)
+        }
+        syncing = false
       })
+      // Initial sync
+      const mainRange = chart.timeScale().getVisibleRange()
+      if (mainRange) {
+        fundingChart.timeScale().setVisibleRange(mainRange)
+      }
 
       const fundingRo = new ResizeObserver(e => { if (e[0] && fundingChartRef.current) fundingChartRef.current.applyOptions({ width: e[0].contentRect.width }) })
       fundingRo.observe(fundingRef.current)
