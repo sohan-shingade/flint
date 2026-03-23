@@ -61,5 +61,6 @@ htmlcov/
 # Build
 ui/dist/
 
-# Debug data
+# Debug / test artifacts
 db_info/
+test_client/
