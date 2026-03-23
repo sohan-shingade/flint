@@ -37,6 +37,14 @@ SPOT_MARKET_INDEX = {
     "wETH": 20, "BONK": 21, "MOTHER": 22, "MOODENG": 23,
 }
 
+# Spot markets that have candle data on Drift Data API
+# (BTC, ETH, RNDR, MOODENG return 400 — no spot candle data)
+SPOT_WITH_CANDLES = {
+    "SOL", "PYTH", "JTO", "WIF", "JUP", "W", "TNSR", "DRIFT",
+    "INF", "JLP", "POPCAT", "CLOUD", "BNSOL", "wBTC", "wETH",
+    "BONK", "MOTHER",
+}
+
 
 @dataclass
 class CollectorConfig:

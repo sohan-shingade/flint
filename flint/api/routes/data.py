@@ -423,11 +423,11 @@ def download_market_data(request: Request, body: dict):
 @router.get("/available-markets")
 def list_available_markets():
     """List all markets available for download from Drift (perp + spot)."""
-    from ...collector.tasks import MARKET_INDEX, SPOT_MARKET_INDEX
+    from ...collector.tasks import MARKET_INDEX, SPOT_MARKET_INDEX, SPOT_WITH_CANDLES
 
     markets = []
 
-    # Perp markets
+    # Perp markets (all have candle data)
     for market, idx in sorted(MARKET_INDEX.items(), key=lambda x: x[1]):
         markets.append({
             "market": market,
@@ -436,10 +436,10 @@ def list_available_markets():
             "type": "perp",
         })
 
-    # Spot markets
+    # Spot markets (only those with confirmed candle data)
     for market, idx in sorted(SPOT_MARKET_INDEX.items(), key=lambda x: x[1]):
-        if market in ("USDC", "USDS", "USDY"):
-            continue  # Skip stablecoins — no useful OHLCV
+        if market not in SPOT_WITH_CANDLES:
+            continue
         markets.append({
             "market": market,
             "source": "drift",
