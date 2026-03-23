@@ -564,27 +564,57 @@ def _sync_funding_to_candle_range(store, market: str, start_ts: int, end_ts: int
     if not funding_gaps:
         return 0
 
-    try:
-        from ...providers.funding_rates import DriftFundingProvider
-        from ...models import FundingRate
-        provider = DriftFundingProvider()
-        for gap_start, gap_end in funding_gaps:
+    for gap_start, gap_end in funding_gaps:
+        fetched_rates = []
+
+        # Source 1: Drift Data API (recent ~30 days)
+        try:
+            from ...providers.funding_rates import DriftFundingProvider
+            from ...models import FundingRate
+            provider = DriftFundingProvider()
             snapshots = provider.fetch_funding(market, gap_start, gap_end)
+            provider.close()
             if snapshots:
-                # Convert FundingSnapshot → FundingRate for storage
-                rates = [
-                    FundingRate(
-                        market=s.market, ts=s.ts, rate=s.rate_hourly,
-                        oracle_price=s.index_price, mark_price=s.mark_price, slot=0,
-                    )
+                fetched_rates = [
+                    FundingRate(market=s.market, ts=s.ts, rate=s.rate_hourly,
+                                oracle_price=s.index_price, mark_price=s.mark_price, slot=0)
                     for s in snapshots
                 ]
-                stored = store.upsert_funding_rates(rates)
-                total_fetched += stored
-                logger.info("Synced %d funding rates for %s (%d-%d)", stored, market, gap_start, gap_end)
-        provider.close()
-    except Exception as e:
-        logger.warning("Funding sync failed for %s: %s", market, e)
+        except Exception as e:
+            logger.warning("Drift API funding failed for %s: %s", market, e)
+
+        # Source 2: Drift S3 (2022 - Jan 2025, daily CSV files)
+        if not fetched_rates:
+            try:
+                from ...providers.drift_s3 import DriftS3Provider
+                s3 = DriftS3Provider()
+                fetched_rates = s3.fetch_funding_rates(market, gap_start, gap_end)
+                s3.close()
+            except Exception as e:
+                logger.warning("Drift S3 funding failed for %s: %s", market, e)
+
+        # Source 3: Hyperliquid (1 year history, hourly, use as proxy)
+        if not fetched_rates:
+            try:
+                from ...providers.funding_rates import HyperliquidFundingProvider
+                from ...models import FundingRate
+                hl = HyperliquidFundingProvider()
+                snapshots = hl.fetch_funding(market, gap_start, gap_end)
+                hl.close()
+                if snapshots:
+                    fetched_rates = [
+                        FundingRate(market=s.market, ts=s.ts, rate=s.rate_hourly,
+                                    oracle_price=s.index_price, mark_price=s.mark_price, slot=0)
+                        for s in snapshots
+                    ]
+                    logger.info("Using Hyperliquid funding as proxy for %s", market)
+            except Exception as e:
+                logger.warning("Hyperliquid funding failed for %s: %s", market, e)
+
+        if fetched_rates:
+            stored = store.upsert_funding_rates(fetched_rates)
+            total_fetched += stored
+            logger.info("Synced %d funding rates for %s (%d-%d)", stored, market, gap_start, gap_end)
 
     return total_fetched
 

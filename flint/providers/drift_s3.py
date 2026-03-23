@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 
 import httpx
 
-from ..models import Candle
+from ..models import Candle, FundingRate
 from .base import CandleProvider
 
 _BUCKET = "drift-historical-data-v2"
@@ -119,6 +119,68 @@ class DriftS3Provider(CandleProvider):
                 )
             )
         return candles
+
+
+    def fetch_funding_rates(
+        self,
+        market: str,
+        start_ts: int,
+        end_ts: int,
+        on_progress=None,
+    ) -> List[FundingRate]:
+        """Fetch funding rate records from S3 (available 2022 - Jan 2025)."""
+        import logging
+        logger = logging.getLogger("flint.providers.drift_s3")
+
+        dates = _date_range(start_ts, end_ts)
+        all_rates: List[FundingRate] = []
+
+        for i, date_str in enumerate(dates):
+            year = date_str[:4]
+            key = f"program/{_PROGRAM}/market/{market}/fundingRateRecords/{year}/{date_str}"
+            url = f"{_BASE_URL}/{key}"
+
+            try:
+                resp = self._client.get(url)
+                if resp.status_code == 404:
+                    continue
+                if resp.status_code != 200:
+                    continue
+
+                # Try gzip decompress, fall back to raw text
+                try:
+                    text = gzip.decompress(resp.content).decode("utf-8")
+                except Exception:
+                    text = resp.text
+
+                if not text.strip():
+                    continue
+
+                reader = csv.DictReader(io.StringIO(text))
+                for row in reader:
+                    ts = int(row.get("ts", 0))
+                    if ts < start_ts or ts > end_ts:
+                        continue
+                    rate = float(row.get("fundingRate", 0))
+                    oracle = float(row.get("oraclePriceTwap", 0))
+                    mark = float(row.get("markPriceTwap", 0))
+
+                    all_rates.append(FundingRate(
+                        market=market,
+                        ts=ts,
+                        rate=rate,
+                        oracle_price=oracle,
+                        mark_price=mark,
+                        slot=int(row.get("slot", 0)),
+                    ))
+            except Exception as e:
+                logger.warning("S3 funding fetch error for %s/%s: %s", market, date_str, e)
+
+            if on_progress and len(dates) > 0:
+                on_progress(i + 1, len(dates), date_str)
+
+        all_rates.sort(key=lambda r: r.ts)
+        return all_rates
 
 
 def _date_range(start_ts: int, end_ts: int) -> List[str]:
