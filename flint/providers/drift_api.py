@@ -49,13 +49,18 @@ class DriftDataProvider:
         records = data.get("fundingRates", [])
         rates: List[FundingRate] = []
         for r in records:
+            raw_rate = int(r["fundingRate"]) / _PRICE_PRECISION
+            oracle_price = int(r["oraclePriceTwap"]) / _PRICE_PRECISION
+            mark_price = int(r["markPriceTwap"]) / _PRICE_PRECISION
+            # Normalize: raw rate is dollar-denominated, divide by oracle for fractional rate
+            rate = raw_rate / oracle_price if oracle_price > 0 else raw_rate
             rates.append(
                 FundingRate(
                     market=market_name,
                     ts=int(r["ts"]),
-                    rate=int(r["fundingRate"]) / _PRICE_PRECISION,
-                    oracle_price=int(r["oraclePriceTwap"]) / _PRICE_PRECISION,
-                    mark_price=int(r["markPriceTwap"]) / _PRICE_PRECISION,
+                    rate=rate,
+                    oracle_price=oracle_price,
+                    mark_price=mark_price,
                     slot=int(r.get("slot", 0)),
                 )
             )

@@ -72,8 +72,11 @@ def test_fetch_funding_rates():
     r = rates[0]
     assert r.market == "SOL-PERP"
     assert r.ts == 1771383600
-    assert r.rate == pytest.approx(-1889875 / _PRICE_PRECISION)
-    assert r.oracle_price == pytest.approx(84642173 / _PRICE_PRECISION)
+    # rate = raw_rate / oracle_price (dollar-denominated → fractional)
+    raw_rate = -1889875 / _PRICE_PRECISION
+    oracle = 84642173 / _PRICE_PRECISION
+    assert r.rate == pytest.approx(raw_rate / oracle)
+    assert r.oracle_price == pytest.approx(oracle)
     assert r.mark_price == pytest.approx(84579888 / _PRICE_PRECISION)
     assert r.slot == 401001868
 
