@@ -237,22 +237,34 @@ export default function DataExplorer() {
       setLoadStatus('No data available for this market')
     }
 
-    // Load funding rates
-    try {
-      const fParams = new URLSearchParams({
-        market, limit: '500',
-        ...(startTs > 0 ? { start_ts: String(startTs) } : {}),
-      })
-      const fr = await fetch(`/api/v1/data/funding?${fParams}`)
-      const fd = await fr.json()
-      let fRates = fd.rates || []
-      if (fRates.length === 0) {
-        const fb = await fetch(`/api/v1/data/funding?market=${market}&limit=500`)
-        const fbd = await fb.json()
-        fRates = fbd.rates || []
-      }
-      setFundingRates(fRates)
-    } catch { setFundingRates([]) }
+    // Load funding rates — sync coverage to match candles if needed
+    if (market.includes('-PERP')) {
+      try {
+        // First, trigger a sync to ensure funding covers the candle range
+        await fetch('/api/v1/data/sync-funding', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ market }),
+        }).catch(() => {})
+
+        const fParams = new URLSearchParams({
+          market, limit: '5000',
+          ...(startTs > 0 ? { start_ts: String(startTs) } : {}),
+          ...(endTs > 0 ? { end_ts: String(endTs) } : {}),
+        })
+        const fr = await fetch(`/api/v1/data/funding?${fParams}`)
+        const fd = await fr.json()
+        let fRates = fd.rates || []
+        if (fRates.length === 0) {
+          const fb = await fetch(`/api/v1/data/funding?market=${market}&limit=5000`)
+          const fbd = await fb.json()
+          fRates = fbd.rates || []
+        }
+        setFundingRates(fRates)
+      } catch { setFundingRates([]) }
+    } else {
+      setFundingRates([])
+    }
 
     setLoading(false)
     setTimeout(() => setLoadStatus(''), 5000)

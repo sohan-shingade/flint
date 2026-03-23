@@ -24,6 +24,51 @@ logger = logging.getLogger("flint.api")
 _UI_DIST = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
 
 
+async def _sync_funding_coverage(store: FlintStore):
+    """Background task: check all perp markets and sync funding to match candle coverage."""
+    await asyncio.sleep(3)  # Let server start first
+    try:
+        import threading
+        def _run():
+            from .routes.data import _sync_funding_to_candle_range
+            import logging as _log
+            _logger = _log.getLogger("flint.startup")
+
+            # Get all perp markets with candle data
+            with store._lock:
+                rows = store._conn.execute(
+                    "SELECT DISTINCT market, MIN(ts) as first_ts, MAX(ts) as last_ts "
+                    "FROM candles WHERE market LIKE '%-PERP' GROUP BY market"
+                ).fetchall()
+
+            if not rows:
+                return
+
+            for market, first_ts, last_ts in rows:
+                # Check if funding covers the same range
+                funding = store.query_funding_rates(market, first_ts, last_ts)
+                if not funding:
+                    funding_coverage = 0
+                else:
+                    funding_coverage = (funding[-1].ts - funding[0].ts) / max(last_ts - first_ts, 1)
+
+                if funding_coverage < 0.5:  # Less than 50% coverage
+                    _logger.info("Funding mismatch for %s: candles %d-%d, funding covers %.0f%% — syncing...",
+                                 market, first_ts, last_ts, funding_coverage * 100)
+                    try:
+                        fetched = _sync_funding_to_candle_range(store, market, first_ts, last_ts, _logger)
+                        if fetched:
+                            _logger.info("Synced %d funding rates for %s", fetched, market)
+                    except Exception as e:
+                        _logger.warning("Funding sync failed for %s: %s", market, e)
+
+            _logger.info("Funding coverage check complete")
+
+        await asyncio.to_thread(_run)
+    except Exception as e:
+        logger.warning("Funding coverage sync error: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: init shared store and collector. Shutdown: clean up."""
@@ -50,6 +95,9 @@ async def lifespan(app: FastAPI):
         app.state.ws_manager = ws_manager
 
         logger.info("Flint API started (collector=%s)", config.collector_enabled)
+
+        # Background task: sync funding coverage to match candle data
+        asyncio.create_task(_sync_funding_coverage(store))
     except Exception as exc:
         logger.warning("Lifespan startup failed (non-fatal): %s", exc)
 

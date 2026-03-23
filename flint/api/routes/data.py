@@ -105,6 +105,36 @@ def get_funding(
         return {"market": market, "count": 0, "rates": [], "error": str(e)}
 
 
+@router.post("/sync-funding")
+def sync_funding(request: Request, body: dict):
+    """Sync funding rate data to match candle coverage for a market.
+
+    Body: { "market": "SOL-PERP" }
+    """
+    import logging
+    _logger = logging.getLogger("flint.api.data")
+
+    market = body.get("market", "")
+    if not market or "-PERP" not in market:
+        return {"market": market, "synced": 0, "error": "Only perp markets have funding rates"}
+
+    store = _get_store(request)
+    if store is None:
+        return {"market": market, "synced": 0, "error": "Store not available"}
+
+    # Get candle range for this market
+    candles = store.query_candles(market, 3600)
+    if not candles:
+        return {"market": market, "synced": 0, "error": "No candle data — download candles first"}
+
+    start_ts = candles[0].ts
+    end_ts = candles[-1].ts
+
+    synced = _sync_funding_to_candle_range(store, market, start_ts, end_ts, _logger)
+
+    return {"market": market, "synced": synced, "candle_range": [start_ts, end_ts]}
+
+
 @router.get("/markets")
 def list_markets(request: Request):
     """List markets with data in the store."""
@@ -429,7 +459,10 @@ def download_market_data(request: Request, body: dict):
             gaps.append((last_ts, end_ts))
 
     if not gaps:
-        # Already fully covered
+        # Candles fully covered — but still check funding coverage
+        funding_fetched = 0
+        if "-PERP" in market:
+            funding_fetched = _sync_funding_to_candle_range(store, market, start_ts, end_ts, logger)
         return {
             "market": market,
             "resolution_s": resolution_s,
@@ -437,6 +470,7 @@ def download_market_data(request: Request, body: dict):
             "cached": 0,
             "existing": existing_count,
             "total": existing_count,
+            "funding_fetched": funding_fetched,
             "source": "local",
             "skipped": True,
         }
@@ -547,18 +581,24 @@ def _sync_funding_to_candle_range(store, market: str, start_ts: int, end_ts: int
         return 0
 
     try:
-        from ...providers.drift_api import DriftDataProvider
-        provider = DriftDataProvider()
+        from ...providers.funding_rates import DriftFundingProvider
+        from ...models import FundingRate
+        provider = DriftFundingProvider()
         for gap_start, gap_end in funding_gaps:
-            # Drift funding API uses limit-based pagination, fetch in chunks
-            rates = provider.fetch_funding_rates(market_index, market, limit=1000)
-            if rates:
-                # Filter to gap range
-                in_range = [r for r in rates if gap_start <= r.ts <= gap_end]
-                if in_range:
-                    stored = store.upsert_funding_rates(in_range)
-                    total_fetched += stored
-                    logger.info("Fetched %d funding rates for %s (%d-%d)", stored, market, gap_start, gap_end)
+            snapshots = provider.fetch_funding(market, gap_start, gap_end)
+            if snapshots:
+                # Convert FundingSnapshot → FundingRate for storage
+                rates = [
+                    FundingRate(
+                        market=s.market, ts=s.ts, rate=s.rate_hourly,
+                        oracle_price=s.index_price, mark_price=s.mark_price, slot=0,
+                    )
+                    for s in snapshots
+                ]
+                stored = store.upsert_funding_rates(rates)
+                total_fetched += stored
+                logger.info("Synced %d funding rates for %s (%d-%d)", stored, market, gap_start, gap_end)
+        provider.close()
     except Exception as e:
         logger.warning("Funding sync failed for %s: %s", market, e)
 
