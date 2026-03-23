@@ -4,9 +4,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal
 from ..config import FlintConfig, load_config
@@ -16,6 +19,9 @@ from ..paper.engine import PaperTradingEngine
 from .websocket import ConnectionManager
 
 logger = logging.getLogger("flint.api")
+
+# Locate UI build directory
+_UI_DIST = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
 
 
 @asynccontextmanager
@@ -91,6 +97,36 @@ app.include_router(journal.router, prefix="/api/v1/journal", tags=["journal"])
 @app.get("/api/v1/health")
 def health():
     return {"status": "ok", "service": "flint"}
+
+
+# ─── Serve built UI static files ───────────────────────────────
+# If ui/dist exists (production build), serve it. All non-API routes
+# fall through to index.html for client-side routing.
+if _UI_DIST.exists() and (_UI_DIST / "index.html").exists():
+    # Serve static assets (JS, CSS, images)
+    app.mount("/assets", StaticFiles(directory=str(_UI_DIST / "assets")), name="ui-assets")
+
+    # Serve other static files at root (favicon, etc.)
+    @app.get("/favicon.svg")
+    async def favicon():
+        path = _UI_DIST / "favicon.svg"
+        if path.exists():
+            return FileResponse(str(path))
+
+    # Catch-all: serve index.html for client-side routing
+    @app.get("/{path:path}")
+    async def serve_ui(path: str):
+        # Don't serve index.html for API routes or WebSocket
+        if path.startswith("api/") or path.startswith("ws"):
+            return {"error": "not found"}
+        # Check if it's a real file in dist
+        file_path = _UI_DIST / path
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        # Otherwise serve index.html (SPA routing)
+        return FileResponse(str(_UI_DIST / "index.html"))
+
+    logger.info("Serving UI from %s", _UI_DIST)
 
 
 @app.websocket("/ws/{channel}")

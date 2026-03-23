@@ -55,10 +55,10 @@ Most crypto trading frameworks are built for centralized exchanges. Flint is **p
 ```bash
 pip install -e .          # install flint + dependencies
 flint init                # downloads market data, runs a sample backtest
-flint serve               # starts the web UI at localhost:5173
+flint serve               # builds UI + starts API — everything at localhost:8000
 ```
 
-Open [localhost:5173](http://localhost:5173) and you'll see the dashboard with your data loaded.
+Open [localhost:8000](http://localhost:8000) — API and UI both run from a single command.
 
 ```bash
 # Run a backtest from CLI
@@ -74,6 +74,8 @@ docker compose up
 ## What You Can Do
 
 ### Write Strategies in Python
+
+Create a `.py` file in `strategies/user/` — it automatically appears in the Strategy Lab UI. Or write directly in the browser with the Monaco editor.
 
 Two strategy APIs — pick whichever fits:
 
@@ -366,7 +368,8 @@ All tests use **mocks for external APIs** — no network calls, no API keys need
 
 ```
 flint init                          # Download data + sample backtest
-flint serve                         # Start API + UI
+flint serve                         # Build UI + start API (single command)
+flint serve --dev                   # Dev mode: API only (run UI separately)
 flint backtest <strategy.py>        # Run backtest
 flint optimize <strategy.py>        # Hyperparameter optimization
 flint data download                 # Download/update market data
@@ -479,7 +482,8 @@ See `.env.example` for all environment variable options.
 pip install -e ".[dev]"          # install with dev dependencies
 cd ui && npm install             # install UI dependencies
 pytest tests/ -v                 # run 497 tests (~5s)
-flint serve                      # API on :8000, UI on :5173
+flint serve                      # API + UI on :8000 (builds UI automatically)
+flint serve --dev                # dev mode: API on :8000, run `cd ui && npm run dev` for :5173
 ```
 
 ## License

@@ -470,16 +470,71 @@ def optimize(
 def serve(
     host: str = typer.Option("0.0.0.0", "--host"),
     port: int = typer.Option(8000, "--port"),
+    dev: bool = typer.Option(False, "--dev", help="Run in dev mode (API only, no UI build)"),
 ):
     """Start the Flint API server + UI."""
+    import subprocess
+    import shutil
     import uvicorn
+
+    if dev:
+        console.print(Panel(
+            f"[bold]Flint Server (dev mode)[/bold]\n"
+            f"API: http://{host}:{port}/api/v1/health\n"
+            f"UI:  run [bold]cd ui && npm run dev[/bold] in another terminal",
+            border_style="yellow",
+        ))
+        uvicorn.run("flint.api.main:app", host=host, port=port, reload=True)
+        return
+
+    # Production mode: build UI if needed, then serve everything from one process
+    ui_dir = Path(__file__).resolve().parent.parent / "ui"
+    dist_dir = ui_dir / "dist"
+
+    # Build UI if dist doesn't exist or is stale
+    if ui_dir.exists() and (ui_dir / "package.json").exists():
+        needs_build = not dist_dir.exists() or not (dist_dir / "index.html").exists()
+
+        if not needs_build:
+            # Check if source is newer than build
+            src_dir = ui_dir / "src"
+            if src_dir.exists():
+                build_time = (dist_dir / "index.html").stat().st_mtime
+                for src_file in src_dir.rglob("*"):
+                    if src_file.is_file() and src_file.stat().st_mtime > build_time:
+                        needs_build = True
+                        break
+
+        if needs_build:
+            npm = shutil.which("npm")
+            if npm:
+                console.print("[yellow]Building UI...[/yellow]")
+                try:
+                    # Install deps if needed
+                    if not (ui_dir / "node_modules").exists():
+                        subprocess.run([npm, "install"], cwd=str(ui_dir), check=True,
+                                       capture_output=True, timeout=120)
+                    subprocess.run([npm, "run", "build"], cwd=str(ui_dir), check=True,
+                                   capture_output=True, timeout=120)
+                    console.print("[green]UI built successfully[/green]")
+                except subprocess.CalledProcessError as e:
+                    console.print(f"[red]UI build failed:[/red] {e.stderr.decode()[:500] if e.stderr else 'unknown error'}")
+                except FileNotFoundError:
+                    console.print("[yellow]npm not found — serving API only[/yellow]")
+            else:
+                console.print("[yellow]npm not found — serving API only (install Node.js for UI)[/yellow]")
+
+    has_ui = dist_dir.exists() and (dist_dir / "index.html").exists()
+    ui_url = f"http://localhost:{port}" if has_ui else "not available (npm not found)"
+
     console.print(Panel(
         f"[bold]Flint Server[/bold]\n"
         f"API: http://{host}:{port}/api/v1/health\n"
-        f"UI:  http://localhost:5173 (run [bold]cd ui && npm run dev[/bold] in another terminal)",
+        f"UI:  {ui_url}",
         border_style="yellow",
     ))
-    uvicorn.run("flint.api.main:app", host=host, port=port, reload=True)
+
+    uvicorn.run("flint.api.main:app", host=host, port=port)
 
 
 # ─── DATA COMMANDS ─────────────────────────────────────────
