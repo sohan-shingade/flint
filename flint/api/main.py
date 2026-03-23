@@ -36,12 +36,9 @@ async def _sync_funding_coverage(store: FlintStore):
 
             # ALWAYS purge corrupted funding rates on startup
             with store._lock:
-                purged = store._conn.execute(
+                store._conn.execute(
                     "DELETE FROM funding_rates WHERE ABS(rate) > 0.005"
-                ).fetchone()
-                bad_count = store._conn.execute(
-                    "SELECT changes()"
-                ).fetchone()
+                )
             _logger.info("Startup cleanup: purged corrupted funding rates")
 
             # Get all perp markets with candle data
