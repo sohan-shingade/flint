@@ -7,6 +7,8 @@ import type { IChartApi, Time } from 'lightweight-charts'
 
 interface Candle { ts: number; open: number; high: number; low: number; close: number; volume: number }
 
+interface FundingPoint { ts: number; rate: number }
+
 interface IndicatorConfig {
   sma: boolean; smaPeriod: number
   ema: boolean; emaPeriod: number
@@ -14,9 +16,13 @@ interface IndicatorConfig {
   bb: boolean; bbPeriod: number
   rsi: boolean; rsiPeriod: number
   volume: boolean
+  funding: boolean
 }
 
-interface Props { candles: Candle[]; height?: number; indicators: IndicatorConfig }
+interface Props {
+  candles: Candle[]; height?: number; indicators: IndicatorConfig
+  fundingRates?: FundingPoint[]
+}
 
 const C = {
   bg: '#09090b', grid: '#1a1a1f', text: '#555560',
@@ -85,11 +91,13 @@ function indicatorKey(ind: IndicatorConfig): string {
   return JSON.stringify(ind)
 }
 
-export default function InteractiveChart({ candles, height = 500, indicators }: Props) {
+export default function InteractiveChart({ candles, height = 500, indicators, fundingRates = [] }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const rsiRef = useRef<HTMLDivElement>(null)
+  const fundingRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const rsiChartRef = useRef<IChartApi | null>(null)
+  const fundingChartRef = useRef<IChartApi | null>(null)
   const legendRef = useRef<HTMLDivElement>(null)
 
   // Stable indicator key to avoid unnecessary re-renders
@@ -101,8 +109,10 @@ export default function InteractiveChart({ candles, height = 500, indicators }: 
     // Cleanup previous
     if (chartRef.current) { chartRef.current.remove(); chartRef.current = null }
     if (rsiChartRef.current) { rsiChartRef.current.remove(); rsiChartRef.current = null }
+    if (fundingChartRef.current) { fundingChartRef.current.remove(); fundingChartRef.current = null }
 
-    const mainH = indicators.rsi ? height - 130 : height
+    const subCharts = (indicators.rsi ? 1 : 0) + (indicators.funding && fundingRates.length > 0 ? 1 : 0)
+    const mainH = height - subCharts * 130
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth, height: mainH,
       layout: { background: { color: C.bg }, textColor: C.text },
@@ -219,12 +229,54 @@ export default function InteractiveChart({ candles, height = 500, indicators }: 
       rsiRo.observe(rsiRef.current)
     }
 
+    // Funding rate sub-chart
+    if (indicators.funding && fundingRates.length > 0 && fundingRef.current) {
+      const fundingChart = createChart(fundingRef.current, {
+        width: fundingRef.current.clientWidth, height: 100,
+        layout: { background: { color: C.bg }, textColor: C.text },
+        grid: { vertLines: { color: C.grid }, horzLines: { color: C.grid } },
+        crosshair: { mode: 0 },
+        timeScale: { timeVisible: true, secondsVisible: false, borderColor: C.grid },
+        rightPriceScale: { borderColor: C.grid },
+      })
+      fundingChartRef.current = fundingChart
+
+      // Funding rate as histogram (positive = green, negative = red)
+      const fundingSeries = fundingChart.addSeries(HistogramSeries, {
+        priceScaleId: 'funding',
+        title: 'Funding (bps)',
+      })
+      fundingSeries.setData(fundingRates.map(r => ({
+        time: r.ts as Time,
+        value: r.rate * 10000, // convert to bps
+        color: r.rate >= 0 ? C.up + 'aa' : C.down + 'aa',
+      })))
+
+      // Zero line
+      fundingChart.addSeries(LineSeries, { color: '#ffffff15', lineWidth: 1, lineStyle: 2 })
+        .setData(fundingRates.map(r => ({ time: r.ts as Time, value: 0 })))
+
+      fundingChart.timeScale().fitContent()
+
+      // Sync time scales with main chart
+      chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (range && fundingChartRef.current) fundingChartRef.current.timeScale().setVisibleLogicalRange(range)
+      })
+      fundingChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (range && chartRef.current) chartRef.current.timeScale().setVisibleLogicalRange(range)
+      })
+
+      const fundingRo = new ResizeObserver(e => { if (e[0] && fundingChartRef.current) fundingChartRef.current.applyOptions({ width: e[0].contentRect.width }) })
+      fundingRo.observe(fundingRef.current)
+    }
+
     return () => {
       ro.disconnect()
       if (chartRef.current) { chartRef.current.remove(); chartRef.current = null }
       if (rsiChartRef.current) { rsiChartRef.current.remove(); rsiChartRef.current = null }
+      if (fundingChartRef.current) { fundingChartRef.current.remove(); fundingChartRef.current = null }
     }
-  }, [candles, indKey, height])
+  }, [candles, indKey, height, fundingRates])
 
   if (!candles.length) return null
 
@@ -238,6 +290,12 @@ export default function InteractiveChart({ candles, height = 500, indicators }: 
         <div className="border-t border-border">
           <div className="text-[9px] text-ghost/40 tracking-wider px-2 py-1">RSI({indicators.rsiPeriod})</div>
           <div ref={rsiRef} />
+        </div>
+      )}
+      {indicators.funding && fundingRates.length > 0 && (
+        <div className="border-t border-border">
+          <div className="text-[9px] text-amber/40 tracking-wider px-2 py-1">FUNDING RATE (bps)</div>
+          <div ref={fundingRef} />
         </div>
       )}
     </div>

@@ -104,6 +104,7 @@ export default function DataExplorer() {
   const [showRSI, setShowRSI] = useState(false)
   const [rsiPeriod, setRsiPeriod] = useState(14)
   const [showVolume, setShowVolume] = useState(true)
+  const [showFunding, setShowFunding] = useState(false)
 
   const refreshInventory = useCallback(() => {
     setInventoryLoading(true)
@@ -429,6 +430,10 @@ export default function DataExplorer() {
                 className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${showVolume ? 'border-ghost/50 text-ghost bg-ghost/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
                 VOL
               </button>
+              <button onClick={() => setShowFunding(!showFunding)}
+                className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${showFunding ? 'border-amber/50 text-amber bg-amber/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
+                FUND
+              </button>
             </div>
           </div>
           {/* period inputs for active indicators */}
@@ -687,7 +692,9 @@ export default function DataExplorer() {
               bb: showBB, bbPeriod,
               rsi: showRSI, rsiPeriod,
               volume: showVolume,
+              funding: showFunding,
             }}
+            fundingRates={showFunding ? fundingRates.map((r: any) => ({ ts: r.ts, rate: r.rate })) : []}
           />
 
           {/* stats bar */}
