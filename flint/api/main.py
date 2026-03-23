@@ -25,14 +25,24 @@ _UI_DIST = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
 
 
 async def _sync_funding_coverage(store: FlintStore):
-    """Background task: fetch latest funding rates for perp markets with candle data."""
-    await asyncio.sleep(3)  # Let server start first
+    """Background task: purge bad funding data and fetch latest rates."""
+    await asyncio.sleep(2)  # Let server start first
     try:
         import threading
         def _run():
             from .routes.data import _sync_funding_to_candle_range
             import logging as _log
             _logger = _log.getLogger("flint.startup")
+
+            # ALWAYS purge corrupted funding rates on startup
+            with store._lock:
+                purged = store._conn.execute(
+                    "DELETE FROM funding_rates WHERE ABS(rate) > 0.005"
+                ).fetchone()
+                bad_count = store._conn.execute(
+                    "SELECT changes()"
+                ).fetchone()
+            _logger.info("Startup cleanup: purged corrupted funding rates")
 
             # Get all perp markets with candle data
             with store._lock:
