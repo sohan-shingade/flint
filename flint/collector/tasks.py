@@ -68,10 +68,26 @@ def collect_oracle_prices(store: FlintStore, market: str) -> int:
 
 
 def collect_funding_rates(store: FlintStore, market: str, market_index: int) -> int:
-    provider = DriftDataProvider()
+    """Collect funding rates using the properly normalized DriftFundingProvider.
+
+    The old DriftDataProvider.fetch_funding_rates() used the /fundingRates?marketIndex=
+    endpoint which returns values in an inconsistent format. DriftFundingProvider uses
+    /market/{name}/fundingRates which returns human-readable values.
+    """
+    from ..providers.funding_rates import DriftFundingProvider
+    from ..models import FundingRate
+    import time as _time
+
+    provider = DriftFundingProvider()
     try:
-        rates = provider.fetch_funding_rates(market_index=market_index, market_name=market)
-        if rates:
+        now = int(_time.time())
+        snapshots = provider.fetch_funding(market, now - 7200, now)  # last 2 hours
+        if snapshots:
+            rates = [
+                FundingRate(market=s.market, ts=s.ts, rate=s.rate_hourly,
+                            oracle_price=s.index_price, mark_price=s.mark_price, slot=0)
+                for s in snapshots
+            ]
             return store.upsert_funding_rates(rates)
         return 0
     finally:

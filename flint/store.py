@@ -248,11 +248,12 @@ class FlintStore:
     def upsert_funding_rates(self, rates: List[FundingRate]) -> int:
         if not rates:
             return 0
-        # Reject corrupted rates — valid hourly funding is tiny (|rate| < 0.01)
+        # Reject corrupted rates — valid hourly funding is tiny
+        # Max observed: ~20 bps (0.002). Threshold 0.005 (50 bps) catches all bad data.
         rows = [
             (r.market, r.ts, r.rate, r.oracle_price, r.mark_price, r.slot)
             for r in rates
-            if abs(r.rate) < 0.01
+            if abs(r.rate) < 0.005
         ]
         if not rows:
             return 0

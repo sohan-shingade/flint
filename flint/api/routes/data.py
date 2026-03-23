@@ -78,8 +78,8 @@ def get_funding(
                 _logger.warning("Auto-fetch funding failed for %s: %s", market, e)
 
         # Filter out corrupted rates (from old unfixed providers)
-        # Valid hourly funding rates are tiny: typically |rate| < 0.01 (100 bps)
-        rates = [r for r in rates if abs(r.rate) < 0.01]
+        # Valid hourly funding: max ~20 bps (0.002). Threshold 50 bps (0.005).
+        rates = [r for r in rates if abs(r.rate) < 0.005]
         rates = rates[:limit]
         return {
             "market": market,
