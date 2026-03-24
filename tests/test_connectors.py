@@ -128,12 +128,12 @@ def test_drift_connector_get_price():
 
 
 def test_drift_connector_get_funding():
+    """fetch_funding_rates is deprecated — returns empty list."""
     conn = DriftConnector(client=_mock_drift_client())
     rates = asyncio.get_event_loop().run_until_complete(
         conn.get_funding_rates("SOL-PERP", limit=1)
     )
-    assert len(rates) == 1
-    assert rates[0].market == "SOL-PERP"
+    assert len(rates) == 0  # deprecated endpoint
 
 
 def test_drift_connector_place_order_raises():

@@ -11,7 +11,6 @@ from .tasks import (
     CollectorConfig,
     MARKET_INDEX,
     collect_oracle_prices,
-    collect_funding_rates,
     collect_orderbook,
     collect_candles_backfill,
 )
@@ -77,7 +76,7 @@ class CollectorService:
         """Run a sync collection task in a thread with retry."""
         self.update_status(market, data_type, "collecting")
         retries = 0
-        max_retries = 5
+        max_retries = 2
         while retries < max_retries:
             try:
                 count = await asyncio.to_thread(task_fn)
@@ -87,10 +86,10 @@ class CollectorService:
             except Exception as e:
                 retries += 1
                 if retries >= max_retries:
-                    logger.error("Collection failed for %s/%s: %s", market, data_type, e)
+                    logger.warning("Collection failed for %s/%s: %s", market, data_type, e)
                     self.update_status(market, data_type, "error", error_message=str(e))
                     return
-                wait = min(5 * (2 ** (retries - 1)), 300)
+                wait = 5
                 logger.warning(
                     "Retry %d/%d for %s/%s in %ds: %s",
                     retries, max_retries, market, data_type, wait, e,
@@ -132,13 +131,11 @@ class CollectorService:
             await self.backfill()
 
         last_oracle = 0.0
-        last_funding = 0.0
         last_orderbook = 0.0
 
         while self._running:
             now = time.time()
             for market in self.config.markets:
-                idx = MARKET_INDEX.get(market, 0)
                 if now - last_oracle >= self.config.oracle_interval_s:
                     await self._run_task(
                         market, "oracle",
@@ -149,18 +146,13 @@ class CollectorService:
                         market, "orderbook",
                         lambda m=market: collect_orderbook(self.store, m),
                     )
-                if now - last_funding >= self.config.funding_interval_s:
-                    await self._run_task(
-                        market, "funding",
-                        lambda m=market, i=idx: collect_funding_rates(self.store, m, i),
-                    )
+                # Funding rates are fetched when market data is downloaded
+                # via _download_funding_all_venues(), not by the collector.
 
             if now - last_oracle >= self.config.oracle_interval_s:
                 last_oracle = now
             if now - last_orderbook >= self.config.orderbook_interval_s:
                 last_orderbook = now
-            if now - last_funding >= self.config.funding_interval_s:
-                last_funding = now
             await asyncio.sleep(10)
 
     def stop(self) -> None:

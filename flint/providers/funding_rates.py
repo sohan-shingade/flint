@@ -526,6 +526,318 @@ class DriftFundingProvider:
         return all_rates
 
 
+GATEIO_SYMBOLS = {
+    "SOL-PERP": "SOL_USDT", "BTC-PERP": "BTC_USDT", "ETH-PERP": "ETH_USDT",
+    "DOGE-PERP": "DOGE_USDT", "AVAX-PERP": "AVAX_USDT", "LINK-PERP": "LINK_USDT",
+    "ARB-PERP": "ARB_USDT", "SUI-PERP": "SUI_USDT", "XRP-PERP": "XRP_USDT",
+    "OP-PERP": "OP_USDT", "INJ-PERP": "INJ_USDT", "TIA-PERP": "TIA_USDT",
+    "SEI-PERP": "SEI_USDT", "WIF-PERP": "WIF_USDT", "JUP-PERP": "JUP_USDT",
+    "RENDER-PERP": "RENDER_USDT", "BNB-PERP": "BNB_USDT",
+}
+
+BITGET_SYMBOLS = {
+    "SOL-PERP": "SOLUSDT", "BTC-PERP": "BTCUSDT", "ETH-PERP": "ETHUSDT",
+    "DOGE-PERP": "DOGEUSDT", "AVAX-PERP": "AVAXUSDT", "LINK-PERP": "LINKUSDT",
+    "ARB-PERP": "ARBUSDT", "SUI-PERP": "SUIUSDT", "XRP-PERP": "XRPUSDT",
+    "OP-PERP": "OPUSDT", "INJ-PERP": "INJUSDT", "TIA-PERP": "TIAUSDT",
+    "SEI-PERP": "SEIUSDT", "WIF-PERP": "WIFUSDT", "JUP-PERP": "JUPUSDT",
+    "RENDER-PERP": "RENDERUSDT", "BNB-PERP": "BNBUSDT",
+}
+
+DYDX_SYMBOLS = {
+    "SOL-PERP": "SOL-USD", "BTC-PERP": "BTC-USD", "ETH-PERP": "ETH-USD",
+    "DOGE-PERP": "DOGE-USD", "AVAX-PERP": "AVAX-USD", "LINK-PERP": "LINK-USD",
+    "ARB-PERP": "ARB-USD", "SUI-PERP": "SUI-USD", "XRP-PERP": "XRP-USD",
+    "OP-PERP": "OP-USD", "INJ-PERP": "INJ-USD", "TIA-PERP": "TIA-USD",
+    "SEI-PERP": "SEI-USD", "WIF-PERP": "WIF-USD",
+}
+
+
+class GateioFundingProvider:
+    """Fetch historical funding rates from Gate.io (free, no key, no geo-block)."""
+
+    BASE_URL = "https://api.gateio.ws/api/v4/futures/usdt/funding_rate"
+
+    def __init__(self):
+        self._client = httpx.Client(timeout=15)
+
+    def close(self):
+        self._client.close()
+
+    def fetch_funding(
+        self, market: str, start_ts: int, end_ts: int,
+    ) -> List[FundingSnapshot]:
+        """Fetch Gate.io funding rates. Gate.io pays every 8h."""
+        contract = GATEIO_SYMBOLS.get(market)
+        if contract is None:
+            return []
+
+        all_rates: List[FundingSnapshot] = []
+
+        for _ in range(50):
+            try:
+                params: dict = {
+                    "contract": contract, "limit": 1000,
+                    "from": start_ts, "to": end_ts,
+                }
+                resp = self._client.get(self.BASE_URL, params=params)
+                if resp.status_code != 200:
+                    logger.warning("Gate.io API returned %d", resp.status_code)
+                    break
+
+                records = resp.json()
+                if not records:
+                    break
+
+                for r in records:
+                    ts = int(r.get("t", 0))
+                    rate_8h = float(r.get("r", 0))
+                    if start_ts <= ts <= end_ts:
+                        all_rates.append(FundingSnapshot(
+                            venue="gateio", market=market, ts=ts,
+                            rate_hourly=rate_8h / 8, mark_price=0, index_price=0,
+                        ))
+
+                # Gate.io returns newest-first; stop if oldest is before start
+                oldest = min(int(r.get("t", 0)) for r in records)
+                if oldest <= start_ts or len(records) < 1000:
+                    break
+                end_ts = oldest - 1
+                time.sleep(0.1)
+
+            except Exception as e:
+                logger.error("Gate.io funding error: %s", e)
+                break
+
+        all_rates.sort(key=lambda x: x.ts)
+        return all_rates
+
+
+class BitgetFundingProvider:
+    """Fetch historical funding rates from Bitget (free, no key, no geo-block)."""
+
+    BASE_URL = "https://api.bitget.com/api/v2/mix/market/history-fund-rate"
+
+    def __init__(self):
+        self._client = httpx.Client(timeout=15)
+
+    def close(self):
+        self._client.close()
+
+    def fetch_funding(
+        self, market: str, start_ts: int, end_ts: int,
+    ) -> List[FundingSnapshot]:
+        """Fetch Bitget funding rates. Bitget pays every 8h."""
+        symbol = BITGET_SYMBOLS.get(market)
+        if symbol is None:
+            return []
+
+        all_rates: List[FundingSnapshot] = []
+        page = 1
+
+        for _ in range(50):
+            try:
+                params: dict = {
+                    "symbol": symbol, "productType": "USDT-FUTURES",
+                    "pageSize": 100, "pageNo": page,
+                }
+                resp = self._client.get(self.BASE_URL, params=params)
+                if resp.status_code != 200:
+                    logger.warning("Bitget API returned %d", resp.status_code)
+                    break
+
+                data = resp.json()
+                records = data.get("data", [])
+                if not records:
+                    break
+
+                for r in records:
+                    ts = int(r.get("fundingTime", 0)) // 1000
+                    if ts < start_ts or ts > end_ts:
+                        continue
+                    rate_8h = float(r.get("fundingRate", 0))
+                    all_rates.append(FundingSnapshot(
+                        venue="bitget", market=market, ts=ts,
+                        rate_hourly=rate_8h / 8, mark_price=0, index_price=0,
+                    ))
+
+                # Check if we've gone past our range
+                oldest = min(int(r.get("fundingTime", 0)) // 1000 for r in records)
+                if oldest < start_ts or len(records) < 100:
+                    break
+                page += 1
+                time.sleep(0.1)
+
+            except Exception as e:
+                logger.error("Bitget funding error: %s", e)
+                break
+
+        all_rates.sort(key=lambda x: x.ts)
+        return all_rates
+
+
+class DydxFundingProvider:
+    """Fetch historical funding rates from dYdX v4 (free, no key, no geo-block)."""
+
+    BASE_URL = "https://indexer.dydx.trade/v4/historicalFunding"
+
+    def __init__(self):
+        self._client = httpx.Client(timeout=15)
+
+    def close(self):
+        self._client.close()
+
+    def fetch_funding(
+        self, market: str, start_ts: int, end_ts: int,
+    ) -> List[FundingSnapshot]:
+        """Fetch dYdX funding rates. dYdX pays every 1h."""
+        ticker = DYDX_SYMBOLS.get(market)
+        if ticker is None:
+            return []
+
+        all_rates: List[FundingSnapshot] = []
+        url = f"{self.BASE_URL}/{ticker}"
+        # dYdX uses effectiveBeforeOrAt for pagination (ISO string)
+        cursor_time = None
+
+        for _ in range(100):
+            try:
+                params: dict = {"limit": 500}
+                if cursor_time:
+                    params["effectiveBeforeOrAt"] = cursor_time
+
+                resp = self._client.get(url, params=params)
+                if resp.status_code != 200:
+                    logger.warning("dYdX API returned %d", resp.status_code)
+                    break
+
+                data = resp.json()
+                records = data.get("historicalFunding", [])
+                if not records:
+                    break
+
+                from datetime import datetime, timezone
+                found_before_start = False
+                for r in records:
+                    try:
+                        dt = datetime.fromisoformat(r["effectiveAt"].replace("Z", "+00:00"))
+                        ts = int(dt.timestamp())
+                    except Exception:
+                        continue
+                    if ts < start_ts:
+                        found_before_start = True
+                        continue
+                    if ts > end_ts:
+                        continue
+                    rate = float(r.get("rate", 0))
+                    price = float(r.get("price", 0))
+                    all_rates.append(FundingSnapshot(
+                        venue="dydx", market=market, ts=ts,
+                        rate_hourly=rate, mark_price=price, index_price=price,
+                    ))
+
+                if found_before_start or len(records) < 500:
+                    break
+
+                # Paginate: use oldest record's time
+                cursor_time = records[-1]["effectiveAt"]
+                time.sleep(0.1)
+
+            except Exception as e:
+                logger.error("dYdX funding error: %s", e)
+                break
+
+        all_rates.sort(key=lambda x: x.ts)
+        return all_rates
+
+
+class CCXTFundingProvider:
+    """Fetch funding rates from any exchange via CCXT.
+
+    Usage:
+        provider = CCXTFundingProvider("mexc")
+        rates = provider.fetch_funding("SOL-PERP", start_ts, end_ts)
+    """
+
+    # Map Flint market names to CCXT unified symbols
+    CCXT_SYMBOLS = {
+        "SOL-PERP": "SOL/USDT:USDT", "BTC-PERP": "BTC/USDT:USDT",
+        "ETH-PERP": "ETH/USDT:USDT", "DOGE-PERP": "DOGE/USDT:USDT",
+        "AVAX-PERP": "AVAX/USDT:USDT", "LINK-PERP": "LINK/USDT:USDT",
+        "ARB-PERP": "ARB/USDT:USDT", "SUI-PERP": "SUI/USDT:USDT",
+        "XRP-PERP": "XRP/USDT:USDT", "OP-PERP": "OP/USDT:USDT",
+        "INJ-PERP": "INJ/USDT:USDT", "WIF-PERP": "WIF/USDT:USDT",
+        "JUP-PERP": "JUP/USDT:USDT", "BNB-PERP": "BNB/USDT:USDT",
+        "RENDER-PERP": "RENDER/USDT:USDT", "TIA-PERP": "TIA/USDT:USDT",
+        "SEI-PERP": "SEI/USDT:USDT",
+    }
+
+    def __init__(self, exchange: str = "mexc"):
+        self._exchange_name = exchange
+        self._exchange = None
+
+    def _get_exchange(self):
+        if self._exchange is None:
+            try:
+                import ccxt as _ccxt
+                cls = getattr(_ccxt, self._exchange_name, None)
+                if cls is None:
+                    raise ValueError(f"Unknown exchange: {self._exchange_name}")
+                self._exchange = cls({"enableRateLimit": True})
+            except ImportError:
+                raise ImportError("ccxt not installed — run: pip install ccxt")
+        return self._exchange
+
+    def close(self):
+        self._exchange = None
+
+    def fetch_funding(
+        self, market: str, start_ts: int, end_ts: int,
+    ) -> List[FundingSnapshot]:
+        symbol = self.CCXT_SYMBOLS.get(market)
+        if symbol is None:
+            return []
+
+        ex = self._get_exchange()
+        all_rates: List[FundingSnapshot] = []
+        cursor = start_ts * 1000  # CCXT uses ms
+
+        for _ in range(100):
+            try:
+                rates = ex.fetch_funding_rate_history(symbol, since=cursor, limit=500)
+                if not rates:
+                    break
+
+                for r in rates:
+                    ts = r.get("timestamp", 0) // 1000
+                    if ts < start_ts or ts > end_ts:
+                        continue
+                    rate = float(r.get("fundingRate", 0))
+                    # Most exchanges use 8h funding, normalize to 1h
+                    rate_1h = rate / 8
+                    all_rates.append(FundingSnapshot(
+                        venue=self._exchange_name, market=market, ts=ts,
+                        rate_hourly=rate_1h, mark_price=0, index_price=0,
+                    ))
+
+                last_ts = rates[-1].get("timestamp", 0)
+                if last_ts <= cursor or last_ts // 1000 > end_ts:
+                    break
+                cursor = last_ts + 1
+                time.sleep(0.2)
+
+            except Exception as e:
+                logger.error("CCXT %s funding error: %s", self._exchange_name, e)
+                break
+
+        all_rates.sort(key=lambda x: x.ts)
+        return all_rates
+
+
+# Default CCXT exchanges to include in funding downloads
+CCXT_FUNDING_EXCHANGES = ["mexc", "phemex", "bitmex"]
+
+
 # ─── Cross-venue aggregator ──────────────────────────
 
 class CrossVenueFunding:

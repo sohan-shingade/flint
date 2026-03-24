@@ -127,19 +127,26 @@ class CoinGeckoProvider(DataProvider):
     ) -> List[Candle]:
         """Fetch one chunk (<=90 days) of data."""
         try:
-            resp = self._client.get(
-                f"{_BASE}/coins/{coin_id}/market_chart/range",
-                params={"vs_currency": "usd", "from": start_ts, "to": end_ts},
-            )
-            if resp.status_code == 429:
-                logger.warning("CoinGecko rate limited, waiting 60s...")
-                time.sleep(60)
-                resp = self._client.get(
-                    f"{_BASE}/coins/{coin_id}/market_chart/range",
-                    params={"vs_currency": "usd", "from": start_ts, "to": end_ts},
-                )
-            if resp.status_code != 200:
-                logger.warning("CoinGecko %d for %s", resp.status_code, coin_id)
+            url = f"{_BASE}/coins/{coin_id}/market_chart/range"
+            params = {"vs_currency": "usd", "from": start_ts, "to": end_ts}
+
+            resp = None
+            for attempt in range(3):
+                try:
+                    resp = self._client.get(url, params=params)
+                except Exception as e:
+                    logger.warning("CoinGecko request error (attempt %d): %s", attempt + 1, e)
+                    time.sleep(2 ** attempt)
+                    continue
+                if resp.status_code == 429:
+                    wait = min(60 * (attempt + 1), 120)
+                    logger.warning("CoinGecko rate limited, waiting %ds (attempt %d)...", wait, attempt + 1)
+                    time.sleep(wait)
+                    continue
+                break
+
+            if resp is None or resp.status_code != 200:
+                logger.warning("CoinGecko %s for %s", resp.status_code if resp else "no response", coin_id)
                 return []
 
             data = resp.json()

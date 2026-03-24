@@ -40,31 +40,15 @@ class DriftDataProvider:
         market_name: str = "SOL-PERP",
         limit: int = 100,
     ) -> List[FundingRate]:
-        resp = self._client.get(
-            f"{_DATA_API}/fundingRates",
-            params={"marketIndex": market_index, "limit": limit},
+        """DEPRECATED: This endpoint (/fundingRates?marketIndex=) returns 404.
+        Use DriftFundingProvider from providers/funding_rates.py instead.
+        """
+        import logging
+        logging.getLogger("flint.providers.drift_api").warning(
+            "fetch_funding_rates() is deprecated — Drift removed /fundingRates endpoint. "
+            "Use DriftFundingProvider instead."
         )
-        resp.raise_for_status()
-        data = resp.json()
-        records = data.get("fundingRates", [])
-        rates: List[FundingRate] = []
-        for r in records:
-            raw_rate = int(r["fundingRate"]) / _PRICE_PRECISION
-            oracle_price = int(r["oraclePriceTwap"]) / _PRICE_PRECISION
-            mark_price = int(r["markPriceTwap"]) / _PRICE_PRECISION
-            # Normalize: raw rate is dollar-denominated, divide by oracle for fractional rate
-            rate = raw_rate / oracle_price if oracle_price > 0 else raw_rate
-            rates.append(
-                FundingRate(
-                    market=market_name,
-                    ts=int(r["ts"]),
-                    rate=rate,
-                    oracle_price=oracle_price,
-                    mark_price=mark_price,
-                    slot=int(r.get("slot", 0)),
-                )
-            )
-        return rates
+        return []
 
     # -- orderbook ------------------------------------------------------------
 

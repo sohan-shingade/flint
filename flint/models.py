@@ -130,6 +130,7 @@ class FundingRate:
     oracle_price: float
     mark_price: float
     slot: int = 0
+    source: str = "drift"  # "drift", "hyperliquid", "drift_s3"
 
 
 @dataclass(frozen=True)

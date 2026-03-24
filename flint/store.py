@@ -27,18 +27,6 @@ CREATE TABLE IF NOT EXISTS candles (
 );
 """
 
-_CREATE_FUNDING_RATES = """
-CREATE TABLE IF NOT EXISTS funding_rates (
-    market       VARCHAR NOT NULL,
-    ts           BIGINT  NOT NULL,
-    rate         DOUBLE  NOT NULL,
-    oracle_price DOUBLE  NOT NULL,
-    mark_price   DOUBLE  NOT NULL,
-    slot         BIGINT  NOT NULL DEFAULT 0,
-    PRIMARY KEY (market, ts)
-);
-"""
-
 _CREATE_ORACLE_PRICES = """
 CREATE TABLE IF NOT EXISTS oracle_prices (
     market  VARCHAR NOT NULL,
@@ -177,11 +165,25 @@ class FlintStore:
         except Exception:
             pass
         self._conn.execute(_CREATE_CANDLES)
-        self._conn.execute(_CREATE_FUNDING_RATES)
         self._conn.execute(_CREATE_ORACLE_PRICES)
         self._conn.execute(_CREATE_ORDERBOOK_SNAPSHOTS)
         self._conn.execute(_CREATE_POOL_SNAPSHOTS)
         self._conn.execute(_CREATE_VENUE_FUNDING)
+        # Migrate: if old funding_rates table exists, copy data to venue_funding_rates
+        try:
+            count = self._conn.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'funding_rates'"
+            ).fetchone()[0]
+            if count > 0:
+                self._conn.execute("""
+                    INSERT OR IGNORE INTO venue_funding_rates (venue, market, ts, rate_hourly, mark_price, index_price)
+                    SELECT COALESCE(source, 'drift'), market, ts, rate, mark_price, oracle_price
+                    FROM funding_rates
+                    WHERE ABS(rate) < 0.005
+                """)
+                self._conn.execute("DROP TABLE funding_rates")
+        except Exception:
+            pass
         self._conn.execute(_CREATE_OPEN_INTEREST)
         self._conn.execute(_CREATE_LIQUIDATIONS)
         self._conn.execute(_CREATE_WHALE_TRANSFERS)
@@ -198,13 +200,17 @@ class FlintStore:
             (c.market, c.resolution_s, c.ts, c.open, c.high, c.low, c.close, c.volume)
             for c in candles
         ]
-        with self._lock:
-            self._conn.executemany(
-                "INSERT OR REPLACE INTO candles "
-                "(market, resolution_s, ts, open, high, low, close, volume) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                rows,
-            )
+        # Batch inserts to avoid holding lock too long (max 2000 rows per batch)
+        batch_size = 2000
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i:i + batch_size]
+            with self._lock:
+                self._conn.executemany(
+                    "INSERT OR REPLACE INTO candles "
+                    "(market, resolution_s, ts, open, high, low, close, volume) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    batch,
+                )
         return len(rows)
 
     def query_candles(
@@ -246,24 +252,28 @@ class FlintStore:
     # -- funding rates ---------------------------------------------------------
 
     def upsert_funding_rates(self, rates: List[FundingRate]) -> int:
+        """Insert funding rates into venue_funding_rates table.
+        Backward-compatible: converts FundingRate objects to venue format.
+        """
         if not rates:
             return 0
-        # Reject corrupted rates — valid hourly funding is tiny
-        # Max observed: ~20 bps (0.002). Threshold 0.005 (50 bps) catches all bad data.
         rows = [
-            (r.market, r.ts, r.rate, r.oracle_price, r.mark_price, r.slot)
+            (r.source if r.source else 'drift', r.market, r.ts, r.rate, r.mark_price, r.oracle_price)
             for r in rates
-            if abs(r.rate) < 0.005
+            if abs(r.rate) < 0.005  # reject corrupted rates
         ]
         if not rows:
             return 0
-        with self._lock:
-            self._conn.executemany(
-                "INSERT OR REPLACE INTO funding_rates "
-                "(market, ts, rate, oracle_price, mark_price, slot) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                rows,
-            )
+        batch_size = 2000
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i:i + batch_size]
+            with self._lock:
+                self._conn.executemany(
+                    "INSERT OR REPLACE INTO venue_funding_rates "
+                    "(venue, market, ts, rate_hourly, mark_price, index_price) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    batch,
+                )
         return len(rows)
 
     def query_funding_rates(
@@ -271,9 +281,19 @@ class FlintStore:
         market: str,
         start_ts: Optional[int] = None,
         end_ts: Optional[int] = None,
+        venue: Optional[str] = None,
     ) -> List[FundingRate]:
-        sql = "SELECT market, ts, rate, oracle_price, mark_price, slot FROM funding_rates WHERE market = ?"
-        params: list = [market]
+        """Query funding rates from venue_funding_rates.
+
+        If venue is specified, returns only that venue's rates.
+        Otherwise returns all venues' rates (one per ts, prefers drift).
+        """
+        if venue:
+            sql = "SELECT venue, market, ts, rate_hourly, mark_price, index_price FROM venue_funding_rates WHERE market = ? AND venue = ?"
+            params: list = [market, venue]
+        else:
+            sql = "SELECT venue, market, ts, rate_hourly, mark_price, index_price FROM venue_funding_rates WHERE market = ?"
+            params = [market]
         if start_ts is not None:
             sql += " AND ts >= ?"
             params.append(start_ts)
@@ -284,10 +304,38 @@ class FlintStore:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [
-            FundingRate(market=r[0], ts=r[1], rate=r[2], oracle_price=r[3],
-                        mark_price=r[4], slot=r[5])
+            FundingRate(market=r[1], ts=r[2], rate=r[3], oracle_price=r[5],
+                        mark_price=r[4], slot=0, source=r[0])
             for r in rows
         ]
+
+    def query_funding_by_venue(
+        self,
+        market: str,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> dict:
+        """Query funding rates grouped by venue.
+        Returns {venue: [{ts, rate, mark_price, index_price}, ...]}
+        """
+        sql = "SELECT venue, ts, rate_hourly, mark_price, index_price FROM venue_funding_rates WHERE market = ?"
+        params: list = [market]
+        if start_ts is not None:
+            sql += " AND ts >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            sql += " AND ts <= ?"
+            params.append(end_ts)
+        sql += " ORDER BY venue, ts ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        result: dict = {}
+        for r in rows:
+            venue = r[0]
+            if venue not in result:
+                result[venue] = []
+            result[venue].append({"ts": r[1], "rate": r[2], "mark_price": r[3], "index_price": r[4]})
+        return result
 
     # -- oracle prices ---------------------------------------------------------
 

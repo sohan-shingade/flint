@@ -53,75 +53,17 @@ def get_funding(
     market: str = Query("SOL-PERP"),
     start_ts: Optional[int] = Query(None),
     end_ts: Optional[int] = Query(None),
-    limit: int = Query(10000, le=50000),
 ):
-    import logging as _logging
-    _logger = _logging.getLogger("flint.api.data")
-
+    """Get funding rates for a market, grouped by venue."""
     store = _get_store(request)
     if store is None:
-        return {"market": market, "count": 0, "rates": []}
+        return {"market": market, "venues": {}, "count": 0}
     try:
-        rates = store.query_funding_rates(market, start_ts, end_ts)
-
-        # Auto-fetch funding if none in DB for this market
-        if not rates and "-PERP" in market:
-            try:
-                import time as _t
-                now = int(_t.time())
-                # Use the widest range: either requested range or 1 year back
-                fetch_start = min(start_ts or now - 365 * 86400, now - 365 * 86400)
-                fetch_end = max(end_ts or now, now)
-                _sync_funding_to_candle_range(store, market, fetch_start, fetch_end, _logger)
-                rates = store.query_funding_rates(market, start_ts, end_ts)
-            except Exception as e:
-                _logger.warning("Auto-fetch funding failed for %s: %s", market, e)
-
-        # Filter out corrupted rates (from old unfixed providers)
-        # Valid hourly funding: max ~20 bps (0.002). Threshold 50 bps (0.005).
-        rates = [r for r in rates if abs(r.rate) < 0.005]
-        rates = rates[:limit]
-        return {
-            "market": market,
-            "count": len(rates),
-            "rates": [
-                {"ts": r.ts, "rate": r.rate,
-                 "oracle_price": r.oracle_price, "mark_price": r.mark_price}
-                for r in rates
-            ],
-        }
+        by_venue = store.query_funding_by_venue(market, start_ts, end_ts)
+        total = sum(len(v) for v in by_venue.values())
+        return {"market": market, "venues": by_venue, "count": total}
     except Exception as e:
-        return {"market": market, "count": 0, "rates": [], "error": str(e)}
-
-
-@router.post("/sync-funding")
-def sync_funding(request: Request, body: dict):
-    """Sync funding rate data to match candle coverage for a market.
-
-    Body: { "market": "SOL-PERP" }
-    """
-    import logging
-    _logger = logging.getLogger("flint.api.data")
-
-    market = body.get("market", "")
-    if not market or "-PERP" not in market:
-        return {"market": market, "synced": 0, "error": "Only perp markets have funding rates"}
-
-    store = _get_store(request)
-    if store is None:
-        return {"market": market, "synced": 0, "error": "Store not available"}
-
-    # Get candle range for this market
-    candles = store.query_candles(market, 3600)
-    if not candles:
-        return {"market": market, "synced": 0, "error": "No candle data — download candles first"}
-
-    start_ts = candles[0].ts
-    end_ts = candles[-1].ts
-
-    synced = _sync_funding_to_candle_range(store, market, start_ts, end_ts, _logger)
-
-    return {"market": market, "synced": synced, "candle_range": [start_ts, end_ts]}
+        return {"market": market, "venues": {}, "count": 0, "error": str(e)}
 
 
 @router.delete("/market/{market}")
@@ -138,7 +80,7 @@ def delete_market_data(market: str, request: Request):
     deleted = {}
     tables = [
         ("candles", "market"),
-        ("funding_rates", "market"),
+        ("venue_funding_rates", "market"),
         ("oracle_prices", "market"),
         ("orderbook_snapshots", "market"),
         ("open_interest", "market"),
@@ -238,116 +180,6 @@ def check_data(
             "coverage_pct": 0, "total_in_db": 0, "will_backfill": True,
             "first_ts": None, "last_ts": None, "error": str(e),
         }
-
-
-@router.get("/venues")
-def list_venues(request: Request, market: Optional[str] = Query(None)):
-    """List venues with funding rate data."""
-    store = _get_store(request)
-    if store is None:
-        return {"venues": []}
-    try:
-        return {"venues": store.list_venues(market)}
-    except Exception:
-        return {"venues": []}
-
-
-@router.get("/cross-venue-funding")
-def get_cross_venue_funding(
-    request: Request,
-    market: str = Query("SOL-PERP"),
-    venues: str = Query("drift,hyperliquid", description="Comma-separated venue names"),
-    start_ts: Optional[int] = Query(None),
-    end_ts: Optional[int] = Query(None),
-):
-    """Fetch funding rates from multiple venues for comparison.
-
-    Available venues: drift, hyperliquid, okx, bybit, binance (US geo-blocked).
-    Returns per-venue rates normalized to hourly, plus a benchmark average.
-    """
-    import logging
-    _logger = logging.getLogger("flint.api.data")
-
-    store = _get_store(request)
-    venue_list = [v.strip().lower() for v in venues.split(",") if v.strip()]
-
-    if not venue_list:
-        return {"market": market, "venues": {}, "benchmark": []}
-
-    import time as _time
-    now = int(_time.time())
-    if not start_ts:
-        start_ts = now - 90 * 86400
-    if not end_ts:
-        end_ts = now
-
-    # Check local venue_funding_rates table first
-    result: dict = {}
-    needs_fetch = []
-
-    for venue in venue_list:
-        local = store.query_venue_funding(venue, market, start_ts, end_ts)
-        if local:
-            result[venue] = [{"ts": r["ts"], "rate": r["rate_hourly"], "mark": r["mark_price"]} for r in local]
-        else:
-            needs_fetch.append(venue)
-
-    # Fetch missing venues from providers
-    if needs_fetch:
-        from ...providers.funding_rates import (
-            DriftFundingProvider, HyperliquidFundingProvider,
-            OKXFundingProvider, BybitFundingProvider, BinanceFundingProvider,
-        )
-        providers_map = {
-            "drift": DriftFundingProvider,
-            "hyperliquid": HyperliquidFundingProvider,
-            "okx": OKXFundingProvider,
-            "bybit": BybitFundingProvider,
-            "binance": BinanceFundingProvider,
-        }
-
-        for venue in needs_fetch:
-            cls = providers_map.get(venue)
-            if not cls:
-                continue
-            try:
-                provider = cls()
-                snapshots = provider.fetch_funding(market, start_ts, end_ts)
-                provider.close()
-
-                if snapshots:
-                    # Store in venue_funding_rates table
-                    store.upsert_venue_funding(snapshots)
-                    result[venue] = [
-                        {"ts": s.ts, "rate": s.rate_hourly, "mark": s.mark_price}
-                        for s in snapshots
-                    ]
-                    _logger.info("Fetched %d %s funding rates for %s", len(snapshots), venue, market)
-            except Exception as e:
-                _logger.warning("Failed to fetch %s funding for %s: %s", venue, market, e)
-                result[venue] = []
-
-    # Compute benchmark (average across venues per hour)
-    benchmark: list = []
-    if len(result) >= 2:
-        all_hours: dict = {}
-        for venue, rates in result.items():
-            for r in rates:
-                hour = (r["ts"] // 3600) * 3600
-                if hour not in all_hours:
-                    all_hours[hour] = []
-                all_hours[hour].append(r["rate"])
-        for hour in sorted(all_hours.keys()):
-            vals = all_hours[hour]
-            if len(vals) >= 2:
-                benchmark.append({"ts": hour, "rate": sum(vals) / len(vals)})
-
-    return {
-        "market": market,
-        "venues": {v: {"count": len(r), "rates": r} for v, r in result.items()},
-        "benchmark": benchmark,
-        "available_venues": ["drift", "hyperliquid", "okx", "bybit", "binance"],
-    }
 
 
 # ── New data endpoints ────────────────────────────────────────────────
@@ -553,6 +385,7 @@ def download_market_data(request: Request, body: dict):
     resolution_s = body.get("resolution_s", 3600)
     start_ts = body.get("start_ts")
     end_ts = body.get("end_ts")
+    funding_venues = body.get("funding_venues")  # optional list of venue IDs
 
     if not start_ts or not end_ts or start_ts >= end_ts:
         from fastapi import HTTPException
@@ -563,210 +396,267 @@ def download_market_data(request: Request, body: dict):
         from fastapi import HTTPException
         raise HTTPException(500, "Store not available")
 
-    # Check what we already have
-    existing = store.query_candles(market, resolution_s, start_ts, end_ts)
-    existing_count = len(existing)
+    try:
+        # Check what we already have
+        existing = store.query_candles(market, resolution_s, start_ts, end_ts)
+        existing_count = len(existing)
 
-    # Determine what ranges we still need to download
-    # If we have data, only fetch the gaps (before first candle, after last candle)
-    gaps = []
-    if not existing:
-        # No local data at all — download everything
-        gaps.append((start_ts, end_ts))
-    else:
-        first_ts = existing[0].ts
-        last_ts = existing[-1].ts
-        # Gap at the beginning?
-        if first_ts > start_ts + resolution_s:
-            gaps.append((start_ts, first_ts))
-        # Gap at the end?
-        if last_ts < end_ts - resolution_s:
-            gaps.append((last_ts, end_ts))
+        # Determine what ranges we still need to download
+        gaps = []
+        if not existing:
+            gaps.append((start_ts, end_ts))
+        else:
+            first_ts = existing[0].ts
+            last_ts = existing[-1].ts
+            if first_ts > start_ts + resolution_s:
+                gaps.append((start_ts, first_ts))
+            if last_ts < end_ts - resolution_s:
+                gaps.append((last_ts, end_ts))
 
-    if not gaps:
-        # Candles fully covered — but still check funding coverage
+        if not gaps:
+            funding_fetched = 0
+            if "-PERP" in market:
+                try:
+                    funding_fetched = _download_funding_all_venues(store, market, start_ts, end_ts, logger, venues=funding_venues)
+                except Exception as e:
+                    logger.warning("Funding sync failed for %s: %s", market, e)
+            return {
+                "market": market,
+                "resolution_s": resolution_s,
+                "downloaded": 0,
+                "cached": 0,
+                "existing": existing_count,
+                "total": existing_count,
+                "funding_fetched": funding_fetched,
+                "source": "local",
+                "skipped": True,
+            }
+
+        # Download only the missing gaps
+        total_fetched = 0
+        total_cached = 0
+        source = "none"
+        errors: list = []
+
+        for gap_start, gap_end in gaps:
+            fetched, err = _download_range(market, resolution_s, gap_start, gap_end, logger)
+            if fetched:
+                total_fetched += len(fetched)
+                total_cached += store.upsert_candles(fetched)
+                source = "drift_api"
+            if err:
+                errors.append(err)
+
+        # Re-count total
+        final_count = len(store.query_candles(market, resolution_s, start_ts, end_ts))
+
+        # Also fetch funding rates for perp markets
         funding_fetched = 0
         if "-PERP" in market:
-            funding_fetched = _sync_funding_to_candle_range(store, market, start_ts, end_ts, logger)
+            try:
+                funding_fetched = _download_funding_all_venues(store, market, start_ts, end_ts, logger)
+            except Exception as e:
+                logger.warning("Funding sync failed for %s: %s", market, e)
+
+        result = {
+            "market": market,
+            "resolution_s": resolution_s,
+            "downloaded": total_fetched,
+            "cached": total_cached,
+            "existing": existing_count,
+            "total": final_count,
+            "funding_fetched": funding_fetched,
+            "source": source,
+        }
+        if errors:
+            result["error"] = "; ".join(errors)
+        return result
+
+    except Exception as e:
+        logger.error("Download failed for %s: %s", market, e)
         return {
             "market": market,
             "resolution_s": resolution_s,
             "downloaded": 0,
             "cached": 0,
-            "existing": existing_count,
-            "total": existing_count,
-            "funding_fetched": funding_fetched,
-            "source": "local",
-            "skipped": True,
+            "existing": 0,
+            "total": 0,
+            "error": str(e),
         }
 
-    # Download only the missing gaps
-    total_fetched = 0
-    total_cached = 0
-    source = "none"
 
-    for gap_start, gap_end in gaps:
-        fetched = _download_range(market, resolution_s, gap_start, gap_end, logger)
-        if fetched:
-            total_fetched += len(fetched)
-            total_cached += store.upsert_candles(fetched)
-            source = fetched[0].market  # will be overwritten below
+def _download_range(market: str, resolution_s: int, start_ts: int, end_ts: int, logger):
+    """Try all providers in order for a specific time range.
 
-    # Determine source used
-    if total_fetched > 0:
-        source = "drift_api"  # default, gets overwritten by _download_range
+    Returns (candles, error_message) tuple.
+    """
+    errors = []
 
-    # Re-count total
-    final_count = len(store.query_candles(market, resolution_s, start_ts, end_ts))
-
-    # Also fetch funding rates for perp markets to match candle coverage
-    funding_fetched = 0
-    if "-PERP" in market:
-        funding_fetched = _sync_funding_to_candle_range(store, market, start_ts, end_ts, logger)
-
-    return {
-        "market": market,
-        "resolution_s": resolution_s,
-        "downloaded": total_fetched,
-        "cached": total_cached,
-        "existing": existing_count,
-        "total": final_count,
-        "funding_fetched": funding_fetched,
-        "source": source,
-    }
-
-
-def _download_range(market: str, resolution_s: int, start_ts: int, end_ts: int, logger) -> list:
-    """Try all providers in order for a specific time range."""
     # Try Drift Data API
     try:
         from ...providers.drift_candles import DriftCandleProvider
         provider = DriftCandleProvider()
-        fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
-        provider.close()
+        try:
+            fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+        finally:
+            provider.close()
         if fetched:
-            return fetched
+            return fetched, None
     except Exception as e:
+        errors.append(f"Drift API: {e}")
         logger.warning("Drift API failed for %s: %s", market, e)
 
     # Fallback to S3
     try:
         from ...providers.drift_s3 import DriftS3Provider
         provider = DriftS3Provider()
-        fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
-        provider.close()
+        try:
+            fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+        finally:
+            provider.close()
         if fetched:
-            return fetched
+            return fetched, None
     except Exception as e:
+        errors.append(f"S3: {e}")
         logger.warning("Drift S3 failed for %s: %s", market, e)
 
     # Fallback to CoinGecko
     try:
         from ...providers.coingecko import CoinGeckoProvider
         cg = CoinGeckoProvider()
-        if cg.resolve_id(market):
-            fetched = cg.fetch_candles(market, resolution_s, start_ts, end_ts)
+        try:
+            if cg.resolve_id(market):
+                fetched = cg.fetch_candles(market, resolution_s, start_ts, end_ts)
+                if fetched:
+                    return fetched, None
+        finally:
             cg.close()
-            if fetched:
-                return fetched
     except Exception as e:
+        errors.append(f"CoinGecko: {e}")
         logger.warning("CoinGecko failed for %s: %s", market, e)
 
-    return []
+    return [], "; ".join(errors) if errors else "No provider found"
 
 
-def _sync_funding_to_candle_range(store, market: str, start_ts: int, end_ts: int, logger) -> int:
-    """Ensure funding rate data covers the same range as candle data.
+FUNDING_VENUES = ["drift", "hyperliquid", "okx", "bybit", "gateio", "bitget", "dydx"]
 
-    Checks local funding coverage vs the requested candle range and
-    fetches missing funding data from Drift to fill gaps.
+
+def _forward_fill_to_hourly(snapshots: list) -> list:
+    """Forward-fill funding snapshots to hourly resolution.
+
+    Venues like OKX/Bybit report every 8h. This fills intermediate hours
+    with the previous rate so the DB always has hourly data. Gaps >24h
+    are left empty (not filled).
     """
-    from ...collector.tasks import MARKET_INDEX
+    if not snapshots:
+        return snapshots
 
-    market_index = MARKET_INDEX.get(market)
-    if market_index is None:
+    from ...providers.funding_rates import FundingSnapshot
+
+    sorted_snaps = sorted(snapshots, key=lambda s: s.ts)
+    filled = []
+
+    for i, snap in enumerate(sorted_snaps):
+        hour_ts = (snap.ts // 3600) * 3600
+        filled.append(FundingSnapshot(
+            venue=snap.venue, market=snap.market, ts=hour_ts,
+            rate_hourly=snap.rate_hourly, mark_price=snap.mark_price,
+            index_price=snap.index_price,
+        ))
+
+        # Forward-fill hourly until next point (max 24h)
+        if i < len(sorted_snaps) - 1:
+            next_ts = (sorted_snaps[i + 1].ts // 3600) * 3600
+            gap = next_ts - hour_ts
+            if 3600 < gap <= 86400:
+                t = hour_ts + 3600
+                while t < next_ts:
+                    filled.append(FundingSnapshot(
+                        venue=snap.venue, market=snap.market, ts=t,
+                        rate_hourly=snap.rate_hourly, mark_price=snap.mark_price,
+                        index_price=snap.index_price,
+                    ))
+                    t += 3600
+
+    return filled
+
+
+def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int, logger, venues=None) -> int:
+    """Download funding rates for a market from selected venues.
+
+    Args:
+        venues: Optional list of venue IDs to download from.
+                If None, downloads from all available venues.
+    """
+    if "-PERP" not in market:
         return 0
 
-    existing_funding = store.query_funding_rates(market, start_ts, end_ts)
-    total_fetched = 0
+    from ...providers.funding_rates import (
+        DriftFundingProvider, HyperliquidFundingProvider,
+        OKXFundingProvider, BybitFundingProvider,
+        GateioFundingProvider, BitgetFundingProvider, DydxFundingProvider,
+        CCXTFundingProvider, CCXT_FUNDING_EXCHANGES,
+    )
 
-    # Determine funding gaps relative to the candle range
-    funding_gaps = []
-    if not existing_funding:
-        funding_gaps.append((start_ts, end_ts))
+    native_providers: dict = {
+        "drift": DriftFundingProvider,
+        "hyperliquid": HyperliquidFundingProvider,
+        "okx": OKXFundingProvider,
+        "bybit": BybitFundingProvider,
+        "gateio": GateioFundingProvider,
+        "bitget": BitgetFundingProvider,
+        "dydx": DydxFundingProvider,
+    }
+
+    ccxt_exchanges = set(CCXT_FUNDING_EXCHANGES)
+
+    # If venues specified, filter to only those
+    if venues is not None:
+        venue_set = set(venues)
     else:
-        first_funding = existing_funding[0].ts
-        last_funding = existing_funding[-1].ts
-        if first_funding > start_ts + 7200:  # gap > 2h at start
-            funding_gaps.append((start_ts, first_funding))
-        if last_funding < end_ts - 7200:  # gap > 2h at end
-            funding_gaps.append((last_funding, end_ts))
+        venue_set = set(native_providers.keys()) | ccxt_exchanges
 
-    if not funding_gaps:
-        return 0
+    total = 0
 
-    from ...models import FundingRate
-
-    for gap_start, gap_end in funding_gaps:
-        all_rates: list = []
-        seen_ts: set = set()
-
-        def _add_rates(rates):
-            for r in rates:
-                if r.ts not in seen_ts:
-                    seen_ts.add(r.ts)
-                    all_rates.append(r)
-
-        # Source 1: Drift Data API (recent ~30 days)
+    # Native providers
+    for venue, ProviderClass in native_providers.items():
+        if venue not in venue_set:
+            continue
         try:
-            from ...providers.funding_rates import DriftFundingProvider
-            provider = DriftFundingProvider()
-            snapshots = provider.fetch_funding(market, gap_start, gap_end)
-            provider.close()
+            provider = ProviderClass()
+            try:
+                snapshots = provider.fetch_funding(market, start_ts, end_ts)
+            finally:
+                provider.close()
             if snapshots:
-                _add_rates([
-                    FundingRate(market=s.market, ts=s.ts, rate=s.rate_hourly,
-                                oracle_price=s.index_price, mark_price=s.mark_price, slot=0)
-                    for s in snapshots
-                ])
-                logger.info("Drift API: %d funding rates for %s", len(snapshots), market)
+                hourly = _forward_fill_to_hourly(snapshots)
+                stored = store.upsert_venue_funding(hourly)
+                total += stored
+                logger.info("%s: %d raw → %d hourly funding rates for %s",
+                            venue, len(snapshots), stored, market)
         except Exception as e:
-            logger.warning("Drift API funding failed for %s: %s", market, e)
+            logger.warning("%s funding failed for %s: %s", venue, market, e)
 
-        # Source 2: Drift S3 (2022 - Jan 2025, daily CSV files)
+    # CCXT exchanges (mexc, phemex, bitmex, etc.)
+    for exchange in ccxt_exchanges:
+        if exchange not in venue_set:
+            continue
         try:
-            from ...providers.drift_s3 import DriftS3Provider
-            s3 = DriftS3Provider()
-            s3_rates = s3.fetch_funding_rates(market, gap_start, gap_end)
-            s3.close()
-            if s3_rates:
-                _add_rates(s3_rates)
-                logger.info("Drift S3: %d funding rates for %s", len(s3_rates), market)
-        except Exception as e:
-            logger.warning("Drift S3 funding failed for %s: %s", market, e)
-
-        # Source 3: Hyperliquid (1 year history, hourly — fills the gap)
-        try:
-            from ...providers.funding_rates import HyperliquidFundingProvider
-            hl = HyperliquidFundingProvider()
-            snapshots = hl.fetch_funding(market, gap_start, gap_end)
-            hl.close()
+            provider = CCXTFundingProvider(exchange)
+            try:
+                snapshots = provider.fetch_funding(market, start_ts, end_ts)
+            finally:
+                provider.close()
             if snapshots:
-                _add_rates([
-                    FundingRate(market=s.market, ts=s.ts, rate=s.rate_hourly,
-                                oracle_price=s.index_price, mark_price=s.mark_price, slot=0)
-                    for s in snapshots
-                ])
-                logger.info("Hyperliquid: %d funding rates for %s", len(snapshots), market)
+                hourly = _forward_fill_to_hourly(snapshots)
+                stored = store.upsert_venue_funding(hourly)
+                total += stored
+                logger.info("ccxt/%s: %d raw → %d hourly funding rates for %s",
+                            exchange, len(snapshots), stored, market)
         except Exception as e:
-            logger.warning("Hyperliquid funding failed for %s: %s", market, e)
+            logger.warning("ccxt/%s funding failed for %s: %s", exchange, market, e)
 
-        if all_rates:
-            stored = store.upsert_funding_rates(all_rates)
-            total_fetched += stored
-            logger.info("Total synced: %d funding rates for %s (%d-%d)", stored, market, gap_start, gap_end)
-
-    return total_fetched
+    return total
 
 
 @router.get("/available-markets")

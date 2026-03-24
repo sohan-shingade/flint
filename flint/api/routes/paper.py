@@ -9,6 +9,11 @@ from pydantic import BaseModel
 from ...strategy import (
     MACrossoverStrategy, EMACrossoverStrategy, RSIStrategy,
     BollingerStrategy, MomentumStrategy,
+    FundingHarvestStrategy, MeanReversionStrategy,
+    BreakoutMomentumStrategy, GridTraderStrategy,
+    DualTimeframeStrategy, VWAPReversionStrategy,
+    MACDDivergenceStrategy, ATRBreakoutStrategy,
+    MultiVenueFundingStrategy, RSIMACDComboStrategy,
 )
 from ...strategy.loader import load_user_strategy
 
@@ -28,24 +33,82 @@ class StopRequest(BaseModel):
     session_id: str
 
 
-BUILT_IN = {
-    "ma_crossover": MACrossoverStrategy,
-    "ema_crossover": EMACrossoverStrategy,
-    "rsi": RSIStrategy,
-    "bollinger": BollingerStrategy,
-    "momentum": MomentumStrategy,
+# Strategy builders — mirrors flint/api/routes/backtest.py _build_strategy
+_BUILDERS = {
+    "ma_crossover": lambda p: MACrossoverStrategy(
+        fast_period=int(p.get("fast_period", 10)),
+        slow_period=int(p.get("slow_period", 30)),
+    ),
+    "ema_crossover": lambda p: EMACrossoverStrategy(
+        fast_period=int(p.get("fast_period", 12)),
+        slow_period=int(p.get("slow_period", 26)),
+    ),
+    "rsi": lambda p: RSIStrategy(
+        period=int(p.get("period", 14)),
+        oversold=float(p.get("oversold", 30)),
+        overbought=float(p.get("overbought", 70)),
+    ),
+    "bollinger": lambda p: BollingerStrategy(
+        period=int(p.get("period", 20)),
+        num_std=float(p.get("num_std", 2.0)),
+    ),
+    "momentum": lambda p: MomentumStrategy(
+        lookback=int(p.get("lookback", 24)),
+        threshold_pct=float(p.get("threshold_pct", 5.0)),
+    ),
+    "funding_harvest": lambda p: FundingHarvestStrategy(
+        entry_threshold=float(p.get("entry_threshold", 0.001)),
+        exit_threshold=float(p.get("exit_threshold", 0.0002)),
+        stop_loss_pct=float(p.get("stop_loss_pct", 0.05)),
+        lookback=int(p.get("lookback", 8)),
+    ),
+    "mean_reversion": lambda p: MeanReversionStrategy(
+        period=int(p.get("period", 20)),
+        entry_z=float(p.get("entry_z", 2.0)),
+        exit_z=float(p.get("exit_z", 0.5)),
+        stop_loss_pct=float(p.get("stop_loss_pct", 0.05)),
+    ),
+    "breakout_momentum": lambda p: BreakoutMomentumStrategy(),
+    "grid_trader": lambda p: GridTraderStrategy(),
+    "dual_timeframe": lambda p: DualTimeframeStrategy(),
+    "vwap_reversion": lambda p: VWAPReversionStrategy(
+        period=int(p.get("period", 20)),
+        entry_pct=float(p.get("entry_pct", 2.0)),
+        exit_pct=float(p.get("exit_pct", 0.5)),
+    ),
+    "macd_divergence": lambda p: MACDDivergenceStrategy(
+        fast=int(p.get("fast", 12)),
+        slow=int(p.get("slow", 26)),
+        signal=int(p.get("signal", 9)),
+    ),
+    "atr_breakout": lambda p: ATRBreakoutStrategy(
+        period=int(p.get("period", 20)),
+        atr_period=int(p.get("atr_period", 14)),
+        multiplier=float(p.get("multiplier", 2.0)),
+    ),
+    "multi_venue_funding": lambda p: MultiVenueFundingStrategy(
+        entry_threshold=float(p.get("entry_threshold", 0.0005)),
+        exit_threshold=float(p.get("exit_threshold", 0.0001)),
+        lookback=int(p.get("lookback", 12)),
+    ),
+    "rsi_macd_combo": lambda p: RSIMACDComboStrategy(
+        rsi_period=int(p.get("rsi_period", 14)),
+        macd_fast=int(p.get("macd_fast", 12)),
+        macd_slow=int(p.get("macd_slow", 26)),
+        macd_signal=int(p.get("macd_signal", 9)),
+        rsi_oversold=float(p.get("rsi_oversold", 30)),
+        rsi_overbought=float(p.get("rsi_overbought", 70)),
+    ),
 }
 
 
 def _build_strategy(req: StartRequest):
     if req.code:
         return load_user_strategy(req.code, req.params)
-    cls = BUILT_IN.get(req.strategy)
-    if cls is None:
+    builder = _BUILDERS.get(req.strategy)
+    if builder is None:
         return None
-    if req.params:
-        return cls(**req.params)
-    return cls()
+    return builder(req.params or {})
 
 
 @router.post("/start")

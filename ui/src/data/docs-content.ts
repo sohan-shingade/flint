@@ -703,34 +703,37 @@ class StopLossStrategy(Strategy):
       },
       {
         id: 'built-in-strategies',
-        title: 'Built-in Strategies (13)',
+        title: 'Built-in Strategies (16)',
         content: `
-          <p>Flint ships with 13 strategy templates across 4 categories:</p>
+          <p>Flint ships with 16 strategy templates across 5 categories. All are available in the Strategy Lab UI and via API.</p>
           <h4>Trend Following</h4>
           <ul>
-            <li><strong>MA Crossover</strong> — SMA 10/30 golden/death cross</li>
-            <li><strong>Breakout Momentum</strong> — N-period high breakout + volume spike</li>
-            <li><strong>Volatility Breakout</strong> — Bollinger squeeze → expansion</li>
-            <li><strong>Dual Timeframe</strong> — Long SMA trend + short momentum entry</li>
+            <li><strong>MA Crossover</strong> — SMA golden/death cross (fast=10, slow=30)</li>
+            <li><strong>EMA Crossover</strong> — EMA crossover, more responsive to recent price (fast=12, slow=26)</li>
+            <li><strong>Breakout Momentum</strong> — N-period high breakout + volume spike confirmation</li>
+            <li><strong>ATR Breakout</strong> — Price breaks SMA ± N×ATR channel. Adapts to volatility.</li>
+            <li><strong>Dual Timeframe</strong> — Long SMA trend filter + short momentum entry</li>
+            <li><strong>Momentum</strong> — Rate-of-change: buy when up X% over lookback</li>
           </ul>
           <h4>Mean Reversion</h4>
           <ul>
             <li><strong>RSI</strong> — Buy oversold (RSI &lt; 30), sell overbought (RSI &gt; 70)</li>
-            <li><strong>Z-Score Reversion</strong> — Statistical deviation from rolling mean</li>
-            <li><strong>Multi-Indicator</strong> — RSI + MACD + volume confluence</li>
-            <li><strong>Scalper (VWAP)</strong> — High-frequency mean-reversion on 5m-15m</li>
+            <li><strong>Bollinger Bands</strong> — Buy lower band, sell upper band</li>
+            <li><strong>Z-Score Reversion</strong> — Statistical deviation from rolling mean with stop-loss</li>
+            <li><strong>VWAP Reversion</strong> — Buy X% below VWAP, sell at reversion. Great for range-bound markets.</li>
           </ul>
-          <h4>Solana Native</h4>
+          <h4>Multi-Signal</h4>
           <ul>
-            <li><strong>Funding Harvest</strong> — Trade against funding rate direction</li>
-            <li><strong>Grid Trader</strong> — Buy low / sell high in ranging markets</li>
+            <li><strong>MACD Divergence</strong> — Classic MACD/signal line crossover</li>
+            <li><strong>RSI + MACD Combo</strong> — Only trades when both RSI and MACD agree. Fewer but higher-quality signals.</li>
           </ul>
-          <h4>Advanced (v2 API)</h4>
+          <h4>Solana / DeFi Native</h4>
           <ul>
-            <li><strong>BTC Correlation</strong> — Cross-market SOL/BTC correlation via ctx.get_candles()</li>
-            <li><strong>Momentum + Stops</strong> — v2 context with stop-loss + take-profit orders</li>
+            <li><strong>Funding Harvest</strong> — Trade against funding rate direction (get paid to hold)</li>
+            <li><strong>Multi-Venue Funding</strong> — Cross-venue funding arbitrage using 10 venues. Unique to Flint.</li>
+            <li><strong>Grid Trader</strong> — Limit order grid for ranging markets (v2 context)</li>
           </ul>
-          <p>Plus a <strong>Blank</strong> template to start from scratch.</p>
+          <p>Plus a <strong>Blank</strong> template in the Strategy Lab to start from scratch.</p>
         `,
       },
     ],
@@ -855,41 +858,51 @@ result = engine.run(candles)` },
         content: `
           <p>Flint aggregates data from multiple sources into a local DuckDB database. All core data is free — no API keys needed for backtesting.</p>
 
-          <h4>Free — No API Keys Needed</h4>
+          <h4>Price Data — Free, No API Keys</h4>
           <table>
-            <tr><td><strong>Drift Data API</strong></td><td>OHLCV candles (1m→monthly), funding rates, orderbook L2/L3. 48 markets. Primary source.</td></tr>
+            <tr><td><strong>Drift Data API</strong></td><td>OHLCV candles (1m→monthly), orderbook L2/L3. 48 perp + 17 spot markets. Primary source.</td></tr>
             <tr><td><strong>Drift S3</strong></td><td>Historical trade records. Archival backfill. Auto-fallback.</td></tr>
+            <tr><td><strong>CoinGecko</strong></td><td>BTC/ETH spot hourly OHLCV (fills gaps where Drift has no spot candles).</td></tr>
             <tr><td><strong>Drift Open Interest</strong></td><td>Long/short OI per market. Crowding detection.</td></tr>
-            <tr><td><strong>GeckoTerminal</strong></td><td>DEX pool OHLCV for any Solana pool.</td></tr>
-            <tr><td><strong>Jupiter</strong></td><td>Swap quotes, routing, price discovery for any SPL token pair.</td></tr>
             <tr><td><strong>Pyth Network</strong></td><td>Real-time oracle feeds for 20 pairs. Sub-second updates.</td></tr>
             <tr><td><strong>Raydium</strong></td><td>AMM/CLMM pool data, reserves, fees, TVL, volume.</td></tr>
             <tr><td><strong>Orca</strong></td><td>Whirlpool concentrated liquidity pool stats.</td></tr>
-            <tr><td><strong>Hyperliquid</strong></td><td>Hourly funding rates, 17 markets.</td></tr>
-            <tr><td><strong>OKX / Bybit</strong></td><td>8h funding rates (normalized to 1h). Major markets.</td></tr>
           </table>
 
-          <h4>Free API Key Required (no credit card)</h4>
+          <h4>Funding Rate Venues — 10 Venues, All Free</h4>
+          <p>When you download a perp market, Flint fetches funding rates from up to <strong>10 venues</strong> simultaneously. You choose which venues to include before downloading. All data is forward-filled to hourly resolution.</p>
           <table>
-            <tr><td><strong>Birdeye</strong></td><td>OHLCV for <strong>any</strong> Solana token, metadata, prices. Sign up at birdeye.so/developers.</td></tr>
-            <tr><td><strong>Helius</strong></td><td>Liquidation detection, whale wallet tracking, parsed transactions. Sign up at helius.dev.</td></tr>
+            <tr><td><strong>Drift</strong></td><td>1h native, ~30 day history. Solana-native perp exchange.</td></tr>
+            <tr><td><strong>Hyperliquid</strong></td><td>1h native, ~1 year history. Best long-term coverage.</td></tr>
+            <tr><td><strong>dYdX v4</strong></td><td>1h native. Decentralized perp exchange.</td></tr>
+            <tr><td><strong>OKX</strong></td><td>8h → 1h filled. Major CEX, no geo-block.</td></tr>
+            <tr><td><strong>Bybit</strong></td><td>8h → 1h filled. Geo-blocked in US.</td></tr>
+            <tr><td><strong>Gate.io</strong></td><td>8h → 1h filled. No geo-block.</td></tr>
+            <tr><td><strong>Bitget</strong></td><td>8h → 1h filled. No geo-block.</td></tr>
+            <tr><td><strong>MEXC</strong> (CCXT)</td><td>8h → 1h filled. Via CCXT library.</td></tr>
+            <tr><td><strong>Phemex</strong> (CCXT)</td><td>8h → 1h filled. Via CCXT library.</td></tr>
+            <tr><td><strong>BitMEX</strong> (CCXT)</td><td>8h → 1h filled. Via CCXT library.</td></tr>
           </table>
 
-          <h4>Optional Install</h4>
+          <h4>Optional API Keys (free signup, no credit card)</h4>
           <table>
-            <tr><td><strong>CCXT</strong></td><td>100+ centralized exchanges (Binance, Bybit, OKX, Coinbase, Kraken, etc.). Install: <code>pip install flint[ccxt]</code>. No key needed for public data.</td></tr>
+            <tr><td><strong>Birdeye</strong></td><td>OHLCV for <strong>any</strong> Solana token. Sign up at birdeye.so/developers.</td></tr>
+            <tr><td><strong>Helius</strong></td><td>Liquidation detection, whale tracking. Sign up at helius.dev.</td></tr>
           </table>
+
+          <h4>CCXT — 100+ Exchanges</h4>
+          <p>Install <code>pip install ccxt</code> to unlock MEXC, Phemex, BitMEX funding venues. CCXT also supports candle data from 100+ exchanges (Binance, Kraken, Coinbase, etc.).</p>
 
           <h4>How Data Loading Works</h4>
           <ol>
-            <li>Check local DuckDB for the requested market + date range</li>
-            <li>If data covers the range → use it instantly (cached)</li>
-            <li>If data is missing or partial → download from Drift Data API</li>
-            <li>If API returns nothing → fall back to Drift S3</li>
-            <li>Cache everything in DuckDB for next time</li>
+            <li>Select markets in Data Explorer → ADD MARKETS panel</li>
+            <li>Choose time range and funding venues</li>
+            <li>Click DOWNLOAD — fetches candles from Drift + funding from selected venues</li>
+            <li>All data cached in local DuckDB — instant on next load</li>
+            <li>8h funding rates are forward-filled to hourly for uniform resolution</li>
           </ol>
-          <h4>Available Markets (42 perp + 6 spot on Drift, unlimited via Birdeye/CCXT)</h4>
-          <p>SOL-PERP, BTC-PERP, ETH-PERP, APT-PERP, DOGE-PERP, SUI-PERP, ARB-PERP, LINK-PERP, WIF-PERP, JUP-PERP, RENDER-PERP, XRP-PERP, AVAX-PERP, INJ-PERP, TIA-PERP, PYTH-PERP, DRIFT-PERP, and 25 more perp markets. Spot: SOL, JTO, WIF, JUP, DRIFT, POPCAT. With Birdeye enabled, backtest <strong>any</strong> Solana token. With CCXT, access any market on 100+ exchanges.</p>
+          <h4>Available Markets (36 perp + 19 spot)</h4>
+          <p>SOL-PERP, BTC-PERP, ETH-PERP, and 33 more perp markets. Spot: SOL, BTC, ETH, JUP, DRIFT, PYTH, WIF, JTO, BONK, POPCAT, and more. With Birdeye enabled, backtest <strong>any</strong> Solana token.</p>
         `,
       },
       {
@@ -900,10 +913,9 @@ result = engine.run(candles)` },
           <h4>Tables</h4>
           <table>
             <tr><td>candles</td><td>OHLCV data. PK: (market, resolution_s, ts)</td></tr>
-            <tr><td>funding_rates</td><td>Drift funding rates. PK: (market, ts)</td></tr>
+            <tr><td>venue_funding_rates</td><td>Funding rates from 10 venues, hourly. PK: (venue, market, ts)</td></tr>
             <tr><td>oracle_prices</td><td>Oracle price snapshots. PK: (market, ts)</td></tr>
             <tr><td>orderbook_snapshots</td><td>L2 bid/ask arrays. PK: (market, ts)</td></tr>
-            <tr><td>venue_funding_rates</td><td>Cross-venue funding (5 venues). PK: (venue, market, ts)</td></tr>
             <tr><td>pool_snapshots</td><td>AMM pool reserves. PK: (pool_address, ts)</td></tr>
             <tr><td>open_interest</td><td>Long/short OI from Drift. PK: (market, ts)</td></tr>
             <tr><td>liquidations</td><td>Liquidation events from Helius. PK: (market, ts, tx_sig)</td></tr>

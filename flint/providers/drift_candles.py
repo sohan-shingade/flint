@@ -77,9 +77,23 @@ class DriftCandleProvider(CandleProvider):
             }
 
             try:
-                resp = self._client.get(url, params=params)
-                if resp.status_code != 200:
-                    logger.warning("Drift API %s returned %d", url, resp.status_code)
+                # Retry once on timeout/5xx
+                resp = None
+                for attempt in range(2):
+                    try:
+                        resp = self._client.get(url, params=params)
+                        if resp.status_code < 500:
+                            break
+                        logger.warning("Drift API %s returned %d (attempt %d)", url, resp.status_code, attempt + 1)
+                        time.sleep(1)
+                    except httpx.TimeoutException:
+                        logger.warning("Drift API timeout for %s (attempt %d)", market, attempt + 1)
+                        if attempt == 1:
+                            break
+                        time.sleep(1)
+
+                if resp is None or resp.status_code != 200:
+                    logger.warning("Drift API %s returned %s", url, resp.status_code if resp else "timeout")
                     break
 
                 data = resp.json()

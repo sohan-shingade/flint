@@ -126,23 +126,10 @@ def run_backtest(
         from flint.strategy.loader import load_user_strategy
         strat = load_user_strategy(code, params)
     else:
-        from flint.strategy.ma_crossover import MACrossoverStrategy
-        from flint.strategy.ema_crossover import EMACrossoverStrategy
-        from flint.strategy.rsi import RSIStrategy
-        from flint.strategy.bollinger import BollingerStrategy
-        from flint.strategy.momentum import MomentumStrategy
-
-        builders = {
-            "ma_crossover": lambda: MACrossoverStrategy(fast_period=fast_period, slow_period=slow_period),
-            "ema_crossover": lambda: EMACrossoverStrategy(fast_period=fast_period, slow_period=slow_period),
-            "rsi": lambda: RSIStrategy(),
-            "bollinger": lambda: BollingerStrategy(),
-            "momentum": lambda: MomentumStrategy(),
-        }
-        builder = builders.get(strategy)
-        if not builder:
-            return json.dumps({"error": f"Unknown strategy: {strategy}. Use: {list(builders.keys())}"})
-        strat = builder()
+        from flint.api.routes.backtest import _build_strategy
+        strat = _build_strategy(strategy, params)
+        if strat is None:
+            return json.dumps({"error": f"Unknown strategy: {strategy}. Use list_strategies() to see all 16."})
 
     # Run backtest
     from flint.backtest.engine import BacktestEngine
@@ -169,36 +156,26 @@ def run_backtest(
 
 @mcp.tool()
 def list_strategies() -> str:
-    """List all built-in trading strategies with their parameters and descriptions."""
+    """List all 16 built-in trading strategies with their parameters."""
     strategies = [
-        {
-            "name": "ma_crossover",
-            "description": "Moving Average Crossover — goes long when fast SMA crosses above slow SMA",
-            "params": {"fast_period": {"type": "int", "default": 10, "range": "2-200"},
-                       "slow_period": {"type": "int", "default": 30, "range": "5-500"}},
-        },
-        {
-            "name": "ema_crossover",
-            "description": "Exponential MA Crossover — faster reaction than SMA, same logic",
-            "params": {"fast_period": {"type": "int", "default": 12}, "slow_period": {"type": "int", "default": 26}},
-        },
-        {
-            "name": "rsi",
-            "description": "RSI Mean Reversion — buys when RSI < oversold, sells when > overbought",
-            "params": {"period": {"type": "int", "default": 14}, "oversold": {"default": 30}, "overbought": {"default": 70}},
-        },
-        {
-            "name": "bollinger",
-            "description": "Bollinger Bands — buys at lower band, sells at upper band",
-            "params": {"period": {"type": "int", "default": 20}, "num_std": {"type": "float", "default": 2.0}},
-        },
-        {
-            "name": "momentum",
-            "description": "Momentum — buys if price is up X% over lookback period",
-            "params": {"lookback": {"type": "int", "default": 24}, "threshold_pct": {"type": "float", "default": 5.0}},
-        },
+        {"name": "ma_crossover", "category": "trend", "description": "SMA golden/death cross", "params": {"fast_period": 10, "slow_period": 30}},
+        {"name": "ema_crossover", "category": "trend", "description": "EMA crossover, more responsive", "params": {"fast_period": 12, "slow_period": 26}},
+        {"name": "momentum", "category": "trend", "description": "Rate-of-change over lookback", "params": {"lookback": 24, "threshold_pct": 5.0}},
+        {"name": "breakout_momentum", "category": "trend", "description": "N-period high breakout + volume spike", "params": {}},
+        {"name": "dual_timeframe", "category": "trend", "description": "Long SMA trend + short momentum entry", "params": {}},
+        {"name": "macd_divergence", "category": "trend", "description": "MACD/signal line crossover", "params": {"fast": 12, "slow": 26, "signal": 9}},
+        {"name": "atr_breakout", "category": "trend", "description": "SMA ± N×ATR channel breakout", "params": {"period": 20, "atr_period": 14, "multiplier": 2.0}},
+        {"name": "rsi", "category": "mean-rev", "description": "Buy oversold RSI<30, sell overbought RSI>70", "params": {"period": 14, "oversold": 30, "overbought": 70}},
+        {"name": "bollinger", "category": "mean-rev", "description": "Buy lower band, sell upper band", "params": {"period": 20, "num_std": 2.0}},
+        {"name": "mean_reversion", "category": "mean-rev", "description": "Z-score deviation from rolling mean", "params": {"period": 20, "entry_z": 2.0}},
+        {"name": "vwap_reversion", "category": "mean-rev", "description": "Buy below VWAP, sell at reversion", "params": {"period": 20, "entry_pct": 2.0}},
+        {"name": "rsi_macd_combo", "category": "multi-signal", "description": "Only trades when RSI AND MACD agree", "params": {"rsi_period": 14, "macd_fast": 12, "macd_slow": 26}},
+        {"name": "funding_harvest", "category": "defi", "description": "Trade against funding rate direction", "params": {"entry_threshold": 0.001, "lookback": 8}},
+        {"name": "multi_venue_funding", "category": "defi", "description": "Cross-venue funding arbitrage (10 venues)", "params": {"entry_threshold": 0.0005, "lookback": 12}},
+        {"name": "grid_trader", "category": "defi", "description": "Limit order grid for ranging markets", "params": {}},
     ]
-    return json.dumps({"strategies": strategies, "note": "You can also provide custom Python code via the 'code' parameter in run_backtest"})
+    return json.dumps({"strategies": strategies, "count": len(strategies),
+                        "note": "All strategies support custom code via the 'code' parameter in run_backtest."})
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -260,13 +237,19 @@ def download_market_data(
     market: str = "SOL-PERP",
     days: int = 90,
     resolution_s: int = 3600,
+    funding_venues: str = "drift,hyperliquid,okx,dydx,gateio,bitget",
 ) -> str:
-    """Download historical market data from Drift Protocol and cache locally.
+    """Download historical market data from Drift and funding rates from multiple venues.
+
+    For perp markets, also downloads funding rates from selected venues
+    (Drift, Hyperliquid, OKX, dYdX, Gate.io, Bitget, MEXC, Phemex, BitMEX).
+    All 8h funding rates are forward-filled to hourly resolution.
 
     Args:
         market: Market to download (e.g. SOL-PERP, BTC-PERP, WIF-PERP)
         days: Number of days of history to download (default 90)
         resolution_s: Candle resolution in seconds (default 3600 = 1 hour)
+        funding_venues: Comma-separated venue names for funding rates (default: drift,hyperliquid,okx,dydx,gateio,bitget)
     """
     store = _get_store()
 
@@ -288,18 +271,10 @@ def download_market_data(
         if last_ts < end_ts - resolution_s:
             gaps.append((last_ts, end_ts))
 
-    if not gaps:
-        return json.dumps({
-            "market": market, "days": days, "downloaded": 0, "cached": 0,
-            "previously_existing": existing_count, "total": existing_count,
-            "source": "local", "skipped": True,
-            "note": "Data already cached — no download needed",
-        })
-
-    # Download only the missing gaps
+    # Download candle gaps
     total_fetched = 0
     total_cached = 0
-    source = "none"
+    source = "local"
 
     for gap_start, gap_end in gaps:
         fetched = _download_range_mcp(market, resolution_s, gap_start, gap_end)
@@ -310,10 +285,24 @@ def download_market_data(
 
     final_count = len(store.query_candles(market, resolution_s, start_ts, end_ts))
 
+    # Download funding rates for perp markets
+    funding_fetched = 0
+    if "-PERP" in market:
+        venue_list = [v.strip() for v in funding_venues.split(",") if v.strip()]
+        try:
+            from flint.api.routes.data import _download_funding_all_venues
+            funding_fetched = _download_funding_all_venues(
+                store, market, start_ts, end_ts, logger, venues=venue_list
+            )
+        except Exception as e:
+            logger.warning("Funding download failed for %s: %s", market, e)
+
     return json.dumps({
         "market": market, "days": days,
         "downloaded": total_fetched, "cached": total_cached,
         "previously_existing": existing_count, "total": final_count,
+        "funding_fetched": funding_fetched,
+        "funding_venues": funding_venues.split(",") if "-PERP" in market else [],
         "source": source,
     })
 
@@ -373,35 +362,55 @@ def list_local_markets() -> str:
 @mcp.tool()
 def get_funding_rates(
     market: str = "SOL-PERP",
+    venue: str = "",
     limit: int = 50,
 ) -> str:
-    """Get funding rate history for a perpetual market.
+    """Get funding rate history for a perpetual market, grouped by venue.
+
+    Flint stores funding from up to 10 venues: drift, hyperliquid, dydx, okx,
+    bybit, gateio, bitget, mexc, phemex, bitmex.
 
     Args:
         market: Perp market (e.g. SOL-PERP, BTC-PERP)
-        limit: Max records to return
+        venue: Filter to a specific venue (optional, empty = all venues)
+        limit: Max records per venue to return
     """
     from datetime import datetime, timezone
 
     store = _get_store()
-    rates = store.query_funding_rates(market)
+    by_venue = store.query_funding_by_venue(market)
 
-    if not rates:
-        return json.dumps({"market": market, "rates": [], "count": 0})
+    if not by_venue:
+        return json.dumps({"market": market, "venues": {}, "count": 0,
+                           "hint": "No funding data. Use download_market_data to fetch."})
 
-    data = [{"ts": r.ts, "date": datetime.fromtimestamp(r.ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
-             "rate": r.rate, "rate_bps": round(r.rate * 10000, 4),
-             "oracle_price": r.oracle_price}
-            for r in rates[-limit:]]
+    # Filter to specific venue if requested
+    if venue:
+        by_venue = {v: rates for v, rates in by_venue.items() if v == venue}
 
-    avg_rate = sum(d["rate"] for d in data) / len(data) if data else 0
+    result_venues = {}
+    total = 0
+    for v, rates in by_venue.items():
+        recent = rates[-limit:]
+        avg = sum(r["rate"] for r in recent) / len(recent) if recent else 0
+        result_venues[v] = {
+            "count": len(rates),
+            "avg_rate_bps": round(avg * 10000, 4),
+            "annualized_pct": round(avg * 8760 * 100, 2),
+            "latest": recent[-1] if recent else None,
+            "recent_rates": [
+                {"ts": r["ts"], "date": datetime.fromtimestamp(r["ts"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                 "rate_bps": round(r["rate"] * 10000, 4)}
+                for r in recent[-10:]  # last 10 per venue for brevity
+            ],
+        }
+        total += len(rates)
 
     return json.dumps({
         "market": market,
-        "count": len(data),
-        "avg_rate_bps": round(avg_rate * 10000, 4),
-        "annualized_pct": round(avg_rate * 8760 * 100, 2),
-        "rates": data,
+        "venues": list(result_venues.keys()),
+        "total_points": total,
+        "venue_data": result_venues,
     })
 
 
@@ -508,24 +517,29 @@ def optimize_strategy(
     if not candles:
         return json.dumps({"error": f"No data for {market}. Use download_market_data first."})
 
-    # Get strategy class
-    from flint.strategy.ma_crossover import MACrossoverStrategy
-    from flint.strategy.ema_crossover import EMACrossoverStrategy
-    from flint.strategy.rsi import RSIStrategy
-    from flint.strategy.bollinger import BollingerStrategy
-    from flint.strategy.momentum import MomentumStrategy
-
+    # Get strategy class — import all 16 strategies
+    import flint.strategy as strats
     strategy_classes = {
-        "ma_crossover": MACrossoverStrategy,
-        "ema_crossover": EMACrossoverStrategy,
-        "rsi": RSIStrategy,
-        "bollinger": BollingerStrategy,
-        "momentum": MomentumStrategy,
+        "ma_crossover": strats.MACrossoverStrategy,
+        "ema_crossover": strats.EMACrossoverStrategy,
+        "rsi": strats.RSIStrategy,
+        "bollinger": strats.BollingerStrategy,
+        "momentum": strats.MomentumStrategy,
+        "funding_harvest": strats.FundingHarvestStrategy,
+        "mean_reversion": strats.MeanReversionStrategy,
+        "breakout_momentum": strats.BreakoutMomentumStrategy,
+        "grid_trader": strats.GridTraderStrategy,
+        "dual_timeframe": strats.DualTimeframeStrategy,
+        "vwap_reversion": strats.VWAPReversionStrategy,
+        "macd_divergence": strats.MACDDivergenceStrategy,
+        "atr_breakout": strats.ATRBreakoutStrategy,
+        "multi_venue_funding": strats.MultiVenueFundingStrategy,
+        "rsi_macd_combo": strats.RSIMACDComboStrategy,
     }
 
     cls = strategy_classes.get(strategy)
     if not cls:
-        return json.dumps({"error": f"Unknown strategy: {strategy}"})
+        return json.dumps({"error": f"Unknown strategy: {strategy}. Use list_strategies() to see all 16."})
 
     optimizer = StrategyOptimizer(cls, candles, metric=metric, n_trials=trials)
     result = optimizer.run()
@@ -557,27 +571,29 @@ def flint_guide() -> str:
 Flint is a local-first algorithmic trading, backtesting, and MEV research platform for Solana.
 
 ## Typical Workflow
-1. Download market data: `download_market_data(market="SOL-PERP", days=90)`
-2. Run a backtest: `run_backtest(market="SOL-PERP", strategy="ma_crossover")`
-3. Optimize parameters: `optimize_strategy(market="SOL-PERP", trials=50)`
-4. Compare strategies by running multiple backtests with different strategies/params
+1. Download data: `download_market_data(market="SOL-PERP", days=90)`
+   - Downloads candles from Drift + funding rates from 6 venues automatically
+2. Check funding: `get_funding_rates(market="SOL-PERP")`
+   - Shows rates from Drift, Hyperliquid, OKX, dYdX, Gate.io, Bitget
+3. Run a backtest: `run_backtest(market="SOL-PERP", strategy="rsi_macd_combo")`
+4. Optimize: `optimize_strategy(market="SOL-PERP", strategy="rsi_macd_combo", trials=50)`
 
-## Available Markets
-- 36 Drift perpetual markets (SOL-PERP, BTC-PERP, ETH-PERP, etc.)
-- 17 Drift spot markets (SOL, JUP, DRIFT, WIF, etc.)
-- Use `list_available_markets()` for the full list
+## 16 Built-in Strategies
+- Trend: ma_crossover, ema_crossover, momentum, macd_divergence, atr_breakout, breakout_momentum, dual_timeframe
+- Mean-rev: rsi, bollinger, mean_reversion, vwap_reversion
+- Multi-signal: rsi_macd_combo
+- DeFi: funding_harvest, multi_venue_funding, grid_trader
 
-## Strategy Tips
-- MA Crossover works well for trending markets (SOL, BTC)
-- RSI works better for range-bound markets
-- Bollinger is good for mean-reversion
-- Use fast_period < slow_period for MA strategies
-- Higher resolution (3600=1h) gives more reliable signals than 60s
+## Funding Rates (10 venues)
+When downloading perp data, Flint fetches funding from up to 10 venues:
+drift (1h), hyperliquid (1h), dydx (1h), okx (8h), bybit (8h), gateio (8h), bitget (8h), mexc (8h), phemex (8h), bitmex (8h).
+All 8h rates are forward-filled to hourly. Use `get_funding_rates()` to view.
 
 ## Data
-- All data is free from Drift Protocol (no API keys needed)
-- Data is cached locally in DuckDB — subsequent runs are instant
-- Candle resolutions: 60 (1m), 300 (5m), 3600 (1h), 86400 (1d)
+- All data free from Drift Protocol — no API keys needed
+- 36 perp + 19 spot markets
+- Cached locally in DuckDB — subsequent runs instant
+- Resolutions: 60 (1m), 300 (5m), 3600 (1h), 86400 (1d)
 """
 
 
