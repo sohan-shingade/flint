@@ -10,9 +10,9 @@
   <em>Think QuantConnect, but native to Solana &mdash; Drift perps, Jupiter swaps, free data, local-first.</em>
   <br/><br/>
   <a href="#quickstart"><img src="https://img.shields.io/badge/setup-3_commands-57c84d?style=flat-square&labelColor=141418" alt="3 commands"></a>
-  <a href="#features"><img src="https://img.shields.io/badge/strategies-10_templates-e8a849?style=flat-square&labelColor=141418" alt="10 strategies"></a>
-  <a href="#data-sources"><img src="https://img.shields.io/badge/providers-13_data_sources-8b5cf6?style=flat-square&labelColor=141418" alt="13 providers"></a>
-  <a href="#testing"><img src="https://img.shields.io/badge/tests-497_passing-57c84d?style=flat-square&labelColor=141418" alt="497 tests"></a>
+  <a href="#features"><img src="https://img.shields.io/badge/strategies-15_templates-e8a849?style=flat-square&labelColor=141418" alt="10 strategies"></a>
+  <a href="#data-sources"><img src="https://img.shields.io/badge/providers-14_data_sources-8b5cf6?style=flat-square&labelColor=141418" alt="13 providers"></a>
+  <a href="#testing"><img src="https://img.shields.io/badge/tests-536_passing-57c84d?style=flat-square&labelColor=141418" alt="536 tests"></a>
   <img src="https://img.shields.io/badge/python-3.9+-3776ab?style=flat-square&labelColor=141418" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/license-MIT-gray?style=flat-square&labelColor=141418" alt="MIT License">
 </p>
@@ -143,6 +143,9 @@ Not just bar-close fills. Flint simulates real trading conditions:
 - **Multi-market** — backtest across multiple markets simultaneously, auto-detected from strategy code
 - **Monte Carlo** — 500-iteration bootstrap on every backtest with 5+ trades
 - **Data quality checks** — gap detection, outlier detection, duplicate removal before every run
+- **Orderbook fills** — volume-weighted fill prices from L2 orderbook data (v0.3)
+- **Margin tracking** — per-venue margin requirements, leverage limits, liquidation simulation (v0.3)
+- **Capital allocation** — split capital across venues with transfer delays and costs (v0.3)
 
 ### Optimize with Optuna
 
@@ -190,7 +193,7 @@ Interactive TradingView-quality charts (lightweight-charts v5) with:
 
 ### Strategy Engine
 - v1 signal API + v2 ExecutionContext
-- 10 built-in templates (MA, RSI, Bollinger, VWAP, grid, funding harvest, breakout, mean reversion, dual timeframe, multi-indicator)
+- 15 built-in templates (MA, EMA, RSI, MACD, Bollinger, VWAP, breakout, mean reversion, momentum, dual timeframe, grid, funding harvest, multi-venue funding, ATR breakout, RSI-MACD combo)
 - 20 built-in indicators (SMA, EMA, RSI, MACD, Bollinger, ATR, VWAP, ADX, stochastic, z-score...)
 - Multi-market strategies via `ctx.get_candles()`
 - User strategy hot-loading from `strategies/user/`
@@ -213,13 +216,14 @@ Interactive TradingView-quality charts (lightweight-charts v5) with:
 </td>
 <td width="50%">
 
-### Data (13 Providers)
+### Data (14 Providers)
 - 48 Drift markets (42 perp + 6 spot) — free, no key
 - Birdeye — any Solana token (free API key)
 - CCXT — 100+ centralized exchanges (optional install)
 - Pyth — real-time oracle feeds for 20 pairs
 - Raydium + Orca — DEX pool data, TVL, volume
-- Cross-venue funding (Drift, Hyperliquid, OKX, Bybit, Binance)
+- Cross-venue funding (10 venues: Drift, Binance, Hyperliquid, OKX, Bybit, Gate.io, Bitget, dYdX + CCXT)
+- CoinGecko — BTC/ETH/SOL spot candles (free, no key)
 - Helius — liquidations, whale tracking (free API key)
 - Open interest, orderbook snapshots, oracle prices
 - Parquet export/import, incremental sync
@@ -250,7 +254,7 @@ Interactive TradingView-quality charts (lightweight-charts v5) with:
 <a name="data-sources"></a>
 ## Data Sources
 
-Flint aggregates data from 13 providers into a local DuckDB database. **All core data is free** — no API keys required to start backtesting.
+Flint aggregates data from 14 providers into a local DuckDB database. **All core data is free** — no API keys required to start backtesting.
 
 ### Free — No Keys Needed
 
@@ -296,7 +300,7 @@ All data is cached in DuckDB (`./data/flint.duckdb`). No data leaves your machin
 | `funding_rates` | Drift funding rates |
 | `oracle_prices` | Oracle price snapshots |
 | `orderbook_snapshots` | L2 bid/ask depth |
-| `venue_funding_rates` | Cross-venue funding (5 venues) |
+| `venue_funding_rates` | Cross-venue funding (10 venues) |
 | `pool_snapshots` | AMM pool reserves |
 | `open_interest` | Long/short OI from Drift |
 | `liquidations` | Liquidation events (via Helius) |
@@ -329,7 +333,7 @@ providers:
 <a name="testing"></a>
 ## Testing
 
-Flint has **497 tests** across 44 test files covering every layer of the platform.
+Flint has **536 tests** across 44 test files covering every layer of the platform.
 
 ### Test Coverage
 
@@ -354,7 +358,7 @@ Flint has **497 tests** across 44 test files covering every layer of the platfor
 ### Running Tests
 
 ```bash
-pytest tests/ -v                    # run all 497 tests
+pytest tests/ -v                    # run all 536 tests
 pytest tests/test_birdeye.py -v     # run a specific test file
 pytest tests/ -k "backtest" -v      # run tests matching a keyword
 pytest tests/ -x                    # stop on first failure
@@ -456,7 +460,7 @@ ui/                    # React 19 + Vite + Tailwind
 ├── components/        # Charts, editors, metrics cards
 └── hooks/             # useBacktest, useOptimize, useJournal
 
-tests/                 # 497 tests across 44 test files
+tests/                 # 536 tests across 44 test files
 strategies/user/       # Your strategies go here
 ```
 
@@ -524,7 +528,7 @@ See `.env.example` for all environment variable options.
 ```bash
 pip install -e ".[dev]"          # install with dev dependencies
 cd ui && npm install             # install UI dependencies
-pytest tests/ -v                 # run 497 tests (~5s)
+pytest tests/ -v                 # run 536 tests (~5s)
 flint serve                      # API + UI on :8000 (builds UI automatically)
 flint serve --dev                # dev mode: API on :8000, run `cd ui && npm run dev` for :5173
 ```

@@ -30,16 +30,28 @@ class RiskGuard(abc.ABC):
 
 
 class MaxPositionSize(RiskGuard):
-    """Reject orders that would create a position larger than max_size."""
+    """Reject orders whose cumulative notional exceeds max_notional."""
 
     def __init__(self, max_notional: float):
         self.max_notional = max_notional
 
     def check(self, order, account, positions):
-        notional = order.size * (order.price if order.price > 0 else 1.0)
-        if notional > self.max_notional:
-            logger.info("MaxPositionSize: rejected order %s (notional=%.2f > max=%.2f)",
-                       order.order_id, notional, self.max_notional)
+        # Estimate price for market orders (price=0)
+        price = order.price
+        if price <= 0:
+            for p in positions:
+                if p.market == order.market and p.entry_price > 0:
+                    price = p.entry_price
+                    break
+            if price <= 0:
+                price = 1.0
+        # Check cumulative notional (existing + new order)
+        existing = sum(p.size * p.entry_price for p in positions if p.market == order.market)
+        new_notional = order.size * price
+        total = existing + new_notional
+        if total > self.max_notional:
+            logger.info("MaxPositionSize: rejected order %s (total_notional=%.2f > max=%.2f)",
+                       order.order_id, total, self.max_notional)
             return None
         return order
 

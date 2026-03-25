@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 
 interface OptimizeParams {
   code: string
@@ -38,8 +38,18 @@ export function useOptimize() {
   const [results, setResults] = useState<OptResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<{phase: string, pct: number, detail: string, elapsed_s: number} | null>(null)
+  const cancelledRef = useRef(false)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const errorCountRef = useRef(0)
+
+  useEffect(() => () => {
+    cancelledRef.current = true
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+  }, [])
 
   const run = useCallback(async (params: OptimizeParams) => {
+    cancelledRef.current = false
+    errorCountRef.current = 0
     setStatus('running')
     setError(null)
     setResults(null)
@@ -60,6 +70,7 @@ export function useOptimize() {
 
       const startTime = Date.now()
       const poll = async () => {
+        if (cancelledRef.current) return
         // 30 minute timeout for optimization
         if ((Date.now() - startTime) / 1000 > 1800) {
           setError('Optimization timed out after 30 minutes')
@@ -79,13 +90,20 @@ export function useOptimize() {
             setStatus('failed')
             setProgress(null)
           } else {
-            setTimeout(poll, 1000)
+            pollTimerRef.current = setTimeout(poll, 1000)
           }
         } catch {
-          setTimeout(poll, 2000)
+          errorCountRef.current++
+          if (errorCountRef.current >= 20) {
+            setError('Lost connection to server')
+            setStatus('failed')
+            setProgress(null)
+            return
+          }
+          pollTimerRef.current = setTimeout(poll, 2000)
         }
       }
-      setTimeout(poll, 500)
+      pollTimerRef.current = setTimeout(poll, 500)
     } catch (e: any) {
       setError(e.message)
       setStatus('failed')

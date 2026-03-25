@@ -65,8 +65,9 @@ class BreakoutMomentumStrategy(Strategy):
                 tr = max(c.high - c.low, abs(c.high - prev_close), abs(c.low - prev_close))
                 tr_values.append(tr)
             atr = np.mean(tr_values) if tr_values else 0
-            trailing_stop = candle.close - atr * self.atr_mult
-            if len(history) >= 2 and candle.close < trailing_stop:
+            recent_high = max(c.high for c in history[-self.lookback:])
+            trailing_stop = recent_high - atr * self.atr_mult
+            if candle.close < trailing_stop:
                 return Signal.SELL
 
         return Signal.HOLD

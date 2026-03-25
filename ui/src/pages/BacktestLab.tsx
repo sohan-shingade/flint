@@ -11,6 +11,7 @@ import TradeTable from '../components/TradeTable'
 import PriceChart from '../components/PriceChart'
 import PnlHistogram from '../components/PnlHistogram'
 import ExposureTimeline from '../components/ExposureTimeline'
+import InstrumentExposure from '../components/InstrumentExposure'
 import SplitMetrics from '../components/SplitMetrics'
 
 /* ── all supported markets ───────────────────────────── */
@@ -270,43 +271,81 @@ class BreakoutMomentum(Strategy):
 `
 
 const FUNDING_HARVEST_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side
 from typing import List
 
 
 class FundingHarvest(Strategy):
     """Funding Rate Harvest — Solana-native strategy.
 
-    Collects funding payments by trading against the crowd.
+    Reads REAL funding rates via ctx.get_funding_rate().
     Goes long when funding is deeply negative (longs get paid).
-    Uses price deviation from mean as a proxy for funding direction.
+    Goes short when funding is deeply positive (shorts get paid).
 
-    On Drift, funding is paid hourly. Negative funding = shorts pay longs.
+    IMPORTANT: Download funding data in Data Explorer first!
+    Without funding data, falls back to price momentum proxy.
     """
-    def __init__(self, lookback=24, threshold_pct=2.0):
+    def __init__(self, entry_threshold=0.00003, exit_threshold=0.000005,
+                 stop_loss_pct=0.05, lookback=8):
+        self.entry_threshold = entry_threshold
+        self.exit_threshold = exit_threshold
+        self.stop_loss_pct = stop_loss_pct
         self.lookback = lookback
-        self.threshold = threshold_pct / 100
 
     @property
     def name(self) -> str:
-        return f"FundingHarvest({self.lookback})"
+        return f"FundingHarvest({self.entry_threshold})"
 
     @classmethod
     def parameters(cls):
         return {
-            "lookback": {"type": "int", "low": 8, "high": 72, "default": 24},
-            "threshold_pct": {"type": "float", "low": 0.5, "high": 5.0, "default": 2.0},
+            "entry_threshold": {"type": "float", "low": 0.00001, "high": 0.0001, "default": 0.00003},
+            "exit_threshold": {"type": "float", "low": 0.000001, "high": 0.00002, "default": 0.000005},
+            "stop_loss_pct": {"type": "float", "low": 0.02, "high": 0.10, "default": 0.05},
+            "lookback": {"type": "int", "low": 4, "high": 24, "default": 8},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
         if len(history) < self.lookback:
             return Signal.HOLD
-        closes = [c.close for c in history[-self.lookback:]]
-        mean_price = sum(closes) / len(closes)
-        deviation = (candle.close - mean_price) / mean_price
-        if deviation < -self.threshold:
+
+        # Read real funding rates from the execution context
+        avg_funding = None
+        if ctx is not None:
+            rates = ctx.get_funding_rates(candle.market, lookback=self.lookback)
+            if len(rates) >= 3:
+                avg_funding = sum(r for _, r in rates) / len(rates)
+
+        # Fallback: price momentum proxy
+        if avg_funding is None:
+            recent = [c.close for c in history[-self.lookback:]]
+            avg_funding = ((recent[-1] - recent[0]) / recent[0]) / self.lookback if recent[0] else 0
+
+        if ctx is not None:
+            pos = ctx.position(candle.market)
+            if pos is None:
+                if avg_funding < -self.entry_threshold:
+                    size = (ctx.account.cash * 0.9) / candle.close
+                    if size > 0:
+                        ctx.market_order(candle.market, Side.LONG, size)
+                        ctx.stop_order(candle.market, Side.SHORT, size,
+                                       candle.close * (1 - self.stop_loss_pct))
+                elif avg_funding > self.entry_threshold:
+                    size = (ctx.account.cash * 0.9) / candle.close
+                    if size > 0:
+                        ctx.market_order(candle.market, Side.SHORT, size)
+                        ctx.stop_order(candle.market, Side.LONG, size,
+                                       candle.close * (1 + self.stop_loss_pct))
+            else:
+                if abs(avg_funding) < self.exit_threshold:
+                    ctx.close_position(candle.market)
+                    ctx.cancel_all(candle.market)
+            return Signal.HOLD
+
+        # v1 fallback
+        if avg_funding < -self.entry_threshold:
             return Signal.BUY
-        elif deviation > self.threshold:
+        elif avg_funding > self.entry_threshold:
             return Signal.SELL
         return Signal.HOLD
 
@@ -925,48 +964,365 @@ class RSIMACDCombo(Strategy):
 `
 
 const MULTI_VENUE_FUNDING_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side
 from typing import List
 
 
 class MultiVenueFunding(Strategy):
     """Cross-venue funding arbitrage — unique to Flint.
 
-    Reads funding rates from multiple venues (Drift, Hyperliquid, OKX, etc.)
-    Goes long when average funding is deeply negative (you get paid to hold).
-    Goes short when average funding is deeply positive.
+    Reads REAL funding rates from multiple venues via ctx.get_funding_by_venue().
+    Enters when the majority of venues agree funding is skewed.
+
+    IMPORTANT: Download funding data for multiple venues in Data Explorer first!
+    Select Drift + Hyperliquid + OKX (or more) before downloading.
     """
 
-    def __init__(self, entry_threshold=0.0005, exit_threshold=0.0001, lookback=12):
+    def __init__(self, entry_threshold=0.00003, exit_threshold=0.000005,
+                 lookback=12, min_venues=2):
         self.entry_threshold = entry_threshold
         self.exit_threshold = exit_threshold
         self.lookback = lookback
-        self._funding_proxy = []
+        self.min_venues = min_venues
 
     @property
     def name(self): return f"MultiVenueFunding(th={self.entry_threshold})"
 
+    def _get_avg_funding(self, candle, history, ctx):
+        """Get cross-venue average funding rate."""
+        if ctx is not None:
+            # Try multi-venue first
+            venue_data = ctx.get_funding_by_venue(candle.market, lookback=self.lookback)
+            if venue_data and len(venue_data) >= self.min_venues:
+                venue_avgs = []
+                for venue, rates in venue_data.items():
+                    if rates:
+                        recent = [r for _, r in rates[-self.lookback:]]
+                        if recent:
+                            venue_avgs.append(sum(recent) / len(recent))
+                if len(venue_avgs) >= self.min_venues:
+                    return sum(venue_avgs) / len(venue_avgs)
+
+            # Single venue fallback
+            rates = ctx.get_funding_rates(candle.market, lookback=self.lookback)
+            if len(rates) >= 3:
+                return sum(r for _, r in rates) / len(rates)
+
+        # Price proxy fallback
+        if len(history) < self.lookback:
+            return None
+        recent = [c.close for c in history[-self.lookback:]]
+        return ((recent[-1] - recent[0]) / recent[0]) / self.lookback if recent[0] else 0
+
     def on_candle(self, candle, history, ctx=None):
         if len(history) < self.lookback: return Signal.HOLD
-        # Use price momentum as funding proxy in backtest
-        recent = [c.close for c in history[-self.lookback:]]
-        momentum = (recent[-1] - recent[0]) / recent[0] if recent[0] else 0
-        synthetic = momentum / self.lookback
-        self._funding_proxy.append(synthetic)
-        if len(self._funding_proxy) < 3: return Signal.HOLD
-        avg = sum(self._funding_proxy[-3:]) / 3
+
+        avg = self._get_avg_funding(candle, history, ctx)
+        if avg is None: return Signal.HOLD
+
+        if ctx is not None:
+            pos = ctx.position(candle.market)
+            if pos is None:
+                if avg < -self.entry_threshold:
+                    size = (ctx.account.cash * 0.9) / candle.close
+                    if size > 0:
+                        ctx.market_order(candle.market, Side.LONG, size)
+                elif avg > self.entry_threshold:
+                    size = (ctx.account.cash * 0.9) / candle.close
+                    if size > 0:
+                        ctx.market_order(candle.market, Side.SHORT, size)
+            else:
+                if abs(avg) < self.exit_threshold:
+                    ctx.close_position(candle.market)
+                    ctx.cancel_all(candle.market)
+            return Signal.HOLD
+
         if avg < -self.entry_threshold: return Signal.BUY
         elif avg > self.entry_threshold: return Signal.SELL
-        elif abs(avg) < self.exit_threshold: return Signal.SELL
         return Signal.HOLD
 
-    def reset(self): self._funding_proxy = []
+    def reset(self): pass
 
     @classmethod
     def parameters(cls):
-        return {"entry_threshold": {"type": "float", "low": 0.0002, "high": 0.002, "default": 0.0005},
-                "exit_threshold": {"type": "float", "low": 0.00005, "high": 0.0005, "default": 0.0001},
-                "lookback": {"type": "int", "low": 6, "high": 24, "default": 12}}
+        return {"entry_threshold": {"type": "float", "low": 0.00001, "high": 0.0001, "default": 0.00003},
+                "exit_threshold": {"type": "float", "low": 0.000001, "high": 0.00002, "default": 0.000005},
+                "lookback": {"type": "int", "low": 6, "high": 24, "default": 12},
+                "min_venues": {"type": "int", "low": 1, "high": 5, "default": 2}}
+`
+
+const ORDERBOOK_MOMENTUM_TEMPLATE = `from flint.strategy.base import Strategy
+from flint.models import Candle, Signal, Side
+from typing import List
+import numpy as np
+
+
+class OrderbookMomentum(Strategy):
+    """Orderbook-Aware Momentum — only enters when liquidity supports the trade.
+
+    Checks orderbook impact price before placing orders. If slippage
+    exceeds threshold, skips the trade. Uses real L2 book data from Drift DLOB.
+
+    FEATURES DEMONSTRATED:
+    - ctx.get_orderbook() — raw orderbook access
+    - ctx.get_impact_price() — volume-weighted fill price estimation
+    - Slippage-aware position sizing
+
+    Enable 'MARGIN TRACKING' for realistic leverage limits.
+    """
+    def __init__(self, lookback=20, entry_pct=3.0, max_slippage_bps=15.0, max_spread_bps=10.0):
+        self.lookback = lookback
+        self.entry_pct = entry_pct / 100
+        self.max_slippage_bps = max_slippage_bps
+        self.max_spread_bps = max_spread_bps
+        self._in_trade = False
+
+    @property
+    def name(self): return f"OB-Momentum(lb={self.lookback})"
+
+    @classmethod
+    def parameters(cls):
+        return {
+            "lookback": {"type": "int", "low": 10, "high": 50, "default": 20},
+            "entry_pct": {"type": "float", "low": 1.0, "high": 8.0, "default": 3.0},
+            "max_slippage_bps": {"type": "float", "low": 5.0, "high": 30.0, "default": 15.0},
+            "max_spread_bps": {"type": "float", "low": 3.0, "high": 20.0, "default": 10.0},
+        }
+
+    def on_candle(self, candle, history, ctx=None):
+        if ctx is None or len(history) < self.lookback:
+            return Signal.HOLD
+
+        # Check if we should exit
+        if ctx.positions:
+            old = history[-5].close if len(history) >= 5 else history[0].close
+            ret = (candle.close - old) / old
+            if abs(ret) < 0.005:
+                ctx.close_position(candle.market)
+                self._in_trade = False
+            return Signal.HOLD
+
+        # Momentum signal
+        old_price = history[-self.lookback].close
+        ret = (candle.close - old_price) / old_price
+        if abs(ret) < self.entry_pct:
+            return Signal.HOLD
+
+        # === ORDERBOOK CHECKS ===
+        book = ctx.get_orderbook(candle.market)
+        if book and book.bids and book.asks:
+            # Check spread
+            spread_bps = (book.asks[0].price - book.bids[0].price) / book.bids[0].price * 10000
+            if spread_bps > self.max_spread_bps:
+                ctx.log(f"Skip: spread too wide ({spread_bps:.1f}bps > {self.max_spread_bps}bps)")
+                return Signal.HOLD
+
+        # Check impact price
+        side = Side.LONG if ret > 0 else Side.SHORT
+        size = (ctx.account.cash * 0.9) / candle.close
+        impact = ctx.get_impact_price(candle.market, side, size)
+        if impact is not None:
+            mid = candle.close
+            slippage_bps = abs(impact - mid) / mid * 10000
+            if slippage_bps > self.max_slippage_bps:
+                ctx.log(f"Skip: impact too high ({slippage_bps:.1f}bps for {size:.1f} units)")
+                return Signal.HOLD
+            ctx.log(f"Impact OK: {slippage_bps:.1f}bps for {size:.1f} units")
+
+        # Enter
+        if size > 0:
+            ctx.market_order(candle.market, side, size)
+            ctx.stop_order(candle.market,
+                Side.SHORT if side == Side.LONG else Side.LONG,
+                size, candle.close * (0.97 if side == Side.LONG else 1.03))
+            self._in_trade = True
+        return Signal.HOLD
+
+    def reset(self):
+        self._in_trade = False
+`
+
+const CROSS_VENUE_PAIRS_TEMPLATE = `from flint.strategy.base import Strategy
+from flint.models import Candle, Signal, Side
+from typing import List
+
+
+class CrossVenuePairs(Strategy):
+    """Cross-Venue SOL/BTC Pairs — multi-venue, multi-market stat arb.
+
+    Trades the SOL/BTC ratio across different venues.
+    Short SOL on Drift, long BTC on Hyperliquid (or vice versa).
+    Uses venue-specific margin and tracks per-venue P&L.
+
+    FEATURES DEMONSTRATED:
+    - venue="drift" / venue="hyperliquid" — multi-venue positions
+    - ctx.venue_balance() — per-venue capital checks
+    - ctx.position(market, venue=) — venue-specific position queries
+    - ctx.get_candles("BTC-PERP") — cross-market data access
+
+    SETUP: Download both SOL-PERP and BTC-PERP data.
+    Enable 'MARGIN TRACKING' for realistic leverage limits.
+    """
+    def __init__(self, lookback=48, entry_z=2.0, exit_z=0.5, alloc_pct=0.4):
+        self.lookback = lookback
+        self.entry_z = entry_z
+        self.exit_z = exit_z
+        self.alloc_pct = alloc_pct
+        self._ratio_history = []
+
+    @property
+    def name(self): return f"XV-Pairs(z={self.entry_z})"
+
+    @classmethod
+    def parameters(cls):
+        return {
+            "lookback": {"type": "int", "low": 20, "high": 100, "default": 48},
+            "entry_z": {"type": "float", "low": 1.0, "high": 3.0, "default": 2.0},
+            "exit_z": {"type": "float", "low": 0.1, "high": 1.0, "default": 0.5},
+            "alloc_pct": {"type": "float", "low": 0.2, "high": 0.5, "default": 0.4},
+        }
+
+    def on_candle(self, candle, history, ctx=None):
+        if ctx is None: return Signal.HOLD
+
+        btc = ctx.get_candles("BTC-PERP", self.lookback + 10)
+        if len(btc) < self.lookback or len(history) < self.lookback:
+            return Signal.HOLD
+
+        # SOL/BTC ratio z-score
+        ratio = candle.close / btc[-1].close if btc[-1].close else 0
+        self._ratio_history.append(ratio)
+        if len(self._ratio_history) < self.lookback: return Signal.HOLD
+
+        window = self._ratio_history[-self.lookback:]
+        mean = sum(window) / len(window)
+        std = (sum((r - mean)**2 for r in window) / len(window)) ** 0.5
+        if std == 0: return Signal.HOLD
+        z = (ratio - mean) / std
+
+        sol_pos = ctx.position("SOL-PERP", venue="drift")
+        btc_pos = ctx.position("BTC-PERP", venue="hyperliquid")
+        in_trade = sol_pos is not None or btc_pos is not None
+
+        # Exit
+        if in_trade:
+            if abs(z) < self.exit_z or abs(z) > 4.0:
+                ctx.log(f"EXIT pairs: z={z:.2f}, ratio={ratio:.6f}")
+                if sol_pos: ctx.close_position("SOL-PERP", venue="drift")
+                if btc_pos: ctx.close_position("BTC-PERP", venue="hyperliquid")
+            return Signal.HOLD
+
+        # Entry — check venue balances
+        drift_cash = ctx.venue_balance("drift")
+        hl_cash = ctx.venue_balance("hyperliquid")
+        sol_alloc = min(drift_cash * self.alloc_pct, ctx.account.cash * self.alloc_pct)
+        btc_alloc = min(hl_cash * self.alloc_pct, ctx.account.cash * self.alloc_pct)
+
+        if z > self.entry_z:
+            # SOL rich → short SOL on Drift, long BTC on Hyperliquid
+            sol_size = sol_alloc / candle.close
+            btc_size = btc_alloc / btc[-1].close
+            if sol_size > 0 and btc_size > 0:
+                ctx.market_order("SOL-PERP", Side.SHORT, sol_size, venue="drift")
+                ctx.market_order("BTC-PERP", Side.LONG, btc_size, venue="hyperliquid")
+                ctx.log(f"ENTRY: Short SOL@Drift + Long BTC@HL | z={z:.2f}")
+        elif z < -self.entry_z:
+            sol_size = sol_alloc / candle.close
+            btc_size = btc_alloc / btc[-1].close
+            if sol_size > 0 and btc_size > 0:
+                ctx.market_order("SOL-PERP", Side.LONG, sol_size, venue="drift")
+                ctx.market_order("BTC-PERP", Side.SHORT, btc_size, venue="hyperliquid")
+                ctx.log(f"ENTRY: Long SOL@Drift + Short BTC@HL | z={z:.2f}")
+        return Signal.HOLD
+
+    def reset(self): self._ratio_history = []
+`
+
+const LEVERAGED_GRID_TEMPLATE = `from flint.strategy.base import Strategy
+from flint.models import Candle, Signal, Side
+from typing import List
+
+
+class LeveragedGrid(Strategy):
+    """Leveraged Grid — DCA grid trading with margin-aware sizing.
+
+    Places grid orders at fixed % intervals. Uses venue leverage
+    for capital efficiency. Monitors margin utilization to avoid
+    liquidation.
+
+    FEATURES DEMONSTRATED:
+    - ctx.account.leverage — real-time leverage monitoring
+    - ctx.account.free_margin — margin-aware position sizing
+    - ctx.limit_order(venue=) — venue-specific limit orders
+    - Margin rejection warnings when overleveraged
+
+    Enable 'MARGIN TRACKING' for this strategy to work correctly.
+    Without it, there are no leverage limits.
+    """
+    def __init__(self, grid_pct=2.0, max_leverage=5.0, grid_levels=3):
+        self.grid_pct = grid_pct / 100
+        self.max_leverage = max_leverage
+        self.grid_levels = grid_levels
+        self._last_grid_price = 0.0
+        self._grid_count = 0
+
+    @property
+    def name(self): return f"LevGrid({self.grid_pct*100:.0f}%, {self.max_leverage}x)"
+
+    @classmethod
+    def parameters(cls):
+        return {
+            "grid_pct": {"type": "float", "low": 1.0, "high": 5.0, "default": 2.0},
+            "max_leverage": {"type": "float", "low": 2.0, "high": 10.0, "default": 5.0},
+            "grid_levels": {"type": "int", "low": 2, "high": 5, "default": 3},
+        }
+
+    def on_candle(self, candle, history, ctx=None):
+        if ctx is None or len(history) < 20:
+            return Signal.HOLD
+
+        # Initialize grid center
+        if self._last_grid_price == 0:
+            self._last_grid_price = candle.close
+            return Signal.HOLD
+
+        # Check current leverage
+        current_lev = ctx.account.leverage
+        if current_lev > self.max_leverage:
+            ctx.log(f"At max leverage ({current_lev:.1f}x), skipping grid")
+            return Signal.HOLD
+
+        price_move = (candle.close - self._last_grid_price) / self._last_grid_price
+
+        # Grid buy: price dropped by grid_pct
+        if price_move < -self.grid_pct and self._grid_count < self.grid_levels:
+            # Size based on remaining margin
+            free = ctx.account.free_margin
+            if free <= 0:
+                ctx.log("No free margin for grid buy")
+                return Signal.HOLD
+            size = min(free * 0.3, ctx.account.equity * 0.1) / candle.close
+            if size > 0:
+                ctx.market_order(candle.market, Side.LONG, size, venue="drift")
+                stop = candle.close * (1 - self.grid_pct * 3)
+                ctx.stop_order(candle.market, Side.SHORT, size, stop, venue="drift")
+                self._last_grid_price = candle.close
+                self._grid_count += 1
+                ctx.log(f"Grid BUY #{self._grid_count}: {size:.2f} @ {candle.close:.2f} | lev={current_lev:.1f}x")
+
+        # Grid sell: price rose by grid_pct from last grid
+        elif price_move > self.grid_pct and ctx.positions:
+            ctx.close_position(candle.market, venue="drift")
+            ctx.cancel_all(candle.market)
+            self._last_grid_price = candle.close
+            self._grid_count = 0
+            ctx.log(f"Grid CLOSE: sold @ {candle.close:.2f} | lev={current_lev:.1f}x")
+
+        return Signal.HOLD
+
+    def reset(self):
+        self._last_grid_price = 0.0
+        self._grid_count = 0
 `
 
 interface TemplateInfo {
@@ -993,7 +1349,7 @@ const TEMPLATES: Record<string, TemplateInfo> = {
   scalper:     { label: 'Scalper (VWAP)',        code: SCALPER_TEMPLATE,         category: 'mean-rev',
     hint: 'Any market, best on 5m-15m. High frequency, small gains. Needs tight spreads.' },
   funding:     { label: 'Funding Harvest',       code: FUNDING_HARVEST_TEMPLATE, category: 'solana',
-    hint: 'Perp markets only. Uses funding rate proxy. 1h.' },
+    hint: 'Perp markets only. Uses REAL funding rates — download funding data in Data Explorer first. 1h.' },
   grid:        { label: 'Grid Trader',           code: GRID_TEMPLATE,            category: 'solana',
     hint: 'Any perp. Best in ranging/sideways markets. 1h.' },
   dual_tf:     { label: 'Dual Timeframe',        code: DUAL_TF_TEMPLATE,         category: 'trend',
@@ -1007,11 +1363,17 @@ const TEMPLATES: Record<string, TemplateInfo> = {
   rsi_macd:    { label: 'RSI + MACD Combo',      code: RSI_MACD_TEMPLATE,        category: 'mean-rev',
     hint: 'Any market, 1h. Only trades when RSI AND MACD agree. High-quality signals.' },
   mv_funding:  { label: 'Multi-Venue Funding',   code: MULTI_VENUE_FUNDING_TEMPLATE, category: 'solana',
-    hint: 'Perp only. Cross-venue funding arbitrage using 10 venues. Unique to Flint.' },
+    hint: 'Perp only. Cross-venue funding arbitrage — download funding for 2+ venues in Data Explorer first.' },
   cross_mkt:   { label: 'BTC Correlation',       code: CROSS_MARKET_TEMPLATE,    category: 'advanced',
     hint: 'Run on SOL-PERP. Uses ctx.get_candles("BTC-PERP") for cross-market signals. Needs BTC data in DB.' },
   stop_loss:   { label: 'Momentum + Stops (v2)', code: STOP_LOSS_TEMPLATE,       category: 'advanced',
     hint: 'Any perp, 1h. Demonstrates v2 context API: market_order + stop_order + take_profit_order.' },
+  ob_momentum: { label: 'Orderbook Momentum',   code: ORDERBOOK_MOMENTUM_TEMPLATE, category: 'advanced',
+    hint: 'Uses ctx.get_orderbook() + ctx.get_impact_price() to check liquidity before trading. Needs orderbook data.' },
+  xv_pairs:    { label: 'Cross-Venue Pairs',    code: CROSS_VENUE_PAIRS_TEMPLATE,  category: 'advanced',
+    hint: 'SOL/BTC pairs on Drift + Hyperliquid. Multi-venue + multi-market. Enable MARGIN TRACKING. Needs both markets.' },
+  lev_grid:    { label: 'Leveraged Grid',        code: LEVERAGED_GRID_TEMPLATE,     category: 'advanced',
+    hint: 'DCA grid with leverage monitoring. Enable MARGIN TRACKING to see leverage limits + liquidation risk.' },
 }
 
 /* ── run history entry ───────────────────────────────── */
@@ -1042,6 +1404,27 @@ function extractMarketsFromCode(code: string): string[] {
   return markets
 }
 
+/* ── date range presets ─────────────────────────────────── */
+
+type RangePreset = '1M' | '3M' | '6M' | '1Y' | '3Y' | 'CUSTOM'
+
+function getPresetDates(preset: RangePreset): { start: string; end: string } | null {
+  if (preset === 'CUSTOM') return null
+  const end = new Date()
+  const start = new Date()
+  switch (preset) {
+    case '1M': start.setMonth(start.getMonth() - 1); break
+    case '3M': start.setMonth(start.getMonth() - 3); break
+    case '6M': start.setMonth(start.getMonth() - 6); break
+    case '1Y': start.setFullYear(start.getFullYear() - 1); break
+    case '3Y': start.setFullYear(start.getFullYear() - 3); break
+  }
+  return {
+    start: start.toISOString().split('T')[0],
+    end: end.toISOString().split('T')[0],
+  }
+}
+
 /* ── component ─────────────────────────────────────────── */
 
 export default function BacktestLab() {
@@ -1051,7 +1434,7 @@ export default function BacktestLab() {
   const [showJournal, setShowJournal] = useState(false)
   const [optTrials, setOptTrials] = useState(50)
   const [optMetric, setOptMetric] = useState('sharpe_ratio')
-  const { strategies: savedStrategies, save, load, remove, validate, loading: savingStrategy } = useStrategies()
+  const { strategies: savedStrategies, save, load, remove, validate, loading: savingStrategy, refresh } = useStrategies()
 
   // Editor state
   const [code, setCode] = useState(BLANK_TEMPLATE)
@@ -1079,12 +1462,29 @@ export default function BacktestLab() {
   const [dataCheck, setDataCheck] = useState<{
     has_data: boolean, covers_range: boolean, will_download: boolean,
     candle_count: number, total_in_db: number,
+    first_ts?: number | null, last_ts?: number | null,
   } | null>(null)
   const [dataCheckLoading, setDataCheckLoading] = useState(false)
   const [configError, setConfigError] = useState<string | null>(null)
 
   // Active template hint
   const [activeTemplateKey, setActiveTemplateKey] = useState<string | null>(null)
+
+  // Date range preset
+  const [rangePreset, setRangePreset] = useState<RangePreset>('CUSTOM')
+
+  // Multi-market data check
+  const [multiMarketCheck, setMultiMarketCheck] = useState<{
+    ready: boolean
+    markets: Record<string, { has_data: boolean; covers_range: boolean; candle_count: number }>
+    missing: string[]
+  } | null>(null)
+
+  // Syncing strategies from folder
+  const [syncing, setSyncing] = useState(false)
+
+  // Execution features
+  const [marginTracking, setMarginTracking] = useState(false)
 
   const codeRef = useRef(code)
   codeRef.current = code
@@ -1124,27 +1524,32 @@ export default function BacktestLab() {
     if (!startDate || !endDate) {
       setConfigError('Enter start and end dates')
       setDataCheck(null)
+      setMultiMarketCheck(null)
       return
     }
     if (isNaN(startTs) || isNaN(endTs)) {
       setConfigError('Invalid date format — use YYYY-MM-DD')
       setDataCheck(null)
+      setMultiMarketCheck(null)
       return
     }
     if (startTs >= endTs) {
       setConfigError('Start date must be before end date')
       setDataCheck(null)
+      setMultiMarketCheck(null)
       return
     }
     const durationH = (endTs - startTs) / 3600
     if (durationH < 10 * (res_s / 3600)) {
       setConfigError(`Range too short — need at least ${(10 * res_s / 3600).toFixed(0)}h for ${resolution} candles`)
       setDataCheck(null)
+      setMultiMarketCheck(null)
       return
     }
     if (capital <= 0) {
       setConfigError('Capital must be > 0')
       setDataCheck(null)
+      setMultiMarketCheck(null)
       return
     }
 
@@ -1152,23 +1557,61 @@ export default function BacktestLab() {
     setDataCheckLoading(true)
 
     const controller = new AbortController()
-    fetch(`/api/v1/data/check?market=${encodeURIComponent(market)}&resolution_s=${res_s}&start_ts=${startTs}&end_ts=${endTs}`, { signal: controller.signal })
-      .then(r => r.json())
-      .then(d => {
-        if (d && typeof d.candle_count === 'number' && typeof d.has_data === 'boolean') {
-          setDataCheck(d)
-        } else {
+
+    // Extract all markets from code (primary + extras)
+    const extraMarkets = extractMarketsFromCode(codeRef.current)
+    const allMarkets = [market, ...extraMarkets.filter(m => m !== market)]
+
+    if (allMarkets.length > 1) {
+      // Multi-market check
+      fetch('/api/v1/data/check-markets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ markets: allMarkets, resolution_s: res_s, start_ts: startTs, end_ts: endTs }),
+        signal: controller.signal,
+      })
+        .then(r => r.json())
+        .then(d => {
+          setMultiMarketCheck(d)
+          // Also set primary market data check for backwards compat
+          const primary = d.markets?.[market]
+          if (primary) {
+            setDataCheck({
+              has_data: primary.has_data,
+              covers_range: primary.covers_range,
+              will_download: !primary.covers_range,
+              candle_count: primary.candle_count,
+              total_in_db: primary.candle_count,
+            })
+          }
+          setDataCheckLoading(false)
+        })
+        .catch(() => {
+          setMultiMarketCheck(null)
           setDataCheck(null)
-        }
-        setDataCheckLoading(false)
-      })
-      .catch(() => {
-        setDataCheck(null)
-        setDataCheckLoading(false)
-      })
+          setDataCheckLoading(false)
+        })
+    } else {
+      // Single market — use existing endpoint
+      setMultiMarketCheck(null)
+      fetch(`/api/v1/data/check?market=${encodeURIComponent(market)}&resolution_s=${res_s}&start_ts=${startTs}&end_ts=${endTs}`, { signal: controller.signal })
+        .then(r => r.json())
+        .then(d => {
+          if (d && typeof d.candle_count === 'number' && typeof d.has_data === 'boolean') {
+            setDataCheck(d)
+          } else {
+            setDataCheck(null)
+          }
+          setDataCheckLoading(false)
+        })
+        .catch(() => {
+          setDataCheck(null)
+          setDataCheckLoading(false)
+        })
+    }
 
     return () => controller.abort()
-  }, [market, resolution, startDate, endDate, capital])
+  }, [market, resolution, startDate, endDate, capital, code])
 
   // Sync fee rate with preset
   useEffect(() => {
@@ -1292,8 +1735,9 @@ export default function BacktestLab() {
       initial_capital: capital,
       fee_rate: Math.max(feeRate, 0),
       params: {},
+      margin_tracking: marginTracking,
     })
-  }, [run, market, resolution, startDate, endDate, capital, feeRate])
+  }, [run, market, resolution, startDate, endDate, capital, feeRate, marginTracking])
 
   const handleOptimize = useCallback(async () => {
     setValidationError(null)
@@ -1331,6 +1775,47 @@ export default function BacktestLab() {
     a.click()
     URL.revokeObjectURL(url)
   }, [results])
+
+  const handleSync = useCallback(async () => {
+    setSyncing(true)
+    try {
+      await refresh()
+    } finally {
+      setSyncing(false)
+    }
+  }, [refresh])
+
+  const handleRangePreset = useCallback((preset: RangePreset) => {
+    setRangePreset(preset)
+    const dates = getPresetDates(preset)
+    if (dates) {
+      setStartDate(dates.start)
+      setEndDate(dates.end)
+    }
+  }, [])
+
+  const handleBacktestBestParams = useCallback(() => {
+    if (!optResults) return
+    setValidationError(null)
+    const startTs = Math.floor(new Date(startDate + 'T00:00:00Z').getTime() / 1000)
+    const endTs = Math.floor(new Date(endDate + 'T23:59:59Z').getTime() / 1000)
+    if (isNaN(startTs) || isNaN(endTs) || startTs >= endTs) return
+
+    const extraMarkets = extractMarketsFromCode(codeRef.current)
+    run({
+      strategy: 'custom',
+      code: codeRef.current,
+      market,
+      markets: extraMarkets.length > 0 ? [market, ...extraMarkets] : undefined,
+      resolution_s: RESOLUTIONS[resolution] || 3600,
+      start_ts: startTs,
+      end_ts: endTs,
+      initial_capital: capital,
+      fee_rate: Math.max(feeRate, 0),
+      params: optResults.best_params,
+      margin_tracking: marginTracking,
+    })
+  }, [optResults, run, market, resolution, startDate, endDate, capital, feeRate, marginTracking])
 
   /* ── keyboard shortcuts ────────────────────────────── */
 
@@ -1469,6 +1954,14 @@ export default function BacktestLab() {
         >
           + NEW
         </button>
+        <button
+          onClick={handleSync}
+          disabled={syncing}
+          className="px-2.5 py-1.5 text-[10px] tracking-[0.12em] border border-border text-ghost hover:text-amber hover:border-amber/30 transition-all whitespace-nowrap disabled:opacity-40"
+          title="Sync strategies from strategies/user/ folder"
+        >
+          {syncing ? 'SYNCING...' : 'SYNC'}
+        </button>
         {savedStrategies.map((s) => (
           <button
             key={s.name}
@@ -1606,23 +2099,51 @@ export default function BacktestLab() {
                   </optgroup>
                 </select>
               </div>
-              <div>
-                <label className={labelClass}>START</label>
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className={`${inputClass} ${configError && configError.includes('date') ? 'border-loss/50' : ''}`}
-                />
+              <div className="col-span-2 flex items-center gap-4 bg-panel/80 border border-border/50 px-3 py-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={marginTracking}
+                    onChange={(e) => setMarginTracking(e.target.checked)}
+                    className="accent-amber"
+                  />
+                  <span className="text-[10px] text-ghost tracking-wider">MARGIN TRACKING</span>
+                </label>
+                {marginTracking && (
+                  <span className="text-[9px] text-amber/60">Enforces per-venue leverage limits + liquidations</span>
+                )}
               </div>
-              <div>
-                <label className={labelClass}>END</label>
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className={`${inputClass} ${configError && configError.includes('date') ? 'border-loss/50' : ''}`}
-                />
+              <div className="col-span-2">
+                <label className={labelClass}>DATE RANGE</label>
+                <div className="flex gap-1 mb-2">
+                  {(['1M', '3M', '6M', '1Y', '3Y', 'CUSTOM'] as RangePreset[]).map(p => (
+                    <button
+                      key={p}
+                      onClick={() => handleRangePreset(p)}
+                      className={`px-2 py-1 text-[9px] tracking-[0.1em] border transition-all ${
+                        rangePreset === p
+                          ? 'border-amber/50 bg-amber-glow text-amber'
+                          : 'border-border text-ghost hover:text-terminal hover:border-border-bright'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => { setStartDate(e.target.value); setRangePreset('CUSTOM') }}
+                    className={`${inputClass} ${configError && configError.includes('date') ? 'border-loss/50' : ''}`}
+                  />
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => { setEndDate(e.target.value); setRangePreset('CUSTOM') }}
+                    className={`${inputClass} ${configError && configError.includes('date') ? 'border-loss/50' : ''}`}
+                  />
+                </div>
               </div>
             </div>
 
@@ -1641,18 +2162,55 @@ export default function BacktestLab() {
                   Checking data availability...
                 </div>
               )}
-              {!configError && !dataCheckLoading && dataCheck && (
+              {/* Multi-market data check */}
+              {!configError && !dataCheckLoading && multiMarketCheck && (
+                <div className={`px-2.5 py-1.5 text-[10px] tracking-wider border ${
+                  multiMarketCheck.ready
+                    ? 'border-gain/20 bg-gain/5 text-gain/80'
+                    : 'border-loss/20 bg-loss/5 text-loss/80'
+                }`}>
+                  {multiMarketCheck.ready ? (
+                    <>{Object.keys(multiMarketCheck.markets).length} markets ready</>
+                  ) : (
+                    <div className="space-y-1">
+                      <div>Missing data for: <span className="text-loss font-semibold">{multiMarketCheck.missing.join(', ')}</span></div>
+                      <div className="text-ghost/60">Go to <span className="text-amber">Data Explorer</span> and download these markets for your date range before running.</div>
+                    </div>
+                  )}
+                  <div className="mt-1 space-y-0.5">
+                    {Object.entries(multiMarketCheck.markets).map(([m, info]) => (
+                      <div key={m} className="flex items-center gap-2 text-[9px]">
+                        <span className={`w-1.5 h-1.5 ${info.covers_range ? 'bg-gain' : 'bg-loss'}`} />
+                        <span className="text-ghost">{m}</span>
+                        <span className="text-ghost/40">
+                          {info.covers_range
+                            ? `${info.candle_count.toLocaleString()} candles`
+                            : info.has_data ? `partial (${info.candle_count})` : 'no data'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Single-market data check (when no extra markets) */}
+              {!configError && !dataCheckLoading && !multiMarketCheck && dataCheck && (
                 <div className={`px-2.5 py-1.5 text-[10px] tracking-wider border ${
                   dataCheck.covers_range
                     ? 'border-gain/20 bg-gain/5 text-gain/80'
-                    : 'border-amber/20 bg-amber/5 text-amber/80'
+                    : 'border-loss/30 bg-loss/5 text-loss/80'
                 }`}>
                   {dataCheck.covers_range ? (
                     <>{dataCheck.candle_count.toLocaleString()} candles ready — instant backtest</>
                   ) : dataCheck.has_data ? (
-                    <>Partial data ({dataCheck.candle_count} candles) — will download rest from Drift S3</>
+                    <>
+                      DATA.GAP — only {dataCheck.candle_count.toLocaleString()} candles available
+                      {dataCheck.first_ts && dataCheck.last_ts && (
+                        <> ({new Date(dataCheck.first_ts * 1000).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'2-digit'})} → {new Date(dataCheck.last_ts * 1000).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'2-digit'})})</>
+                      )}
+                      . Download the full range from the Data tab first.
+                    </>
                   ) : (
-                    <>Will download from Drift S3 (10-60s depending on range)</>
+                    <>NO.DATA — download {market} from the Data tab before backtesting</>
                   )}
                 </div>
               )}
@@ -1717,21 +2275,22 @@ export default function BacktestLab() {
                   <div className="flex gap-2">
                     <button
                       onClick={handleRun}
-                      disabled={!!configError}
+                      disabled={!!configError || (multiMarketCheck !== null && !multiMarketCheck.ready) || (dataCheck !== null && !dataCheck.covers_range)}
                       className={`flex-1 px-4 py-3 text-sm font-semibold tracking-[0.15em] transition-all duration-200 ${
-                        configError
+                        configError || (multiMarketCheck && !multiMarketCheck.ready) || (dataCheck && !dataCheck.covers_range)
                           ? 'bg-border text-ghost/40 cursor-not-allowed'
                           : 'bg-amber text-void hover:bg-amber-dim'
                       }`}
-                      title={configError || 'Ctrl+Enter'}
+                      title={configError || (dataCheck && !dataCheck.covers_range ? 'Download market data from the Data tab first' : (multiMarketCheck && !multiMarketCheck.ready ? 'Download missing market data first' : 'Ctrl+Enter'))}
                     >
                       {configError ? 'FIX CONFIG'
-                        : dataCheck && dataCheck.will_download ? '> DOWNLOAD + RUN'
+                        : multiMarketCheck && !multiMarketCheck.ready ? 'MISSING DATA'
+                        : dataCheck && !dataCheck.covers_range ? 'NEED DATA'
                         : '> RUN_BACKTEST'}
                     </button>
                     <button
                       onClick={handleOptimize}
-                      disabled={!!configError}
+                      disabled={!!configError || (multiMarketCheck !== null && !multiMarketCheck.ready) || (dataCheck !== null && !dataCheck.covers_range)}
                       className="px-4 py-3 text-[11px] font-semibold tracking-[0.15em] border border-amber/40 text-amber hover:bg-amber/10 disabled:border-border disabled:text-ghost/30 transition-all"
                       title="Optimize strategy parameters"
                     >
@@ -1793,6 +2352,13 @@ export default function BacktestLab() {
                   <span className="text-ghost/40">{t.total_trades}t</span>
                 </div>
               ))}
+              <button
+                onClick={handleBacktestBestParams}
+                disabled={status === 'running'}
+                className="w-full mt-2 px-3 py-2 text-[10px] tracking-[0.15em] bg-amber text-void font-semibold hover:bg-amber-dim transition-all disabled:opacity-40"
+              >
+                {status === 'running' ? 'RUNNING...' : '> BACKTEST BEST PARAMS'}
+              </button>
             </div>
           )}
 
@@ -1845,7 +2411,48 @@ export default function BacktestLab() {
                   <div className="text-[8px] text-ghost/50 tracking-wider">SORTINO</div>
                   <div className="text-terminal">{results.metrics?.sortino_ratio?.toFixed(2)}</div>
                 </div>
+                <div>
+                  <div className="text-[8px] text-ghost/50 tracking-wider">PROFIT.FACTOR</div>
+                  <div className={`${results.metrics?.profit_factor >= 1 ? 'text-gain' : 'text-loss'}`}>
+                    {results.metrics?.profit_factor === Infinity ? '∞' : results.metrics?.profit_factor?.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[8px] text-ghost/50 tracking-wider">AVG.WIN</div>
+                  <div className="text-gain">${results.metrics?.avg_win?.toFixed(2)}</div>
+                </div>
+                <div>
+                  <div className="text-[8px] text-ghost/50 tracking-wider">AVG.LOSS</div>
+                  <div className="text-loss">${results.metrics?.avg_loss?.toFixed(2)}</div>
+                </div>
               </div>
+
+              {/* Monte Carlo summary */}
+              {results.monte_carlo && (
+                <div className="mt-2 pt-2 border-t border-border/30">
+                  <div className="text-[8px] text-ghost/50 tracking-wider mb-1">MONTE CARLO (500 sims)</div>
+                  <div className="grid grid-cols-3 gap-2 text-[10px] font-mono">
+                    <div>
+                      <span className="text-ghost/40">P5 </span>
+                      <span className={results.monte_carlo.ci_5 >= 0 ? 'text-gain' : 'text-loss'}>
+                        ${results.monte_carlo.ci_5?.toFixed(0)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-ghost/40">MED </span>
+                      <span className={results.monte_carlo.median >= 0 ? 'text-gain' : 'text-loss'}>
+                        ${results.monte_carlo.median?.toFixed(0)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-ghost/40">P95 </span>
+                      <span className={results.monte_carlo.ci_95 >= 0 ? 'text-gain' : 'text-loss'}>
+                        ${results.monte_carlo.ci_95?.toFixed(0)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {progress && progress.phase === 'done' && (
                 <div className="mt-2 text-[9px] text-ghost/40 tracking-wider">
@@ -1856,6 +2463,18 @@ export default function BacktestLab() {
               {results.trades?.length === 0 && (
                 <div className="mt-2 text-[10px] text-amber/70">
                   No trades — extend date range or adjust parameters
+                </div>
+              )}
+
+              {/* Strategy / data warnings */}
+              {results.data_quality?.warnings?.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-amber/20 space-y-1">
+                  {results.data_quality.warnings.map((w: string, i: number) => (
+                    <div key={i} className="text-[10px] text-amber/80 flex items-start gap-1.5">
+                      <span className="text-amber/50 shrink-0">!</span>
+                      <span>{w.replace(/^\[\d+\]\s*/, '')}</span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -1904,6 +2523,24 @@ export default function BacktestLab() {
               <SplitMetrics trades={results.trades} />
             </div>
           </div>
+
+          {/* Per-instrument exposure (multi-market strategies) */}
+          {results.instrument_exposure && Object.keys(results.instrument_exposure).length > 0 && (
+            <div className="border border-border bg-surface/60 backdrop-blur p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] text-ghost tracking-[0.2em]">INSTRUMENT.EXPOSURE</span>
+                <span className="text-[9px] text-ghost/40">
+                  {Object.keys(results.instrument_exposure).join(' + ')}
+                </span>
+              </div>
+              <InstrumentExposure
+                exposure={results.instrument_exposure}
+                startTs={results.period_start || results.equity_curve?.[0]?.[0] || 0}
+                endTs={results.period_end || results.equity_curve?.[results.equity_curve.length - 1]?.[0] || 0}
+                height={180}
+              />
+            </div>
+          )}
 
           {/* PnL distribution + Exposure side by side */}
           {results.trades?.length > 1 && (
@@ -1965,7 +2602,11 @@ export default function BacktestLab() {
           </div>
 
           <div className="text-[10px] text-ghost/40 text-center tracking-wider pb-4">
-            BUY_HOLD: {results.buy_hold_return_pct?.toFixed(2)}% &middot; FEE: {FEE_PRESETS[feePreset]?.label || 'custom'}
+            {results.benchmark_label || 'BUY_HOLD'}: {results.buy_hold_return_pct?.toFixed(2)}%
+            {results.markets_used?.length > 1 && (
+              <> &middot; MARKETS: {results.markets_used.join(', ')}</>
+            )}
+            &middot; FEE: {FEE_PRESETS[feePreset]?.label || 'custom'}
           </div>
         </div>
       )}
@@ -2015,6 +2656,9 @@ export default function BacktestLab() {
                       <th className="text-left px-2 py-1">#</th>
                       <th className="text-right px-2 py-1">{optResults.metric.toUpperCase()}</th>
                       <th className="text-right px-2 py-1">PNL</th>
+                      <th className="text-right px-2 py-1">SHARPE</th>
+                      <th className="text-right px-2 py-1">MAX DD</th>
+                      <th className="text-right px-2 py-1">WIN%</th>
                       <th className="text-right px-2 py-1">TRADES</th>
                       <th className="text-left px-2 py-1">PARAMS</th>
                     </tr>
@@ -2027,6 +2671,9 @@ export default function BacktestLab() {
                         <td className={`px-2 py-1 text-right ${t.total_pnl >= 0 ? 'text-gain' : 'text-loss'}`}>
                           ${t.total_pnl >= 0 ? '+' : ''}{t.total_pnl.toFixed(0)}
                         </td>
+                        <td className="px-2 py-1 text-right text-terminal">{t.sharpe_ratio?.toFixed(2) ?? '-'}</td>
+                        <td className="px-2 py-1 text-right text-loss">{((t.max_drawdown ?? 0) * 100).toFixed(1)}%</td>
+                        <td className="px-2 py-1 text-right text-ghost">{((t.win_rate ?? 0) * 100).toFixed(0)}%</td>
                         <td className="px-2 py-1 text-right text-ghost">{t.total_trades}</td>
                         <td className="px-2 py-1 text-ghost/60 text-[10px]">
                           {Object.entries(t.params).map(([k, v]) => `${k}=${v}`).join(', ')}
@@ -2037,6 +2684,13 @@ export default function BacktestLab() {
                 </table>
               </div>
             )}
+            <button
+              onClick={handleBacktestBestParams}
+              disabled={status === 'running'}
+              className="mt-3 px-6 py-2.5 text-xs tracking-[0.15em] bg-amber text-void font-semibold hover:bg-amber-dim transition-all disabled:opacity-40"
+            >
+              {status === 'running' ? 'RUNNING...' : '> BACKTEST WITH BEST PARAMS'}
+            </button>
           </div>
         </div>
       )}

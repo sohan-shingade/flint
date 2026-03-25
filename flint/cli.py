@@ -468,7 +468,7 @@ def optimize(
 
 @app.command()
 def serve(
-    host: str = typer.Option("0.0.0.0", "--host"),
+    host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8000, "--port"),
     dev: bool = typer.Option(False, "--dev", help="Run in dev mode (API only, no UI build)"),
 ):

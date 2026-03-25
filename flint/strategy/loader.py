@@ -16,6 +16,18 @@ APPROVED_MODULES = frozenset({
     "typing", "enum", "abc", "functools", "itertools", "operator",
 })
 
+# Builtins that must never appear in user strategy code
+BLOCKED_BUILTINS = frozenset({
+    "exec", "eval", "compile", "__import__", "breakpoint",
+    "globals", "locals", "vars", "open",
+})
+
+# Attribute accesses that indicate dangerous system-level operations
+BLOCKED_ATTRS = frozenset({
+    "system", "popen", "spawn", "call", "check_output",
+    "getenv", "environ", "listdir", "remove", "rmdir", "unlink",
+})
+
 
 class StrategyLoadError(Exception):
     pass
@@ -68,18 +80,35 @@ def validate_strategy_code(code: str) -> Dict[str, Any]:
     if missing:
         return {"valid": False, "error": f"Strategy class missing required methods: {', '.join(missing)}", "warnings": []}
 
-    # 4. Check imports
+    # 4. Check imports — BLOCK non-approved modules
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 top = alias.name.split(".")[0]
                 if top not in APPROVED_MODULES:
-                    warnings.append(f"Non-standard import: '{alias.name}' — proceed with caution")
+                    return {"valid": False,
+                            "error": f"Blocked import: '{alias.name}' — only these modules are "
+                                     f"allowed: {', '.join(sorted(APPROVED_MODULES))}",
+                            "warnings": warnings}
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 top = node.module.split(".")[0]
                 if top not in APPROVED_MODULES:
-                    warnings.append(f"Non-standard import: '{node.module}' — proceed with caution")
+                    return {"valid": False,
+                            "error": f"Blocked import: '{node.module}' — only these modules are "
+                                     f"allowed: {', '.join(sorted(APPROVED_MODULES))}",
+                            "warnings": warnings}
+
+    # 5. Check for dangerous builtins and attribute access
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in BLOCKED_BUILTINS:
+            return {"valid": False,
+                    "error": f"Blocked builtin: '{node.id}' — not allowed in strategy code",
+                    "warnings": warnings}
+        if isinstance(node, ast.Attribute) and node.attr in BLOCKED_ATTRS:
+            return {"valid": False,
+                    "error": f"Blocked attribute: '.{node.attr}' — not allowed in strategy code",
+                    "warnings": warnings}
 
     return {"valid": True, "error": None, "warnings": warnings}
 

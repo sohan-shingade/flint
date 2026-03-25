@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import AsciiFire from '../components/AsciiFire'
 
 interface MarketData {
@@ -13,8 +13,6 @@ interface MarketData {
 export default function Dashboard() {
   const [markets, setMarkets] = useState<MarketData[]>([])
   const [health, setHealth] = useState<string>('...')
-  const navigate = useNavigate()
-
   useEffect(() => {
     fetch('/api/v1/health')
       .then((r) => r.json())
@@ -27,18 +25,7 @@ export default function Dashboard() {
       .catch(() => {})
   }, [])
 
-  // Keyboard nav — numbers actually work now
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      if (e.key === '2') navigate('/backtest')
-      if (e.key === '3') navigate('/data')
-      if (e.key === '4') navigate('/docs')
-      if (e.key === '5') navigate('/mev')
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [navigate])
+  // Keyboard nav handled globally by App.tsx
 
   const fmtDate = (ts: number) =>
     new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })

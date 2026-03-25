@@ -22,7 +22,7 @@ export default function App() {
   useEffect(() => {
     const tick = () => {
       const now = new Date()
-      setClock(now.toLocaleTimeString('en-US', { hour12: false }) + ' UTC')
+      setClock(now.toLocaleTimeString('en-US', { hour12: false, timeZone: 'UTC' }) + ' UTC')
     }
     tick()
     const id = setInterval(tick, 1000)

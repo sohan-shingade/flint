@@ -76,6 +76,8 @@ class MACDDivergenceStrategy(Strategy):
 
         macd_val = self._fast_ema - self._slow_ema
         self._macd_history.append(macd_val)
+        if len(self._macd_history) > self.signal * 2:
+            self._macd_history = self._macd_history[-self.signal:]
 
         if len(self._macd_history) < self.signal:
             return Signal.HOLD

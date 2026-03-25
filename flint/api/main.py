@@ -77,7 +77,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -131,10 +136,13 @@ if _UI_DIST.exists() and (_UI_DIST / "index.html").exists():
                 and not request.url.path.startswith("/ws")
                 and not request.url.path.startswith("/assets/")
             ):
-                # Check if it's a real file in dist
-                file_path = _UI_DIST / request.url.path.lstrip("/")
-                if file_path.is_file():
-                    return FileResponse(str(file_path))
+                # Check if it's a real file in dist (path traversal protected)
+                try:
+                    file_path = (_UI_DIST / request.url.path.lstrip("/")).resolve()
+                    if file_path.is_file() and str(file_path).startswith(str(_UI_DIST.resolve())):
+                        return FileResponse(str(file_path))
+                except (ValueError, OSError):
+                    pass
                 return FileResponse(str(_UI_DIST / "index.html"))
             return response
 

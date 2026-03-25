@@ -39,7 +39,9 @@ class BollingerStrategy(Strategy):
 
         closes = np.array([c.close for c in history[-self.period:]])
         sma = float(np.mean(closes))
-        std = float(np.std(closes))
+        std = float(np.std(closes, ddof=1))
+        if std == 0:
+            return Signal.HOLD
 
         upper = sma + self.num_std * std
         lower = sma - self.num_std * std

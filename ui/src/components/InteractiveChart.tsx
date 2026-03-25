@@ -160,13 +160,17 @@ export default function InteractiveChart({ candles, height = 500, indicators, fu
         .setData(toLD(candles, computeVWAP(candles)))
     }
     if (indicators.bb) {
+      const bb = computeBB(closes, indicators.bbPeriod)
       chart.addSeries(LineSeries, { color: C.bb, lineWidth: 1, lineStyle: 2, title: 'BB↑' })
-        .setData(toLD(candles, computeBB(closes, indicators.bbPeriod).u))
+        .setData(toLD(candles, bb.u))
       chart.addSeries(LineSeries, { color: C.bb, lineWidth: 1, lineStyle: 2, title: 'BB↓' })
-        .setData(toLD(candles, computeBB(closes, indicators.bbPeriod).l))
+        .setData(toLD(candles, bb.l))
       chart.addSeries(LineSeries, { color: C.bb + '66', lineWidth: 1, lineStyle: 3, title: 'BB mid' })
-        .setData(toLD(candles, computeBB(closes, indicators.bbPeriod).m))
+        .setData(toLD(candles, bb.m))
     }
+
+    // Pre-build lookup map for crosshair (O(1) vs O(n) per mouse move)
+    const candleMap = new Map(candles.map(c => [c.ts, c]))
 
     // OHLCV legend on crosshair move
     chart.subscribeCrosshairMove(param => {
@@ -180,7 +184,7 @@ export default function InteractiveChart({ candles, height = 500, indicators, fu
       const color = d.close >= d.open ? C.up : C.down
       // Find matching candle for volume
       const ts = param.time as number
-      const candle = candles.find(c => c.ts === ts)
+      const candle = candleMap.get(ts)
       const vol = candle ? candle.volume.toLocaleString(undefined, { maximumFractionDigits: 0 }) : ''
       legendRef.current.innerHTML =
         `<span style="color:${C.text}">O</span> <span style="color:${color}">${d.open?.toFixed(2)}</span>` +

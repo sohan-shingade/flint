@@ -66,12 +66,16 @@ class RaydiumProvider(DataProvider):
 
         Returns a normalised pool dict, or ``None`` if not found.
         """
-        resp = self._client.get(
-            f"{_BASE_URL}/pools/info/ids",
-            params={"ids": pool_id},
-        )
-        resp.raise_for_status()
-        body = resp.json()
+        try:
+            resp = self._client.get(
+                f"{_BASE_URL}/pools/info/ids",
+                params={"ids": pool_id},
+            )
+            if resp.status_code != 200:
+                return None
+            body = resp.json()
+        except httpx.RequestError:
+            return None
 
         rows = body.get("data", [])
         if not rows:

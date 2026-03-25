@@ -70,4 +70,5 @@ def get_strategy(name: str):
     for s in _STRATEGIES:
         if s["name"] == name:
             return s
-    return {"error": f"Strategy '{name}' not found"}, 404
+    from fastapi import HTTPException
+    raise HTTPException(404, f"Strategy '{name}' not found")

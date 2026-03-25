@@ -8,6 +8,7 @@ No API key required.
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import List, Optional
 
@@ -15,6 +16,8 @@ import httpx
 
 from ..models import OpenInterest
 from .registry import DataProvider, register
+
+_logger = logging.getLogger("flint.providers.oi")
 
 _DATA_API = "https://data.api.drift.trade"
 
@@ -52,12 +55,18 @@ class DriftOpenInterestProvider(DataProvider):
         ``shortOI``, and ``ts`` fields.  Values are in BASE_PRECISION (1e9);
         we divide to get human-readable floats.
         """
-        resp = self._client.get(
-            f"{_DATA_API}/market/{market}/openInterest",
-            params={"start": start_ts, "end": end_ts},
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            resp = self._client.get(
+                f"{_DATA_API}/market/{market}/openInterest",
+                params={"start": start_ts, "end": end_ts},
+            )
+            if resp.status_code != 200:
+                _logger.warning("Drift OI API returned %d for %s", resp.status_code, market)
+                return []
+            data = resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError) as e:
+            _logger.warning("Drift OI API error for %s: %s", market, e)
+            return []
 
         records = data if isinstance(data, list) else data.get("data", [])
         results: List[OpenInterest] = []
@@ -81,12 +90,18 @@ class DriftOpenInterestProvider(DataProvider):
         ``None`` if no data is available.
         """
         now = int(time.time())
-        resp = self._client.get(
-            f"{_DATA_API}/market/{market}/openInterest",
-            params={"start": now - 60, "end": now},
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            resp = self._client.get(
+                f"{_DATA_API}/market/{market}/openInterest",
+                params={"start": now - 60, "end": now},
+            )
+            if resp.status_code != 200:
+                _logger.warning("Drift OI API returned %d for %s", resp.status_code, market)
+                return None
+            data = resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError) as e:
+            _logger.warning("Drift OI API error for %s: %s", market, e)
+            return None
 
         records = data if isinstance(data, list) else data.get("data", [])
         if not records:

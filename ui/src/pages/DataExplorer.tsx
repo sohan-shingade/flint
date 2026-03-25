@@ -185,7 +185,14 @@ export default function DataExplorer() {
       } catch {}
     }
 
-    setCandles(loaded)
+    // Only update candles state if data actually changed (prevents chart remount + scroll jump)
+    setCandles(prev => {
+      if (prev.length === loaded.length && loaded.length > 0 &&
+          prev[0]?.ts === loaded[0]?.ts && prev[prev.length - 1]?.ts === loaded[loaded.length - 1]?.ts) {
+        return prev
+      }
+      return loaded
+    })
 
     // Query local funding data (grouped by venue)
     if (market.includes('-PERP') && loaded.length > 0) {
@@ -211,14 +218,12 @@ export default function DataExplorer() {
     }
 
     if (loaded.length > 0) {
-      const fundingCount = Object.values(fundingByVenue).reduce((s, v) => s + v.length, 0)
-      setLoadStatus(`${loaded.length.toLocaleString()} candles` + (fundingCount > 0 ? ` + ${fundingCount} funding rates` : ''))
+      setLoadStatus(`${loaded.length.toLocaleString()} candles`)
     } else {
       setLoadStatus('No data — download this market from ADD MARKETS')
     }
 
     setLoading(false)
-    setTimeout(() => setLoadStatus(''), 5000)
   }, [market, resolution, horizon, startDate, endDate])
 
   // Load data on mount and when market/settings change
@@ -638,19 +643,17 @@ export default function DataExplorer() {
         </div>
       )}
 
-      {/* ── loading status ── */}
-      {loading && (
-        <div className="border border-amber/30 bg-amber/5 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <div className="w-4 h-4 border-2 border-amber/50 border-t-amber rounded-full animate-spin" />
-            <span className="text-[11px] text-amber/80 tracking-wider">{loadStatus || 'Loading...'}</span>
+      {/* ── loading status — fixed height to prevent scroll jump ── */}
+      <div className="h-7 flex items-center px-1">
+        {loading ? (
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 border border-amber/50 border-t-amber rounded-full animate-spin" />
+            <span className="text-[10px] text-amber/60 tracking-wider">{loadStatus || 'Loading...'}</span>
           </div>
-        </div>
-      )}
-
-      {!loading && loadStatus && candles.length > 0 && (
-        <div className="text-[10px] text-gain/60 tracking-wider px-1">{loadStatus}</div>
-      )}
+        ) : loadStatus && candles.length > 0 ? (
+          <span className="text-[10px] text-gain/60 tracking-wider">{loadStatus}</span>
+        ) : null}
+      </div>
 
       {!loading && candles.length === 0 && loadStatus && (
         <div className="border border-border/50 py-8 text-center">
@@ -675,7 +678,7 @@ export default function DataExplorer() {
 
       {/* ── interactive price chart ── */}
       {activeTab === 'price' && candles.length > 0 && (
-        <div style={{ animation: 'fadeUp 0.3s ease' }}>
+        <div className={loading ? 'opacity-50 pointer-events-none transition-opacity' : 'transition-opacity'} style={{ animation: 'fadeUp 0.3s ease' }}>
           <InteractiveChart
             candles={candles}
             height={500}

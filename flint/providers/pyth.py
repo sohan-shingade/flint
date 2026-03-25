@@ -79,7 +79,8 @@ class PythProvider(DataProvider):
             f"{_HERMES_API}/v2/updates/price/latest",
             params=params,
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            raise ValueError(f"Pyth Hermes API returned {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
     # -- single price ---------------------------------------------------------

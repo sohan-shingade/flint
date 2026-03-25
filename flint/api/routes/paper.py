@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ...strategy import (
@@ -115,11 +115,11 @@ def _build_strategy(req: StartRequest):
 async def start_paper(req: StartRequest, request: Request):
     engine = getattr(request.app.state, "paper_engine", None)
     if engine is None:
-        return {"error": "Paper trading engine not available"}, 503
+        raise HTTPException(503, "Paper trading engine not available")
 
     strategy = _build_strategy(req)
     if strategy is None:
-        return {"error": f"Unknown strategy: {req.strategy}"}, 404
+        raise HTTPException(404, f"Unknown strategy: {req.strategy}")
 
     session_id = engine.start_session(
         strategy=strategy,
@@ -155,7 +155,7 @@ async def paper_status(session_id: str, request: Request):
         return {"error": "Paper trading engine not available"}
     status = engine.get_status(session_id)
     if status is None:
-        return {"error": "Session not found"}, 404
+        raise HTTPException(404, "Session not found")
     return status
 
 

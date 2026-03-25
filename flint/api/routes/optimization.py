@@ -8,7 +8,7 @@ import threading
 from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ...optimization.optimizer import StrategyOptimizer
 from ...store import FlintStore
@@ -48,10 +48,10 @@ class OptimizeRequest(BaseModel):
     resolution_s: int = 3600
     start_ts: int
     end_ts: int
-    initial_capital: float = 10_000.0
-    fee_rate: float = 0.0005
+    initial_capital: float = Field(default=10_000.0, gt=0, le=1e12)
+    fee_rate: float = Field(default=0.0005, ge=0, le=0.5)
     metric: str = "sharpe_ratio"
-    trials: int = 50
+    trials: int = Field(default=50, ge=1, le=500)
 
 
 @router.post("/run")
@@ -113,24 +113,32 @@ def run_optimization(req: OptimizeRequest, request: Request):
             )
             opt_result = optimizer.optimize()
 
+            def _safe(v, decimals=4):
+                """Sanitize float for JSON (replace inf/nan with None)."""
+                import math
+                if isinstance(v, float) and (math.isinf(v) or math.isnan(v)):
+                    return None
+                return round(v, decimals)
+
             trials_list = []
             for t in opt_result.trials[:20]:
                 trials_list.append({
                     "params": t.params,
-                    "metric_value": round(t.metric_value, 4),
-                    "total_pnl": round(t.total_pnl, 2),
-                    "sharpe_ratio": round(t.sharpe_ratio, 4),
-                    "max_drawdown": round(t.max_drawdown, 4),
-                    "win_rate": round(t.win_rate, 4),
+                    "metric_value": _safe(t.metric_value),
+                    "total_pnl": _safe(t.total_pnl, 2),
+                    "sharpe_ratio": _safe(t.sharpe_ratio),
+                    "max_drawdown": _safe(t.max_drawdown),
+                    "win_rate": _safe(t.win_rate),
                     "total_trades": t.total_trades,
                 })
 
+            best_val = _safe(opt_result.best_value)
             _set(run_id, status="complete", progress={
                 "phase": "done", "pct": 100,
-                "detail": f"Best {req.metric}: {opt_result.best_value:.4f}",
+                "detail": f"Best {req.metric}: {best_val}",
             }, result={
                 "best_params": opt_result.best_params,
-                "best_value": round(opt_result.best_value, 4),
+                "best_value": best_val,
                 "metric": opt_result.metric,
                 "n_trials": opt_result.n_trials,
                 "trials": trials_list,

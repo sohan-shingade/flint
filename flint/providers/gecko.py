@@ -1,9 +1,13 @@
 """GeckoTerminal OHLCV provider."""
 from __future__ import annotations
 
+import logging
+import time
 from typing import List, Optional
 
 import httpx
+
+logger = logging.getLogger("flint.providers.gecko")
 
 from ..models import Candle
 from .base import CandleProvider
@@ -84,7 +88,9 @@ class GeckoProvider(CandleProvider):
                 "currency": "usd",
             }
             resp = self._client.get(url, params=params)
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                logger.warning("GeckoTerminal API returned %d", resp.status_code)
+                break
             data = resp.json()
             ohlcv_list = data.get("data", {}).get("attributes", {}).get("ohlcv_list", [])
             if not ohlcv_list:
@@ -112,6 +118,7 @@ class GeckoProvider(CandleProvider):
             if earliest <= start_ts:
                 break
             before_ts = earliest
+            time.sleep(2)  # GeckoTerminal rate limit: 30 req/min on free tier
 
         all_candles.sort(key=lambda c: c.ts)
         return all_candles

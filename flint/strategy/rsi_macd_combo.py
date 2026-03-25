@@ -111,6 +111,8 @@ class RSIMACDComboStrategy(Strategy):
 
         macd_val = self._fast_ema - self._slow_ema
         self._macd_history.append(macd_val)
+        if len(self._macd_history) > self.macd_signal * 2:
+            self._macd_history = self._macd_history[-self.macd_signal:]
 
         if len(self._macd_history) < self.macd_signal:
             return None

@@ -95,11 +95,11 @@ def test_validate_no_strategy_class():
     assert "Strategy" in result["error"]
 
 
-def test_validate_suspicious_import_warns():
+def test_validate_suspicious_import_blocked():
     result = validate_strategy_code(SUSPICIOUS_IMPORT)
-    assert result["valid"] is True
-    assert len(result["warnings"]) > 0
-    assert "os" in result["warnings"][0]
+    assert result["valid"] is False
+    assert "Blocked import" in result["error"]
+    assert "os" in result["error"]
 
 
 def test_load_strategy_with_params():

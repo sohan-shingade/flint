@@ -2,12 +2,13 @@ interface Props {
   metrics: Record<string, any>
 }
 
-const fmt = (v: number, decimals = 2) => v?.toFixed(decimals) ?? '-'
-const pct = (v: number) => `${fmt(v)}%`
+const fmt = (v: number | undefined | null, decimals = 2) => v != null ? v.toFixed(decimals) : '-'
+const pct = (v: number | undefined | null) => v != null ? `${v.toFixed(2)}%` : '-'
 
 export default function MetricsCard({ metrics }: Props) {
+  if (!metrics) return <div className="text-ghost/40 text-xs p-4">No metrics</div>
   const items = [
-    { label: 'TOTAL.PNL', value: `$${fmt(metrics.total_pnl)}`, accent: metrics.total_pnl >= 0 },
+    { label: 'TOTAL.PNL', value: `$${fmt(metrics.total_pnl)}`, accent: (metrics.total_pnl ?? 0) >= 0 },
     { label: 'RETURN', value: pct(metrics.total_return_pct), accent: metrics.total_return_pct >= 0 },
     { label: 'ANN.RETURN', value: pct(metrics.annualized_return_pct), accent: metrics.annualized_return_pct >= 0 },
     { label: 'SHARPE', value: fmt(metrics.sharpe_ratio) },

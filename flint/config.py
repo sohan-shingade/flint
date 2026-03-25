@@ -82,9 +82,14 @@ class FlintConfig(BaseSettings):
     paper_trading_capital: float = 10_000.0
 
     # --- API ---
-    api_host: str = "0.0.0.0"
+    api_host: str = "127.0.0.1"
     api_port: int = 8000
-    cors_origins: List[str] = Field(default=["*"])
+    cors_origins: List[str] = Field(default=[
+        "http://localhost:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8000",
+    ])
 
     # --- Provider API keys ---
     birdeye_api_key: str = ""

@@ -6,12 +6,15 @@ background thread, and backtest worker threads without DuckDB lock conflicts.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from typing import List, Optional
 
 import duckdb
 
 from .models import Candle, FundingRate, OraclePrice
+
+_logger = logging.getLogger("flint.store")
 
 _CREATE_CANDLES = """
 CREATE TABLE IF NOT EXISTS candles (
@@ -78,11 +81,12 @@ CREATE TABLE IF NOT EXISTS venue_funding_rates (
 
 _CREATE_OPEN_INTEREST = """
 CREATE TABLE IF NOT EXISTS open_interest (
+    venue     VARCHAR NOT NULL DEFAULT 'drift',
     market    VARCHAR NOT NULL,
     ts        BIGINT  NOT NULL,
     long_oi   DOUBLE  NOT NULL,
     short_oi  DOUBLE  NOT NULL,
-    PRIMARY KEY (market, ts)
+    PRIMARY KEY (venue, market, ts)
 );
 """
 
@@ -162,8 +166,8 @@ class FlintStore:
     def _create_tables(self) -> None:
         try:
             self._conn.execute("PRAGMA wal_autocheckpoint='1000'")
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.debug("WAL pragma not supported: %s", e)
         self._conn.execute(_CREATE_CANDLES)
         self._conn.execute(_CREATE_ORACLE_PRICES)
         self._conn.execute(_CREATE_ORDERBOOK_SNAPSHOTS)
@@ -175,15 +179,44 @@ class FlintStore:
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'funding_rates'"
             ).fetchone()[0]
             if count > 0:
-                self._conn.execute("""
-                    INSERT OR IGNORE INTO venue_funding_rates (venue, market, ts, rate_hourly, mark_price, index_price)
-                    SELECT COALESCE(source, 'drift'), market, ts, rate, mark_price, oracle_price
-                    FROM funding_rates
-                    WHERE ABS(rate) < 0.005
-                """)
-                self._conn.execute("DROP TABLE funding_rates")
-        except Exception:
-            pass
+                # Check which columns the old table has before migrating
+                old_cols = {r[0] for r in self._conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'funding_rates'"
+                ).fetchall()}
+                if 'rate' in old_cols:
+                    venue_expr = "COALESCE(source, 'drift')" if 'source' in old_cols else "'drift'"
+                    self._conn.execute("BEGIN TRANSACTION")
+                    try:
+                        self._conn.execute(f"""
+                            INSERT OR IGNORE INTO venue_funding_rates
+                                (venue, market, ts, rate_hourly, mark_price, index_price)
+                            SELECT {venue_expr}, market, ts, rate,
+                                   COALESCE(mark_price, 0), COALESCE(oracle_price, 0)
+                            FROM funding_rates
+                            WHERE ABS(rate) < 0.005
+                        """)
+                        self._conn.execute("DROP TABLE funding_rates")
+                        self._conn.execute("COMMIT")
+                        _logger.info("Migrated funding_rates → venue_funding_rates")
+                    except Exception as e:
+                        self._conn.execute("ROLLBACK")
+                        _logger.warning("Funding rates migration failed (data preserved): %s", e)
+                else:
+                    # Old table has incompatible schema — safe to drop
+                    self._conn.execute("DROP TABLE funding_rates")
+                    _logger.info("Dropped incompatible legacy funding_rates table")
+        except Exception as e:
+            _logger.debug("Funding rates migration check: %s", e)
+        # Migrate: add venue column to open_interest if missing
+        try:
+            cols = [r[0] for r in self._conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='open_interest'"
+            ).fetchall()]
+            if cols and "venue" not in cols:
+                self._conn.execute("DROP TABLE open_interest")
+        except Exception as e:
+            _logger.debug("Open interest migration check: %s", e)
         self._conn.execute(_CREATE_OPEN_INTEREST)
         self._conn.execute(_CREATE_LIQUIDATIONS)
         self._conn.execute(_CREATE_WHALE_TRANSFERS)
@@ -200,17 +233,22 @@ class FlintStore:
             (c.market, c.resolution_s, c.ts, c.open, c.high, c.low, c.close, c.volume)
             for c in candles
         ]
-        # Batch inserts to avoid holding lock too long (max 2000 rows per batch)
         batch_size = 2000
-        for i in range(0, len(rows), batch_size):
-            batch = rows[i:i + batch_size]
-            with self._lock:
-                self._conn.executemany(
-                    "INSERT OR REPLACE INTO candles "
-                    "(market, resolution_s, ts, open, high, low, close, volume) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    batch,
-                )
+        with self._lock:
+            self._conn.execute("BEGIN TRANSACTION")
+            try:
+                for i in range(0, len(rows), batch_size):
+                    batch = rows[i:i + batch_size]
+                    self._conn.executemany(
+                        "INSERT OR REPLACE INTO candles "
+                        "(market, resolution_s, ts, open, high, low, close, volume) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        batch,
+                    )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
         return len(rows)
 
     def query_candles(
@@ -265,15 +303,21 @@ class FlintStore:
         if not rows:
             return 0
         batch_size = 2000
-        for i in range(0, len(rows), batch_size):
-            batch = rows[i:i + batch_size]
-            with self._lock:
-                self._conn.executemany(
-                    "INSERT OR REPLACE INTO venue_funding_rates "
-                    "(venue, market, ts, rate_hourly, mark_price, index_price) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    batch,
-                )
+        with self._lock:
+            self._conn.execute("BEGIN TRANSACTION")
+            try:
+                for i in range(0, len(rows), batch_size):
+                    batch = rows[i:i + batch_size]
+                    self._conn.executemany(
+                        "INSERT OR REPLACE INTO venue_funding_rates "
+                        "(venue, market, ts, rate_hourly, mark_price, index_price) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        batch,
+                    )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
         return len(rows)
 
     def query_funding_rates(
@@ -394,6 +438,32 @@ class FlintStore:
             )
         return len(rows)
 
+    def query_orderbook_snapshots(
+        self,
+        market: str,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> List["OrderbookSnapshot"]:
+        """Query orderbook snapshots for a market within a time range."""
+        from .models import OrderbookLevel, OrderbookSnapshot
+        sql = "SELECT market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes FROM orderbook_snapshots WHERE market = ?"
+        params: list = [market]
+        if start_ts is not None:
+            sql += " AND ts >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            sql += " AND ts <= ?"
+            params.append(end_ts)
+        sql += " ORDER BY ts ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        result = []
+        for r in rows:
+            bids = tuple(OrderbookLevel(price=p, size=s) for p, s in zip(r[2] or [], r[3] or []))
+            asks = tuple(OrderbookLevel(price=p, size=s) for p, s in zip(r[4] or [], r[5] or []))
+            result.append(OrderbookSnapshot(market=r[0], ts=r[1], bids=bids, asks=asks))
+        return result
+
     # -- pool snapshots --------------------------------------------------------
 
     def upsert_pool_snapshots(self, snapshots: list) -> int:
@@ -478,11 +548,11 @@ class FlintStore:
     def upsert_open_interest(self, records: List["OpenInterest"]) -> int:
         if not records:
             return 0
-        rows = [(r.market, r.ts, r.long_oi, r.short_oi) for r in records]
+        rows = [(getattr(r, 'venue', 'drift'), r.market, r.ts, r.long_oi, r.short_oi) for r in records]
         with self._lock:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO open_interest "
-                "(market, ts, long_oi, short_oi) VALUES (?, ?, ?, ?)",
+                "(venue, market, ts, long_oi, short_oi) VALUES (?, ?, ?, ?, ?)",
                 rows,
             )
         return len(rows)
@@ -492,9 +562,14 @@ class FlintStore:
         market: str,
         start_ts: Optional[int] = None,
         end_ts: Optional[int] = None,
+        venue: Optional[str] = None,
     ) -> list:
-        sql = "SELECT market, ts, long_oi, short_oi FROM open_interest WHERE market = ?"
-        params: list = [market]
+        if venue:
+            sql = "SELECT venue, market, ts, long_oi, short_oi FROM open_interest WHERE market = ? AND venue = ?"
+            params: list = [market, venue]
+        else:
+            sql = "SELECT venue, market, ts, long_oi, short_oi FROM open_interest WHERE market = ?"
+            params = [market]
         if start_ts is not None:
             sql += " AND ts >= ?"
             params.append(start_ts)
@@ -505,7 +580,7 @@ class FlintStore:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         from .models import OpenInterest
-        return [OpenInterest(market=r[0], ts=r[1], long_oi=r[2], short_oi=r[3]) for r in rows]
+        return [OpenInterest(venue=r[0], market=r[1], ts=r[2], long_oi=r[3], short_oi=r[4]) for r in rows]
 
     # -- liquidations --------------------------------------------------------
 

@@ -57,13 +57,14 @@ def compute_metrics(
     else:
         returns = np.array([0.0])
 
-    # --- Sharpe ---
-    sharpe = float(np.mean(returns) / np.std(returns) * np.sqrt(periods_per_year)) if np.std(returns) > 0 else 0.0
+    # --- Sharpe (sample std, ddof=1) ---
+    ret_std = float(np.std(returns, ddof=1)) if len(returns) > 1 else 0.0
+    sharpe = float(np.mean(returns) / ret_std * np.sqrt(periods_per_year)) if ret_std > 1e-12 else 0.0
 
-    # --- Sortino (only penalises downside vol) ---
-    downside = returns[returns < 0]
-    downside_std = float(np.std(downside)) if len(downside) > 0 else 0.0
-    sortino = float(np.mean(returns) / downside_std * np.sqrt(periods_per_year)) if downside_std > 0 else 0.0
+    # --- Sortino (downside deviation over ALL returns, squaring only negatives) ---
+    downside_returns = np.minimum(returns, 0)
+    downside_std = float(np.sqrt(np.mean(downside_returns ** 2)))
+    sortino = float(np.mean(returns) / downside_std * np.sqrt(periods_per_year)) if downside_std > 1e-12 else 0.0
 
     # --- Drawdown ---
     peak = np.maximum.accumulate(equity)

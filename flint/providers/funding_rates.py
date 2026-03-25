@@ -113,18 +113,36 @@ BYBIT_SYMBOLS = {
 class BinanceFundingProvider:
     """Fetch historical funding rates from Binance Futures (free, no key).
 
+    Also fetches mark/index prices from premiumIndex endpoint.
     Note: Binance geo-blocks some regions (US, etc.) with HTTP 451.
-    Binance.US does NOT have futures/funding rates.
     """
 
-    # Try global first, no US alternative for futures
     BASE_URL = "https://fapi.binance.com/fapi/v1/fundingRate"
+    PREMIUM_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
 
     def __init__(self):
         self._client = httpx.Client(timeout=15)
+        self._price_cache: Dict[str, tuple] = {}
 
     def close(self):
         self._client.close()
+
+    def _fetch_prices(self, symbol: str) -> tuple:
+        """Fetch mark + index price from premiumIndex."""
+        if symbol in self._price_cache:
+            return self._price_cache[symbol]
+        try:
+            resp = self._client.get(self.PREMIUM_URL, params={"symbol": symbol})
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, dict):
+                    mark = float(data.get("markPrice", 0))
+                    index = float(data.get("indexPrice", 0))
+                    self._price_cache[symbol] = (mark, index)
+                    return (mark, index)
+        except Exception as e:
+            logger.debug("Binance premium index: %s", e)
+        return (0, 0)
 
     def fetch_funding(
         self,
@@ -169,7 +187,7 @@ class BinanceFundingProvider:
                         ts=ts,
                         rate_hourly=rate_1h,
                         mark_price=float(r.get("markPrice", 0)),
-                        index_price=0,  # not in this endpoint
+                        index_price=0.0,
                     ))
 
                 last_ts = int(records[-1]["fundingTime"])
@@ -185,16 +203,53 @@ class BinanceFundingProvider:
         return all_rates
 
 
+def _parse_hl_timestamp_ms(val) -> int:
+    """Parse a Hyperliquid timestamp (int ms, float ms, or ISO string) to epoch ms."""
+    if isinstance(val, (int, float)):
+        return int(val)
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(str(val).replace("Z", "+00:00")).timestamp() * 1000)
+    except Exception:
+        return 0
+
+
 class HyperliquidFundingProvider:
-    """Fetch historical funding rates from Hyperliquid (free, no key)."""
+    """Fetch historical funding rates from Hyperliquid (free, no key).
+
+    Also fetches live mark/oracle prices via metaAndAssetCtxs endpoint.
+    """
 
     BASE_URL = "https://api.hyperliquid.xyz/info"
 
     def __init__(self):
         self._client = httpx.Client(timeout=15)
+        self._price_cache: Dict[str, tuple] = {}  # symbol -> (mark, oracle)
 
     def close(self):
         self._client.close()
+
+    def _fetch_prices(self, symbol: str) -> tuple:
+        """Fetch live mark + oracle price from metaAndAssetCtxs. Cached per session."""
+        if symbol in self._price_cache:
+            return self._price_cache[symbol]
+        try:
+            resp = self._client.post(self.BASE_URL, json={"type": "metaAndAssetCtxs"})
+            if resp.status_code == 200:
+                data = resp.json()
+                # Response is [meta, [assetCtx, ...]] — asset contexts at index 1
+                if isinstance(data, list) and len(data) >= 2:
+                    meta = data[0]
+                    ctxs = data[1]
+                    symbols = [u.get("name", "") for u in meta.get("universe", [])]
+                    for i, ctx in enumerate(ctxs):
+                        if i < len(symbols):
+                            mark = float(ctx.get("markPx", 0))
+                            oracle = float(ctx.get("oraclePx", 0))
+                            self._price_cache[symbols[i]] = (mark, oracle)
+        except Exception as e:
+            logger.debug("Hyperliquid price fetch: %s", e)
+        return self._price_cache.get(symbol, (0, 0))
 
     def fetch_funding(
         self,
@@ -202,18 +257,17 @@ class HyperliquidFundingProvider:
         start_ts: int,
         end_ts: int,
     ) -> List[FundingSnapshot]:
-        """Fetch Hyperliquid funding rates. Hyperliquid pays every 1h.
-
-        Paginates: max 500 per request. Uses last record's time as next startTime.
-        """
+        """Fetch Hyperliquid funding rates. Hyperliquid pays every 1h."""
         symbol = HYPERLIQUID_SYMBOLS.get(market)
         if symbol is None:
             return []
 
+        # Note: Hyperliquid has no historical mark/oracle prices per funding record
+
         all_rates: List[FundingSnapshot] = []
         cursor_start = start_ts * 1000
 
-        for _ in range(100):  # max pages
+        for _ in range(100):
             try:
                 resp = self._client.post(self.BASE_URL, json={
                     "type": "fundingHistory",
@@ -231,7 +285,7 @@ class HyperliquidFundingProvider:
                     break
 
                 for r in records:
-                    ts = int(r.get("time", 0)) // 1000 if isinstance(r.get("time"), int) else 0
+                    ts = _parse_hl_timestamp_ms(r.get("time", 0)) // 1000
                     if ts == 0:
                         try:
                             from datetime import datetime, timezone
@@ -242,22 +296,19 @@ class HyperliquidFundingProvider:
 
                     if start_ts <= ts <= end_ts:
                         rate = float(r.get("fundingRate", 0))
+                        # Use premium field if available for per-record mark deviation
                         all_rates.append(FundingSnapshot(
                             venue="hyperliquid",
                             market=market,
                             ts=ts,
                             rate_hourly=rate,
-                            mark_price=0,
-                            index_price=0,
+                            mark_price=0.0,
+                            index_price=0.0,
                         ))
 
-                # Paginate
                 if len(records) < 500:
                     break
-                last_time = max(
-                    int(r.get("time", 0)) if isinstance(r.get("time"), int) else 0
-                    for r in records
-                )
+                last_time = max(_parse_hl_timestamp_ms(r.get("time", 0)) for r in records)
                 if last_time <= cursor_start:
                     break
                 cursor_start = last_time + 1
@@ -272,15 +323,37 @@ class HyperliquidFundingProvider:
 
 
 class OKXFundingProvider:
-    """Fetch historical funding rates from OKX (free, no key, no geo-block)."""
+    """Fetch historical funding rates from OKX (free, no key, no geo-block).
+
+    Also fetches mark price from /api/v5/public/mark-price endpoint.
+    """
 
     BASE_URL = "https://www.okx.com/api/v5/public/funding-rate-history"
+    MARK_URL = "https://www.okx.com/api/v5/public/mark-price"
 
     def __init__(self):
         self._client = httpx.Client(timeout=15)
+        self._mark_cache: Dict[str, float] = {}
 
     def close(self):
         self._client.close()
+
+    def _fetch_mark_price(self, inst_id: str) -> float:
+        """Fetch current mark price for an instrument."""
+        if inst_id in self._mark_cache:
+            return self._mark_cache[inst_id]
+        try:
+            resp = self._client.get(self.MARK_URL, params={"instId": inst_id, "instType": "SWAP"})
+            if resp.status_code == 200:
+                data = resp.json().get("data", [])
+                for d in data:
+                    if d.get("instId") == inst_id:
+                        price = float(d.get("markPx", 0))
+                        self._mark_cache[inst_id] = price
+                        return price
+        except Exception as e:
+            logger.debug("OKX mark price: %s", e)
+        return 0
 
     def fetch_funding(
         self,
@@ -288,20 +361,14 @@ class OKXFundingProvider:
         start_ts: int,
         end_ts: int,
     ) -> List[FundingSnapshot]:
-        """Fetch OKX funding rates. OKX pays every 8h.
-
-        OKX pagination: 'after' returns records OLDER than the given ID/ts.
-        Records are returned newest-first.
-        """
+        """Fetch OKX funding rates. OKX pays every 8h."""
         inst_id = OKX_SYMBOLS.get(market)
         if inst_id is None:
             return []
 
+        # Note: OKX has no per-record historical mark prices in the funding API
+
         all_rates: List[FundingSnapshot] = []
-        # OKX naming is confusing:
-        # 'after' = return records with fundingTime LESS than this (older)
-        # 'before' = return records with fundingTime GREATER than this (newer)
-        # We want to paginate backwards from end_ts, so use 'after'
         cursor = str(end_ts * 1000 + 1)
 
         for _ in range(100):
@@ -327,18 +394,14 @@ class OKXFundingProvider:
                             market=market,
                             ts=ts,
                             rate_hourly=rate_8h / 8,
-                            mark_price=0,
-                            index_price=0,
+                            mark_price=0.0,
+                            index_price=0.0,
                         ))
 
-                # Oldest record in this page
                 oldest_ft = min(r.get("fundingTime", "0") for r in records)
                 oldest_ts_s = int(oldest_ft) // 1000
-
-                # Stop if we've gone past the start
                 if oldest_ts_s < start_ts:
                     break
-
                 cursor = oldest_ft
                 time.sleep(0.1)
 
@@ -351,15 +414,38 @@ class OKXFundingProvider:
 
 
 class BybitFundingProvider:
-    """Fetch historical funding rates from Bybit (free, no key)."""
+    """Fetch historical funding rates from Bybit (free, no key).
+
+    Also fetches mark/index prices from tickers endpoint.
+    """
 
     BASE_URL = "https://api.bybit.com/v5/market/funding/history"
+    TICKER_URL = "https://api.bybit.com/v5/market/tickers"
 
     def __init__(self):
         self._client = httpx.Client(timeout=15)
+        self._price_cache: Dict[str, tuple] = {}
 
     def close(self):
         self._client.close()
+
+    def _fetch_prices(self, symbol: str) -> tuple:
+        """Fetch mark + index price from Bybit tickers."""
+        if symbol in self._price_cache:
+            return self._price_cache[symbol]
+        try:
+            resp = self._client.get(self.TICKER_URL, params={"category": "linear", "symbol": symbol})
+            if resp.status_code == 200:
+                items = resp.json().get("result", {}).get("list", [])
+                for item in items:
+                    if item.get("symbol") == symbol:
+                        mark = float(item.get("markPrice", 0))
+                        index = float(item.get("indexPrice", 0))
+                        self._price_cache[symbol] = (mark, index)
+                        return (mark, index)
+        except Exception as e:
+            logger.debug("Bybit price fetch: %s", e)
+        return (0, 0)
 
     def fetch_funding(
         self,
@@ -408,8 +494,8 @@ class BybitFundingProvider:
                         market=market,
                         ts=ts,
                         rate_hourly=rate_8h / 8,
-                        mark_price=0,
-                        index_price=0,
+                        mark_price=0.0,
+                        index_price=0.0,
                     ))
 
                 next_cursor = result.get("nextPageCursor", "")
@@ -492,6 +578,13 @@ class DriftFundingProvider:
                     else:
                         rate_hourly = rate
 
+                    # Sanity check: typical hourly rates are < 0.01 (1%)
+                    if abs(rate_hourly) > 0.01:
+                        logger.warning(
+                            "Drift funding rate unusually large for %s: raw=%s oracle=%s → hourly=%s",
+                            market, rate, oracle, rate_hourly,
+                        )
+
                     mark_price = mark
                     index_price = oracle
 
@@ -554,15 +647,35 @@ DYDX_SYMBOLS = {
 
 
 class GateioFundingProvider:
-    """Fetch historical funding rates from Gate.io (free, no key, no geo-block)."""
+    """Fetch historical funding rates from Gate.io (free, no key, no geo-block).
+
+    Also fetches mark/index from contract info endpoint.
+    """
 
     BASE_URL = "https://api.gateio.ws/api/v4/futures/usdt/funding_rate"
+    CONTRACT_URL = "https://api.gateio.ws/api/v4/futures/usdt/contracts"
 
     def __init__(self):
         self._client = httpx.Client(timeout=15)
+        self._price_cache: Dict[str, tuple] = {}
 
     def close(self):
         self._client.close()
+
+    def _fetch_prices(self, contract: str) -> tuple:
+        if contract in self._price_cache:
+            return self._price_cache[contract]
+        try:
+            resp = self._client.get(f"{self.CONTRACT_URL}/{contract}")
+            if resp.status_code == 200:
+                d = resp.json()
+                mark = float(d.get("mark_price", 0))
+                index = float(d.get("index_price", 0))
+                self._price_cache[contract] = (mark, index)
+                return (mark, index)
+        except Exception as e:
+            logger.debug("Gate.io contract info: %s", e)
+        return (0, 0)
 
     def fetch_funding(
         self, market: str, start_ts: int, end_ts: int,
@@ -572,6 +685,7 @@ class GateioFundingProvider:
         if contract is None:
             return []
 
+        mark_price, index_price = self._fetch_prices(contract)
         all_rates: List[FundingSnapshot] = []
 
         for _ in range(50):
@@ -595,10 +709,10 @@ class GateioFundingProvider:
                     if start_ts <= ts <= end_ts:
                         all_rates.append(FundingSnapshot(
                             venue="gateio", market=market, ts=ts,
-                            rate_hourly=rate_8h / 8, mark_price=0, index_price=0,
+                            rate_hourly=rate_8h / 8,
+                            mark_price=mark_price, index_price=index_price,
                         ))
 
-                # Gate.io returns newest-first; stop if oldest is before start
                 oldest = min(int(r.get("t", 0)) for r in records)
                 if oldest <= start_ts or len(records) < 1000:
                     break
@@ -614,15 +728,43 @@ class GateioFundingProvider:
 
 
 class BitgetFundingProvider:
-    """Fetch historical funding rates from Bitget (free, no key, no geo-block)."""
+    """Fetch historical funding rates from Bitget (free, no key, no geo-block).
+
+    Also fetches mark/index from ticker endpoint.
+    """
 
     BASE_URL = "https://api.bitget.com/api/v2/mix/market/history-fund-rate"
+    TICKER_URL = "https://api.bitget.com/api/v2/mix/market/ticker"
 
     def __init__(self):
         self._client = httpx.Client(timeout=15)
+        self._price_cache: Dict[str, tuple] = {}
 
     def close(self):
         self._client.close()
+
+    def _fetch_prices(self, symbol: str) -> tuple:
+        if symbol in self._price_cache:
+            return self._price_cache[symbol]
+        try:
+            resp = self._client.get(self.TICKER_URL, params={
+                "symbol": symbol, "productType": "USDT-FUTURES"
+            })
+            if resp.status_code == 200:
+                data = resp.json().get("data", [])
+                if isinstance(data, list) and data:
+                    d = data[0]
+                elif isinstance(data, dict):
+                    d = data
+                else:
+                    return (0, 0)
+                mark = float(d.get("markPrice", 0))
+                index = float(d.get("indexPrice", d.get("lastPr", 0)))
+                self._price_cache[symbol] = (mark, index)
+                return (mark, index)
+        except Exception as e:
+            logger.debug("Bitget ticker: %s", e)
+        return (0, 0)
 
     def fetch_funding(
         self, market: str, start_ts: int, end_ts: int,
@@ -632,6 +774,7 @@ class BitgetFundingProvider:
         if symbol is None:
             return []
 
+        mark_price, index_price = self._fetch_prices(symbol)
         all_rates: List[FundingSnapshot] = []
         page = 1
 
@@ -658,10 +801,10 @@ class BitgetFundingProvider:
                     rate_8h = float(r.get("fundingRate", 0))
                     all_rates.append(FundingSnapshot(
                         venue="bitget", market=market, ts=ts,
-                        rate_hourly=rate_8h / 8, mark_price=0, index_price=0,
+                        rate_hourly=rate_8h / 8,
+                        mark_price=mark_price, index_price=index_price,
                     ))
 
-                # Check if we've gone past our range
                 oldest = min(int(r.get("fundingTime", 0)) // 1000 for r in records)
                 if oldest < start_ts or len(records) < 100:
                     break
@@ -813,8 +956,10 @@ class CCXTFundingProvider:
                     if ts < start_ts or ts > end_ts:
                         continue
                     rate = float(r.get("fundingRate", 0))
-                    # Most exchanges use 8h funding, normalize to 1h
-                    rate_1h = rate / 8
+                    # Normalize to 1h — interval varies by exchange
+                    _interval = {"dydx": 1, "bybit": 8, "binance": 8, "okx": 8}.get(
+                        self._exchange_name, 8)
+                    rate_1h = rate / _interval
                     all_rates.append(FundingSnapshot(
                         venue=self._exchange_name, market=market, ts=ts,
                         rate_hourly=rate_1h, mark_price=0, index_price=0,
