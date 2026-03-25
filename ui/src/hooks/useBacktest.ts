@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 
 interface BacktestParams {
   strategy: string
@@ -11,6 +11,8 @@ interface BacktestParams {
   initial_capital: number
   fee_rate: number
   params?: Record<string, number>
+  margin_tracking?: boolean
+  capital_allocation?: Record<string, number>
 }
 
 interface Progress {
@@ -31,6 +33,13 @@ export function useBacktest() {
   const [progress, setProgress] = useState<Progress | null>(null)
   const pollStartRef = useRef<number>(0)
   const pollErrorCountRef = useRef<number>(0)
+  const cancelledRef = useRef(false)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    cancelledRef.current = true
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+  }, [])
 
   const run = useCallback(async (params: BacktestParams) => {
     setStatus('running')
@@ -39,6 +48,7 @@ export function useBacktest() {
     setProgress({ phase: 'init', pct: 0, detail: 'Submitting...', elapsed_s: 0, candles: 0 })
     pollStartRef.current = Date.now()
     pollErrorCountRef.current = 0
+    cancelledRef.current = false
 
     try {
       const res = await fetch('/api/v1/backtest/run', {
@@ -67,6 +77,7 @@ export function useBacktest() {
       setRunId(data.id)
 
       const poll = async () => {
+        if (cancelledRef.current) return
         // Timeout check
         const elapsed = (Date.now() - pollStartRef.current) / 1000
         if (elapsed > MAX_POLL_TIME_S) {
@@ -102,7 +113,7 @@ export function useBacktest() {
             setStatus('failed')
             setProgress(null)
           } else {
-            setTimeout(poll, 500)
+            pollTimerRef.current = setTimeout(poll, 500)
           }
         } catch (pollErr: any) {
           pollErrorCountRef.current++
@@ -112,10 +123,10 @@ export function useBacktest() {
             setProgress(null)
             return
           }
-          setTimeout(poll, 2000)
+          pollTimerRef.current = setTimeout(poll, 2000)
         }
       }
-      setTimeout(poll, 300)
+      pollTimerRef.current = setTimeout(poll, 300)
     } catch (e: any) {
       setError(e.message || 'Failed to submit backtest')
       setStatus('failed')

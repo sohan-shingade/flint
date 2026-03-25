@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 import time
 import threading
@@ -9,7 +10,7 @@ from datetime import datetime as dt, timezone as tz
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ...backtest.engine import BacktestEngine
 from ...models import Candle
@@ -25,6 +26,16 @@ from ...strategy import (
     RSIStrategy,
     BollingerStrategy,
     MomentumStrategy,
+    FundingHarvestStrategy,
+    MeanReversionStrategy,
+    BreakoutMomentumStrategy,
+    GridTraderStrategy,
+    DualTimeframeStrategy,
+    VWAPReversionStrategy,
+    MACDDivergenceStrategy,
+    ATRBreakoutStrategy,
+    MultiVenueFundingStrategy,
+    RSIMACDComboStrategy,
 )
 from ...strategy.loader import load_user_strategy, StrategyLoadError
 
@@ -38,6 +49,11 @@ _state_lock = threading.Lock()
 _results: Dict[str, dict] = {}
 _status: Dict[str, str] = {}
 _progress: Dict[str, dict] = {}
+
+# Concurrency and timeout limits
+_MAX_CONCURRENT = 5
+_MAX_BACKTEST_SECONDS = 300
+_concurrency: Dict[str, int] = {"active": 0}
 
 
 def _evict_old():
@@ -76,9 +92,12 @@ class BacktestRequest(BaseModel):
     resolution_s: int = 3600
     start_ts: int
     end_ts: int
-    initial_capital: float = 10_000.0
-    fee_rate: float = 0.0005
+    initial_capital: float = Field(default=10_000.0, gt=0, le=1e12)
+    fee_rate: float = Field(default=0.0005, ge=0, le=0.5)
     params: Optional[Dict] = None
+    # v0.3 execution features (opt-in)
+    margin_tracking: bool = False
+    capital_allocation: Optional[Dict[str, float]] = None  # e.g. {"drift": 5000, "hyperliquid": 3000}
 
 
 def _build_strategy(name: str, params: Dict, code: str = None):
@@ -89,7 +108,12 @@ def _build_strategy(name: str, params: Dict, code: str = None):
     if name.startswith("user:"):
         from pathlib import Path
         strat_name = name[5:]
-        path = Path(__file__).resolve().parents[3] / "strategies" / "user" / f"{strat_name}.py"
+        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_-]{0,63}$', strat_name):
+            return None
+        user_dir = Path(__file__).resolve().parents[3] / "strategies" / "user"
+        path = (user_dir / f"{strat_name}.py").resolve()
+        if not str(path).startswith(str(user_dir.resolve())):
+            return None
         if not path.exists():
             return None
         return load_user_strategy(path.read_text(encoding="utf-8"), params or None)
@@ -116,6 +140,49 @@ def _build_strategy(name: str, params: Dict, code: str = None):
             lookback=int(p.get("lookback", 24)),
             threshold_pct=float(p.get("threshold_pct", 5.0)),
         ),
+        "funding_harvest": lambda p: FundingHarvestStrategy(
+            entry_threshold=float(p.get("entry_threshold", 0.001)),
+            exit_threshold=float(p.get("exit_threshold", 0.0002)),
+            stop_loss_pct=float(p.get("stop_loss_pct", 0.05)),
+            lookback=int(p.get("lookback", 8)),
+        ),
+        "mean_reversion": lambda p: MeanReversionStrategy(
+            period=int(p.get("period", 20)),
+            entry_z=float(p.get("entry_z", 2.0)),
+            exit_z=float(p.get("exit_z", 0.5)),
+            stop_loss_pct=float(p.get("stop_loss_pct", 0.05)),
+        ),
+        "breakout_momentum": lambda p: BreakoutMomentumStrategy(),
+        "grid_trader": lambda p: GridTraderStrategy(),
+        "dual_timeframe": lambda p: DualTimeframeStrategy(),
+        "vwap_reversion": lambda p: VWAPReversionStrategy(
+            period=int(p.get("period", 20)),
+            entry_pct=float(p.get("entry_pct", 2.0)),
+            exit_pct=float(p.get("exit_pct", 0.5)),
+        ),
+        "macd_divergence": lambda p: MACDDivergenceStrategy(
+            fast=int(p.get("fast", 12)),
+            slow=int(p.get("slow", 26)),
+            signal=int(p.get("signal", 9)),
+        ),
+        "atr_breakout": lambda p: ATRBreakoutStrategy(
+            period=int(p.get("period", 20)),
+            atr_period=int(p.get("atr_period", 14)),
+            multiplier=float(p.get("multiplier", 2.0)),
+        ),
+        "multi_venue_funding": lambda p: MultiVenueFundingStrategy(
+            entry_threshold=float(p.get("entry_threshold", 0.0005)),
+            exit_threshold=float(p.get("exit_threshold", 0.0001)),
+            lookback=int(p.get("lookback", 12)),
+        ),
+        "rsi_macd_combo": lambda p: RSIMACDComboStrategy(
+            rsi_period=int(p.get("rsi_period", 14)),
+            macd_fast=int(p.get("macd_fast", 12)),
+            macd_slow=int(p.get("macd_slow", 26)),
+            macd_signal=int(p.get("macd_signal", 9)),
+            rsi_oversold=float(p.get("rsi_oversold", 30)),
+            rsi_overbought=float(p.get("rsi_overbought", 70)),
+        ),
     }
     builder = builders.get(name)
     return builder(params) if builder else None
@@ -127,6 +194,16 @@ _DEFAULTS = {
     "rsi": {"period": 14, "oversold": 30, "overbought": 70},
     "bollinger": {"period": 20, "num_std": 2.0},
     "momentum": {"lookback": 24, "threshold_pct": 5.0},
+    "funding_harvest": {"entry_threshold": 0.00003, "exit_threshold": 0.000005, "stop_loss_pct": 0.05, "lookback": 8},
+    "mean_reversion": {"period": 20, "entry_z": 2.0, "exit_z": 0.5, "stop_loss_pct": 0.05},
+    "breakout_momentum": {},
+    "grid_trader": {},
+    "dual_timeframe": {},
+    "vwap_reversion": {"period": 20, "entry_pct": 2.0, "exit_pct": 0.5},
+    "macd_divergence": {"fast": 12, "slow": 26, "signal": 9},
+    "atr_breakout": {"period": 20, "atr_period": 14, "multiplier": 2.0},
+    "multi_venue_funding": {"entry_threshold": 0.00003, "exit_threshold": 0.000005, "lookback": 12},
+    "rsi_macd_combo": {"rsi_period": 14, "macd_fast": 12, "macd_slow": 26, "macd_signal": 9, "rsi_oversold": 30, "rsi_overbought": 70},
 }
 
 
@@ -157,6 +234,12 @@ def run_backtest(req: BacktestRequest, request: Request):
             "expected": expected,
             "source": "local" if candle_count > 0 else "will_fetch_s3",
         }
+
+    # Concurrent backtest limit
+    with _state_lock:
+        if _concurrency["active"] >= _MAX_CONCURRENT:
+            raise HTTPException(429, "Too many concurrent backtests — try again shortly")
+        _concurrency["active"] += 1
 
     run_id = str(uuid.uuid4())[:8]
     started = time.time()
@@ -317,6 +400,39 @@ def run_backtest(req: BacktestRequest, request: Request):
             if quality.completeness_pct < 80:
                 data_warnings.append(f"Data completeness: {quality.completeness_pct:.0f}%")
 
+            # Phase 2.7: Load funding rates for the backtest period
+            funding_rates = []
+            try:
+                funding_rates = store.query_funding_rates(
+                    req.market, start_ts=req.start_ts, end_ts=req.end_ts
+                )
+                if funding_rates:
+                    logger.info("Loaded %d funding rates for %s", len(funding_rates), req.market)
+            except Exception as e:
+                logger.debug("No funding rates available for %s: %s", req.market, e)
+
+            # Phase 2.8: Load open interest for the backtest period
+            open_interest = []
+            try:
+                open_interest = store.query_open_interest(
+                    req.market, start_ts=req.start_ts, end_ts=req.end_ts
+                )
+                if open_interest:
+                    logger.info("Loaded %d OI snapshots for %s", len(open_interest), req.market)
+            except Exception as e:
+                logger.debug("No OI data for %s: %s", req.market, e)
+
+            # Phase 2.9: Load orderbook snapshots for the backtest period
+            orderbook_snapshots = []
+            try:
+                orderbook_snapshots = store.query_orderbook_snapshots(
+                    req.market, start_ts=req.start_ts, end_ts=req.end_ts
+                )
+                if orderbook_snapshots:
+                    logger.info("Loaded %d orderbook snapshots for %s", len(orderbook_snapshots), req.market)
+            except Exception as e:
+                logger.debug("No orderbook data available for %s: %s", req.market, e)
+
             # Phase 3: Run backtest
             first_date = dt.fromtimestamp(candles[0].ts, tz=tz.utc).strftime("%Y-%m-%d")
             last_date = dt.fromtimestamp(candles[-1].ts, tz=tz.utc).strftime("%Y-%m-%d")
@@ -324,7 +440,24 @@ def run_backtest(req: BacktestRequest, request: Request):
                           detail=f"Running {strategy.name} on {len(candles):,} candles ({first_date} to {last_date})",
                           candles=len(candles))
 
-            engine = BacktestEngine(strategy, req.initial_capital, req.fee_rate)
+            # Build optional execution features
+            margin_eng = None
+            cap_alloc = None
+            if req.margin_tracking:
+                from ...execution.margin import MarginEngine
+                from ...execution.venue_config import VENUE_DEFAULTS
+                margin_eng = MarginEngine(VENUE_DEFAULTS)
+            if req.capital_allocation:
+                from ...execution.capital import VenueAllocator
+                cap_alloc = VenueAllocator(req.capital_allocation)
+
+            engine = BacktestEngine(strategy, req.initial_capital, req.fee_rate,
+                                    funding_rates=funding_rates,
+                                    orderbook_snapshots=orderbook_snapshots,
+                                    open_interest=open_interest,
+                                    margin_engine=margin_eng,
+                                    capital_allocator=cap_alloc,
+                                    max_runtime_s=_MAX_BACKTEST_SECONDS)
             if extra_candles:
                 # Multi-market: pass dict of all markets
                 all_candles = {req.market: candles}
@@ -337,10 +470,17 @@ def run_backtest(req: BacktestRequest, request: Request):
             _set_progress(run_id, phase="tearsheet", pct=90,
                           detail=f"Generating tearsheet — {result.total_trades} trades, PnL ${result.total_pnl:+,.2f}")
 
+            # Build all_candles dict for multi-market tearsheet
+            tearsheet_candles = None
+            if extra_candles:
+                tearsheet_candles = {req.market: candles}
+                tearsheet_candles.update(extra_candles)
+
             tearsheet = generate_tearsheet(
                 result, candles,
                 strategy_name=strategy.name,
                 initial_capital=req.initial_capital,
+                all_candles=tearsheet_candles,
             )
 
             _set_progress(run_id, phase="done", pct=100,
@@ -348,6 +488,10 @@ def run_backtest(req: BacktestRequest, request: Request):
 
             # Embed data quality and Monte Carlo into tearsheet
             ts_dict = tearsheet.to_dict()
+            # Collect strategy warnings (e.g. missing funding data)
+            if result.strategy_warnings:
+                data_warnings.extend(result.strategy_warnings)
+
             ts_dict["data_quality"] = {
                 "completeness_pct": quality.completeness_pct,
                 "gaps": len(quality.gaps),
@@ -396,6 +540,9 @@ def run_backtest(req: BacktestRequest, request: Request):
             _set_status(run_id, "failed")
             _set_result(run_id, {"error": f"{type(e).__name__}: {e}"})
             _set_progress(run_id, phase="error", pct=0, detail=f"{type(e).__name__}: {e}")
+        finally:
+            with _state_lock:
+                _concurrency["active"] = max(0, _concurrency["active"] - 1)
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()

@@ -62,28 +62,28 @@ class LiveContext(ExecutionContext):
     def set_candle(self, candle: Candle) -> None:
         self._current_candle = candle
 
-    def market_order(self, market, side, size, reduce_only=False, tag=""):
+    def market_order(self, market, side, size, reduce_only=False, tag="", venue="default"):
         oid = self._next_id()
         order = Order(market=market, side=side, order_type=OrderType.MARKET,
                       size=size, order_id=oid, ts=self.timestamp)
         self._broker.submit_order(order)
         return oid
 
-    def limit_order(self, market, side, size, price, reduce_only=False, tag=""):
+    def limit_order(self, market, side, size, price, reduce_only=False, tag="", venue="default"):
         oid = self._next_id()
         order = Order(market=market, side=side, order_type=OrderType.LIMIT,
                       size=size, price=price, order_id=oid, ts=self.timestamp)
         self._broker.submit_order(order)
         return oid
 
-    def stop_order(self, market, side, size, trigger_price, tag=""):
+    def stop_order(self, market, side, size, trigger_price, tag="", venue="default"):
         oid = self._next_id()
         order = Order(market=market, side=side, order_type=OrderType.STOP_LOSS,
                       size=size, price=trigger_price, order_id=oid, ts=self.timestamp)
         self._broker.submit_order(order)
         return oid
 
-    def take_profit_order(self, market, side, size, trigger_price, tag=""):
+    def take_profit_order(self, market, side, size, trigger_price, tag="", venue="default"):
         oid = self._next_id()
         order = Order(market=market, side=side, order_type=OrderType.TAKE_PROFIT,
                       size=size, price=trigger_price, order_id=oid, ts=self.timestamp)

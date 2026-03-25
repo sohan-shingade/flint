@@ -24,52 +24,6 @@ logger = logging.getLogger("flint.api")
 _UI_DIST = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
 
 
-async def _sync_funding_coverage(store: FlintStore):
-    """Background task: purge bad funding data and fetch latest rates."""
-    await asyncio.sleep(2)  # Let server start first
-    try:
-        import threading
-        def _run():
-            from .routes.data import _sync_funding_to_candle_range
-            import logging as _log
-            _logger = _log.getLogger("flint.startup")
-
-            # ALWAYS purge corrupted funding rates on startup
-            with store._lock:
-                store._conn.execute(
-                    "DELETE FROM funding_rates WHERE ABS(rate) > 0.005"
-                )
-            _logger.info("Startup cleanup: purged corrupted funding rates")
-
-            # Get all perp markets with candle data
-            with store._lock:
-                rows = store._conn.execute(
-                    "SELECT DISTINCT market FROM candles WHERE market LIKE '%-PERP'"
-                ).fetchall()
-
-            if not rows:
-                return
-
-            for (market,) in rows:
-                # Check if we have any funding data at all
-                existing = store.query_funding_rates(market)
-                if not existing:
-                    _logger.info("No funding data for %s — fetching from Drift...", market)
-                    try:
-                        # Drift funding API only has ~30 days of history
-                        import time as _time
-                        now = int(_time.time())
-                        _sync_funding_to_candle_range(store, market, now - 90 * 86400, now, _logger)
-                    except Exception as e:
-                        _logger.warning("Funding fetch failed for %s: %s", market, e)
-
-            _logger.info("Funding coverage check complete")
-
-        await asyncio.to_thread(_run)
-    except Exception as e:
-        logger.warning("Funding coverage sync error: %s", e)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: init shared store and collector. Shutdown: clean up."""
@@ -96,9 +50,6 @@ async def lifespan(app: FastAPI):
         app.state.ws_manager = ws_manager
 
         logger.info("Flint API started (collector=%s)", config.collector_enabled)
-
-        # Background task: sync funding coverage to match candle data
-        asyncio.create_task(_sync_funding_coverage(store))
     except Exception as exc:
         logger.warning("Lifespan startup failed (non-fatal): %s", exc)
 
@@ -126,7 +77,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -151,6 +107,8 @@ def health():
 # ─── Serve built UI static files ───────────────────────────────
 # If ui/dist exists (production build), serve it. All non-API routes
 # fall through to index.html for client-side routing.
+# NOTE: The SPA fallback is mounted LAST via middleware, not a catch-all
+# route, to avoid stealing API routes from sub-routers.
 if _UI_DIST.exists() and (_UI_DIST / "index.html").exists():
     # Serve static assets (JS, CSS, images)
     app.mount("/assets", StaticFiles(directory=str(_UI_DIST / "assets")), name="ui-assets")
@@ -158,22 +116,37 @@ if _UI_DIST.exists() and (_UI_DIST / "index.html").exists():
     # Serve other static files at root (favicon, etc.)
     @app.get("/favicon.svg")
     async def favicon():
-        path = _UI_DIST / "favicon.svg"
-        if path.exists():
-            return FileResponse(str(path))
+        fpath = _UI_DIST / "favicon.svg"
+        if fpath.exists():
+            return FileResponse(str(fpath))
 
-    # Catch-all: serve index.html for client-side routing
-    @app.get("/{path:path}")
-    async def serve_ui(path: str):
-        # Don't serve index.html for API routes or WebSocket
-        if path.startswith("api/") or path.startswith("ws"):
-            return {"error": "not found"}
-        # Check if it's a real file in dist
-        file_path = _UI_DIST / path
-        if file_path.is_file():
-            return FileResponse(str(file_path))
-        # Otherwise serve index.html (SPA routing)
-        return FileResponse(str(_UI_DIST / "index.html"))
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request as StarletteRequest
+    from starlette.responses import Response as StarletteResponse
+
+    class _SPAFallbackMiddleware(BaseHTTPMiddleware):
+        """Serve index.html for non-API, non-asset GET requests that 404."""
+        async def dispatch(self, request: StarletteRequest, call_next) -> StarletteResponse:
+            response = await call_next(request)
+            # Only intercept 404 GETs that aren't API/WS/asset routes
+            if (
+                response.status_code == 404
+                and request.method == "GET"
+                and not request.url.path.startswith("/api/")
+                and not request.url.path.startswith("/ws")
+                and not request.url.path.startswith("/assets/")
+            ):
+                # Check if it's a real file in dist (path traversal protected)
+                try:
+                    file_path = (_UI_DIST / request.url.path.lstrip("/")).resolve()
+                    if file_path.is_file() and str(file_path).startswith(str(_UI_DIST.resolve())):
+                        return FileResponse(str(file_path))
+                except (ValueError, OSError):
+                    pass
+                return FileResponse(str(_UI_DIST / "index.html"))
+            return response
+
+    app.add_middleware(_SPAFallbackMiddleware)
 
     logger.info("Serving UI from %s", _UI_DIST)
 

@@ -63,22 +63,13 @@ def _mock_client(url_to_response: dict) -> httpx.Client:
 
 
 def test_fetch_funding_rates():
+    """fetch_funding_rates is deprecated — Drift removed the endpoint.
+    It should return empty list and log a warning."""
     client = _mock_client({"data.api.drift.trade": _FUNDING_RESPONSE})
     provider = DriftDataProvider(client=client)
 
     rates = provider.fetch_funding_rates(market_index=0, market_name="SOL-PERP")
-    assert len(rates) == 1
-
-    r = rates[0]
-    assert r.market == "SOL-PERP"
-    assert r.ts == 1771383600
-    # rate = raw_rate / oracle_price (dollar-denominated → fractional)
-    raw_rate = -1889875 / _PRICE_PRECISION
-    oracle = 84642173 / _PRICE_PRECISION
-    assert r.rate == pytest.approx(raw_rate / oracle)
-    assert r.oracle_price == pytest.approx(oracle)
-    assert r.mark_price == pytest.approx(84579888 / _PRICE_PRECISION)
-    assert r.slot == 401001868
+    assert len(rates) == 0  # deprecated, returns empty
 
 
 def test_fetch_orderbook():

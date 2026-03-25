@@ -73,9 +73,10 @@ def run_monte_carlo(
     ruin_count = 0
     all_equity_curves = []
 
+    rng = np.random.default_rng(seed=42)
     for _ in range(n_simulations):
-        # Shuffle trade order
-        shuffled = np.random.permutation(pnls)
+        # Shuffle trade order (seeded for reproducibility)
+        shuffled = rng.permutation(pnls)
 
         # Build equity curve
         equity = np.empty(n_trades + 1)
@@ -89,8 +90,9 @@ def run_monte_carlo(
         returns = np.diff(equity) / equity[:-1]
         returns = returns[np.isfinite(returns)]
 
-        if len(returns) > 1 and np.std(returns) > 0:
-            sharpe = float(np.mean(returns) / np.std(returns) * np.sqrt(8760))
+        std = float(np.std(returns, ddof=1)) if len(returns) > 1 else 0.0
+        if std > 1e-12:
+            sharpe = float(np.mean(returns) / std * np.sqrt(8760))
         else:
             sharpe = 0.0
         sharpes.append(sharpe)

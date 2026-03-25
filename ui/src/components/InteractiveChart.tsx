@@ -7,7 +7,7 @@ import type { IChartApi, Time } from 'lightweight-charts'
 
 interface Candle { ts: number; open: number; high: number; low: number; close: number; volume: number }
 
-interface FundingPoint { ts: number; rate: number }
+interface FundingPoint { ts: number; rate: number; source?: string }
 
 interface IndicatorConfig {
   sma: boolean; smaPeriod: number
@@ -160,13 +160,17 @@ export default function InteractiveChart({ candles, height = 500, indicators, fu
         .setData(toLD(candles, computeVWAP(candles)))
     }
     if (indicators.bb) {
+      const bb = computeBB(closes, indicators.bbPeriod)
       chart.addSeries(LineSeries, { color: C.bb, lineWidth: 1, lineStyle: 2, title: 'BB↑' })
-        .setData(toLD(candles, computeBB(closes, indicators.bbPeriod).u))
+        .setData(toLD(candles, bb.u))
       chart.addSeries(LineSeries, { color: C.bb, lineWidth: 1, lineStyle: 2, title: 'BB↓' })
-        .setData(toLD(candles, computeBB(closes, indicators.bbPeriod).l))
+        .setData(toLD(candles, bb.l))
       chart.addSeries(LineSeries, { color: C.bb + '66', lineWidth: 1, lineStyle: 3, title: 'BB mid' })
-        .setData(toLD(candles, computeBB(closes, indicators.bbPeriod).m))
+        .setData(toLD(candles, bb.m))
     }
+
+    // Pre-build lookup map for crosshair (O(1) vs O(n) per mouse move)
+    const candleMap = new Map(candles.map(c => [c.ts, c]))
 
     // OHLCV legend on crosshair move
     chart.subscribeCrosshairMove(param => {
@@ -180,7 +184,7 @@ export default function InteractiveChart({ candles, height = 500, indicators, fu
       const color = d.close >= d.open ? C.up : C.down
       // Find matching candle for volume
       const ts = param.time as number
-      const candle = candles.find(c => c.ts === ts)
+      const candle = candleMap.get(ts)
       const vol = candle ? candle.volume.toLocaleString(undefined, { maximumFractionDigits: 0 }) : ''
       legendRef.current.innerHTML =
         `<span style="color:${C.text}">O</span> <span style="color:${color}">${d.open?.toFixed(2)}</span>` +
@@ -240,20 +244,31 @@ export default function InteractiveChart({ candles, height = 500, indicators, fu
 
       // Build funding data aligned to candle timestamps for perfect sync.
       // Round funding timestamps to nearest hour to match candle timestamps.
-      const fundingMap = new Map<number, number>()
+      // Track both value and source for color-coding.
+      const fundingMap = new Map<number, { val: number; source: string }>()
       for (const r of fundingRates) {
         const hourKey = Math.floor(r.ts / 3600) * 3600
-        fundingMap.set(hourKey, r.rate * 10000)  // bps, keyed by rounded hour
+        fundingMap.set(hourKey, { val: r.rate * 10000, source: r.source || 'drift' })
+      }
+
+      // Source colors: drift = amber, hyperliquid = cyan, drift_s3 = purple
+      const sourceColors: Record<string, { pos: string; neg: string }> = {
+        drift:        { pos: '#e8a849cc', neg: '#e8a84966' },
+        drift_s3:     { pos: '#a78bfacc', neg: '#a78bfa66' },
+        hyperliquid:  { pos: '#22d3eecc', neg: '#22d3ee66' },
       }
 
       // Map funding onto candle timestamps
       const alignedFunding = candles.map(c => {
         const hourKey = Math.floor(c.ts / 3600) * 3600
-        const val = fundingMap.get(hourKey) ?? fundingMap.get(c.ts) ?? 0
+        const entry = fundingMap.get(hourKey) ?? fundingMap.get(c.ts)
+        const val = entry?.val ?? 0
+        const src = entry?.source ?? 'drift'
+        const colors = sourceColors[src] || sourceColors.drift
         return {
           time: c.ts as Time,
           value: val,
-          color: val >= 0 ? C.up + 'aa' : C.down + 'aa',
+          color: val >= 0 ? colors.pos : colors.neg,
         }
       })
 
@@ -304,11 +319,16 @@ export default function InteractiveChart({ candles, height = 500, indicators, fu
         <div className="border-t border-border">
           <div className="text-[9px] tracking-wider px-2 py-1 flex items-center gap-2">
             <span className="text-amber/40">FUNDING RATE (bps)</span>
+            <span className="flex items-center gap-3 ml-2">
+              <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#e8a849' }} />
+                <span className="text-ghost/50">Drift</span></span>
+              <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#a78bfa' }} />
+                <span className="text-ghost/50">Drift S3</span></span>
+              <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: '#22d3ee' }} />
+                <span className="text-ghost/50">Hyperliquid</span></span>
+            </span>
             {fundingRates.length === 0 && (
-              <span className="text-ghost/30">No funding data — only available for perp markets with recent history (~30 days from Drift)</span>
-            )}
-            {fundingRates.length > 0 && candles.length > 0 && fundingRates[0].ts > candles[0].ts + 86400 && (
-              <span className="text-ghost/30">Partial coverage — Drift funding API has ~30 days of history</span>
+              <span className="text-ghost/30 ml-2">No funding data</span>
             )}
           </div>
           {fundingRates.length > 0 && <div ref={fundingRef} />}

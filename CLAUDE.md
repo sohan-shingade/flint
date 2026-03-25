@@ -9,7 +9,7 @@ pip install -e .              # install
 flint init                    # download data + sample backtest
 flint serve                   # API + UI at localhost:8000
 flint serve --dev             # dev mode: API only, run UI separately
-pytest tests/ -v              # 497 tests (~5s, all mocked)
+pytest tests/ -v              # 536 tests (~90s, all mocked)
 cd ui && npm run dev          # dev UI at localhost:5173 (proxies API)
 ```
 
@@ -17,21 +17,21 @@ cd ui && npm run dev          # dev UI at localhost:5173 (proxies API)
 
 ```
 flint/
-  strategy/        # Strategy ABC, 10 templates, loader (strategies/user/ for user code)
-  execution/       # ExecutionContext ABC, BacktestContext, fill/fee models
+  strategy/        # Strategy ABC, 15 templates, loader (strategies/user/ for user code)
+  execution/       # ExecutionContext ABC, BacktestContext, fill/fee models, margin, capital
   backtest/        # Event-driven engine, accepts List[Candle] or Dict[str, List[Candle]]
   optimization/    # Optuna optimizer, walk-forward
   paper/           # Paper trading engine + broker
   risk/            # Risk guards (max drawdown, position limits, daily loss)
-  portfolio/       # Multi-strategy engine, allocators
-  providers/       # 13 data providers (registry.py manages enable/disable)
+  portfolio/       # Multi-strategy engine, allocators (equal-weight, inverse-vol)
+  providers/       # 14 data providers + 10 funding venues (registry.py manages enable/disable)
   connectors/      # Drift (driftpy), Jupiter
   analytics/       # Metrics, tearsheet, Monte Carlo, correlation
   indicators.py    # 20 technical indicators (sma, ema, rsi, macd, bollinger, atr, vwap, adx...)
   precision.py     # Fixed-point math for Solana (Decimal at boundaries, int on-chain)
-  store.py         # Thread-safe DuckDB store (12 tables, all ops use threading.Lock)
+  store.py         # Thread-safe DuckDB store (12 tables, all ops use threading.Lock + transactions)
   config.py        # Pydantic settings (flint.yaml + .env + FLINT_ env prefix)
-  cli.py           # Typer CLI
+  cli.py           # Typer CLI (8 commands)
   api/main.py      # FastAPI app (30+ endpoints, serves built UI from ui/dist/)
   models.py        # All dataclasses: Candle, FundingRate, Signal, Order, Fill, etc.
 
@@ -43,20 +43,21 @@ ui/                # React 19 + Vite + Tailwind
 
 ## Key Patterns
 
-- **Thread safety**: Every `FlintStore` method wraps `self._conn.execute()` in `with self._lock:`
+- **Thread safety**: Every `FlintStore` method wraps `self._conn.execute()` in `with self._lock:`. Batched upserts use `BEGIN TRANSACTION` / `COMMIT` for atomicity.
 - **Provider pattern**: Inherit `DataProvider` (registry.py), implement `is_available()` + `supported_data_types()`. Register via `flint.yaml` providers section.
-- **Strategy API**: v1 returns `Signal.BUY/SELL/HOLD`, v2 uses `ctx.market_order()`, `ctx.stop_order()`, `ctx.get_candles("BTC-PERP")`
+- **Strategy API**: v1 returns `Signal.BUY/SELL/HOLD`, v2 uses `ctx.market_order()`, `ctx.stop_order()`, `ctx.get_candles("BTC-PERP")`. All 15 built-in strategies support Optuna optimization via `parameters()`.
 - **Multi-market**: Engine accepts `Dict[str, List[Candle]]`. UI auto-detects `ctx.get_candles("MARKET")` calls in strategy code.
 - **Config loading**: `load_config()` merges flint.yaml + .env + env vars (FLINT_ prefix). YAML keys flatten: `db.path` → `db_path`.
+- **Security**: API binds to `127.0.0.1` by default. Strategy loader blocks non-approved imports and dangerous builtins via AST validation. Backtest engine has a 300s timeout. Max 5 concurrent backtests.
 
-## Data Providers (13 total)
+## Data Providers (14 + 10 funding venues)
 
 | Provider | File | Auth | Data |
 |---|---|---|---|
 | Drift Data API | providers/drift_candles.py | None | OHLCV candles (48 markets) |
-| Drift S3 | providers/drift_s3.py | None | Historical trade records |
+| Drift S3 | providers/drift_s3.py | None | Historical trade records, funding |
 | Drift OI | providers/open_interest.py | None | Open interest |
-| Drift Funding | providers/drift_api.py | None | Funding rates, orderbook |
+| Drift Funding | providers/drift_api.py | None | Funding rates, L2/L3 orderbook |
 | Birdeye | providers/birdeye.py | FLINT_BIRDEYE_API_KEY | Any Solana token OHLCV |
 | Helius | providers/helius.py | FLINT_HELIUS_API_KEY | Liquidations, whale tracking |
 | Pyth | providers/pyth.py | None | Oracle prices (20 pairs) |
@@ -64,27 +65,49 @@ ui/                # React 19 + Vite + Tailwind
 | Orca | providers/orca.py | None | Whirlpool pool data |
 | GeckoTerminal | providers/gecko.py | None | DEX pool OHLCV |
 | Jupiter | providers/jupiter.py | None | Swap quotes |
+| CoinGecko | providers/coingecko.py | None | Spot candles (BTC, ETH, etc.) |
 | CCXT | providers/ccxt_provider.py | Optional | 100+ CEX exchanges |
-| Cross-venue funding | providers/funding_rates.py | None | 5 venues normalized to 1h |
+| Cross-venue funding | providers/funding_rates.py | None | 10 venues normalized to 1h |
+
+**Funding venues** (all free, no keys): Drift, Binance, Hyperliquid, OKX, Bybit, Gate.io, Bitget, dYdX + CCXT (mexc, phemex, bitmex).
+
+## v0.3 Execution Features (dev branch)
+
+| Feature | Files | What |
+|---|---|---|
+| Orderbook fills | `execution/fill_models.py` | `OrderbookFillModel` walks L2 book for volume-weighted fill prices |
+| Multi-venue positions | `execution/backtest_context.py` | Position key is `(venue, market)`, venue param on all order methods |
+| Margin / liquidation | `execution/margin.py` | `MarginEngine` with per-venue configs, liquidation detection per bar |
+| Capital allocation | `execution/capital.py` | `VenueAllocator` with per-venue balances, transfer delays/costs |
+| Venue configs | `execution/venue_config.py` | Fee/margin/leverage presets for Drift, Hyperliquid, Binance, OKX, Bybit, dYdX |
+
+Enable in backtest requests with `margin_tracking: true` and/or `capital_allocation: {"drift": 5000, "hyperliquid": 3000}`.
 
 ## DuckDB Tables (12)
 
-candles, funding_rates, oracle_prices, orderbook_snapshots, venue_funding_rates, pool_snapshots, open_interest, liquidations, whale_transfers, dex_volume, token_unlocks, sync_metadata
+candles, venue_funding_rates, oracle_prices, orderbook_snapshots, pool_snapshots, open_interest, liquidations, whale_transfers, dex_volume, token_unlocks, sync_metadata
 
 ## API Endpoints (key ones)
 
 ```
-POST /api/v1/backtest/run          # Submit backtest (market, markets[], code, dates, capital, fee_rate)
-GET  /api/v1/backtest/{id}/results # Poll for results
+POST /api/v1/backtest/run          # Submit backtest (market, markets[], code, dates, capital, fee_rate, margin_tracking, capital_allocation)
+GET  /api/v1/backtest/{id}/results # Poll for results + progress
+GET  /api/v1/backtest/compare      # Compare multiple runs
 GET  /api/v1/data/ohlcv            # Query candles
 GET  /api/v1/data/markets          # List markets in DB
 GET  /api/v1/data/available-markets # List all downloadable markets
-POST /api/v1/data/download         # Download market data (market, resolution_s, start_ts, end_ts)
+POST /api/v1/data/download         # Download market data + funding from all venues
+GET  /api/v1/data/check            # Check data coverage for a date range
+GET  /api/v1/data/funding          # Funding rates by venue
+GET  /api/v1/data/freshness        # Data freshness report
+GET  /api/v1/data/correlation      # Cross-market correlation matrix
 GET  /api/v1/data/providers        # Provider status
 GET  /api/v1/strategies            # List built-in strategies
-GET  /api/v1/user-strategies       # List user strategies (from strategies/user/)
 POST /api/v1/user-strategies       # Save user strategy {name, code}
-POST /api/v1/optimize/run          # Run Optuna optimization
+POST /api/v1/optimize/run          # Run Optuna optimization (1-500 trials)
+POST /api/v1/paper/start           # Start paper trading session
+GET  /api/v1/journal/runs          # List past backtest runs
+POST /api/v1/mev/scan/arb          # Scan for arbitrage routes
 GET  /api/v1/health                # Health check
 ```
 
@@ -92,7 +115,7 @@ GET  /api/v1/health                # Health check
 
 All tests use mocks — no network calls, no API keys needed. Run from project root:
 ```bash
-pytest tests/ -v              # all 497 tests
+pytest tests/ -v              # all 536 tests
 pytest tests/ -k "backtest"   # keyword filter
 pytest tests/test_birdeye.py  # single file
 ```
@@ -125,6 +148,8 @@ Resources: `flint://guide` (usage overview), `flint://markets` (market list)
 
 - Don't create a new DuckDB connection — always use the shared `FlintStore` from `app.state.store`
 - Don't skip `with self._lock:` in store methods — DuckDB is not thread-safe
+- Don't access `store._conn` or `store._lock` directly from API routes — add a method to `FlintStore` instead
 - Don't use `git push --force` on main — branch ruleset prevents it
 - Don't commit `.env` files — they contain API keys
 - Don't put personal strategies in `strategies/user/` in git — they're gitignored
+- Don't use non-approved imports in user strategies — the AST validator blocks them (only flint, numpy, math, statistics, collections, dataclasses, typing, enum, abc, functools, itertools, operator are allowed)

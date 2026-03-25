@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
 import InteractiveChart from '../components/InteractiveChart'
 
 interface CandleData { ts: number; open: number; high: number; low: number; close: number; volume: number }
@@ -10,6 +10,7 @@ const TICK = { fill: '#555560', fontSize: 10, fontFamily: "'JetBrains Mono', mon
 
 const fmtDate = (ts: number) => new Date(ts * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
 const fmtShort = (ts: number) => { const d = new Date(ts * 1000); return `${d.getUTCMonth()+1}/${d.getUTCDate()}` }
+const fmtHour = (ts: number) => { const d = new Date(ts * 1000); return `${d.getUTCMonth()+1}/${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2,'0')}:00` }
 const fmtRes = (s: number) => s >= 86400 ? `${s/86400}d` : s >= 3600 ? `${s/3600}h` : s >= 60 ? `${s/60}m` : `${s}s`
 
 const HORIZONS = [
@@ -82,7 +83,7 @@ export default function DataExplorer() {
   const [loading, setLoading] = useState(false)
   const [loadStatus, setLoadStatus] = useState('')  // status message during load
   const [inventoryLoading, setInventoryLoading] = useState(true)
-  const [fundingRates, setFundingRates] = useState<any[]>([])
+  const [fundingByVenue, setFundingByVenue] = useState<Record<string, {ts: number, rate: number}[]>>({})
   const [activeTab, setActiveTab] = useState<'price' | 'funding'>('price')
   // Add Markets panel
   const [showAddMarkets, setShowAddMarkets] = useState(false)
@@ -93,6 +94,21 @@ export default function DataExplorer() {
   const [dlEndDate, setDlEndDate] = useState('')
   const [downloadProgress, setDownloadProgress] = useState<{market: string, status: string}[]>([])
   const [isDownloading, setIsDownloading] = useState(false)
+  // Funding venue selection for downloads
+  const ALL_VENUES = [
+    { id: 'drift',       label: 'Drift',       freq: '1h',  color: '#e8a849' },
+    { id: 'hyperliquid', label: 'Hyperliquid',  freq: '1h',  color: '#22d3ee' },
+    { id: 'dydx',        label: 'dYdX',         freq: '1h',  color: '#818cf8' },
+    { id: 'okx',         label: 'OKX',          freq: '8h',  color: '#a78bfa' },
+    { id: 'bybit',       label: 'Bybit',        freq: '8h',  color: '#57c84d' },
+    { id: 'gateio',      label: 'Gate.io',      freq: '8h',  color: '#f472b6' },
+    { id: 'bitget',      label: 'Bitget',       freq: '8h',  color: '#fb923c' },
+    { id: 'mexc',        label: 'MEXC',         freq: '8h',  color: '#34d399' },
+    { id: 'phemex',      label: 'Phemex',       freq: '8h',  color: '#f87171' },
+    { id: 'bitmex',      label: 'BitMEX',       freq: '8h',  color: '#fbbf24' },
+  ]
+  const DEFAULT_VENUES = ['drift', 'hyperliquid', 'okx', 'dydx', 'gateio', 'bitget']
+  const [selectedVenues, setSelectedVenues] = useState<string[]>(DEFAULT_VENUES)
   // Indicators
   const [showSMA, setShowSMA] = useState(false)
   const [smaPeriod, setSmaPeriod] = useState(20)
@@ -105,10 +121,6 @@ export default function DataExplorer() {
   const [rsiPeriod, setRsiPeriod] = useState(14)
   const [showVolume, setShowVolume] = useState(true)
   const [showFunding, setShowFunding] = useState(false)
-  // Cross-venue funding
-  const [fundingVenues, setFundingVenues] = useState<string[]>(['drift', 'hyperliquid'])
-  const [crossVenueData, setCrossVenueData] = useState<Record<string, {ts: number, rate: number}[]>>({})
-  const [crossVenueBenchmark, setCrossVenueBenchmark] = useState<{ts: number, rate: number}[]>([])
 
   const refreshInventory = useCallback(() => {
     setInventoryLoading(true)
@@ -134,8 +146,9 @@ export default function DataExplorer() {
 
   const loadData = useCallback(async () => {
     setLoading(true)
-    const now = Math.floor(Date.now() / 1000)
+    setLoadStatus('Loading...')
 
+    const now = Math.floor(Date.now() / 1000)
     let startTs = 0
     let endTs = now
     if (startDate && endDate) {
@@ -150,8 +163,7 @@ export default function DataExplorer() {
       10000
     )
 
-    // Step 1: Check local data first
-    setLoadStatus('Checking local data...')
+    // Query local candle data (no downloading — that's done via ADD MARKETS)
     let loaded: CandleData[] = []
     try {
       const params = new URLSearchParams({
@@ -164,106 +176,57 @@ export default function DataExplorer() {
       loaded = data.candles || []
     } catch {}
 
-    // Step 2: Check if local data covers the range
-    // If data doesn't reach within 1 day of endTs, we need to download
-    const needsDownload = loaded.length === 0
-      || (startTs > 0 && loaded.length > 0 && loaded[loaded.length - 1].ts < endTs - 86400)
-
-    if (needsDownload) {
-      const dlStart = startTs > 0 ? startTs : now - 90 * 86400
-
-      setLoadStatus(`Downloading ${market} from Drift — this may take a moment...`)
-
-      // Use backtest route to trigger download + cache
+    // If no data in requested range, try loading all available data for this market
+    if (loaded.length === 0) {
       try {
-        const runRes = await fetch('/api/v1/backtest/run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            strategy: 'ma_crossover', market, resolution_s: resolution,
-            start_ts: dlStart, end_ts: endTs,
-            initial_capital: 1000, fee_rate: 0,
-          }),
-        })
-        const runData = await runRes.json()
-        const runId = runData.id
-
-        if (runId) {
-          for (let i = 0; i < 240; i++) {
-            await new Promise(r => setTimeout(r, 500))
-            try {
-              const pr = await fetch(`/api/v1/backtest/${runId}/results`)
-              const pd = await pr.json()
-              const detail = pd.progress?.detail || ''
-              const phase = pd.progress?.phase || ''
-              void pd.progress?.pct
-
-              if (phase === 'download' || phase === 's3') {
-                setLoadStatus(`Downloading ${market}... ${detail}`)
-              } else if (phase === 'cached') {
-                setLoadStatus(`Downloaded — loading chart...`)
-              } else if (phase === 'backtest' || phase === 'tearsheet') {
-                setLoadStatus(`Data cached — finalizing...`)
-              }
-
-              if (pd.status === 'complete' || pd.status === 'failed') break
-            } catch { break }
-          }
-        }
-      } catch {}
-
-      // Re-query with fresh cached data
-      try {
-        const params = new URLSearchParams({
-          market, resolution_s: String(resolution), limit: String(Math.floor(limit)),
-          ...(startTs > 0 ? { start_ts: String(startTs) } : {}),
-        })
-        const res = await fetch(`/api/v1/data/ohlcv?${params}`)
+        const res = await fetch(`/api/v1/data/ohlcv?market=${market}&resolution_s=${resolution}&limit=10000`)
         const data = await res.json()
         loaded = data.candles || []
       } catch {}
     }
 
-    // Step 3: If horizon query still empty, load all available
-    if (loaded.length === 0 && !startDate && !endDate) {
-      setLoadStatus('Loading all available data...')
-      try {
-        const fb = await fetch(`/api/v1/data/ohlcv?market=${market}&resolution_s=${resolution}&limit=10000`)
-        const fbd = await fb.json()
-        loaded = fbd.candles || []
-      } catch {}
-    }
+    // Only update candles state if data actually changed (prevents chart remount + scroll jump)
+    setCandles(prev => {
+      if (prev.length === loaded.length && loaded.length > 0 &&
+          prev[0]?.ts === loaded[0]?.ts && prev[prev.length - 1]?.ts === loaded[loaded.length - 1]?.ts) {
+        return prev
+      }
+      return loaded
+    })
 
-    setCandles(loaded)
-    if (loaded.length > 0) {
-      setLoadStatus(`${loaded.length.toLocaleString()} candles loaded`)
-    } else {
-      setLoadStatus('No data available for this market')
-    }
-
-    // Load funding rates — filtered to match candle date range
+    // Query local funding data (grouped by venue)
     if (market.includes('-PERP') && loaded.length > 0) {
       try {
         const candleStart = loaded[0].ts
         const candleEnd = loaded[loaded.length - 1].ts
         const fParams = new URLSearchParams({
-          market, limit: '10000',
+          market,
           start_ts: String(candleStart),
           end_ts: String(candleEnd),
         })
         const fr = await fetch(`/api/v1/data/funding?${fParams}`)
         const fd = await fr.json()
-        setFundingRates(fd.rates || [])
-      } catch { setFundingRates([]) }
+        const venues = fd.venues || {}
+        const parsed: Record<string, {ts: number, rate: number}[]> = {}
+        for (const [v, rates] of Object.entries(venues) as any) {
+          parsed[v] = (rates || []).map((r: any) => ({ ts: r.ts, rate: r.rate }))
+        }
+        setFundingByVenue(parsed)
+      } catch { setFundingByVenue({}) }
     } else {
-      setFundingRates([])
+      setFundingByVenue({})
+    }
+
+    if (loaded.length > 0) {
+      setLoadStatus(`${loaded.length.toLocaleString()} candles`)
+    } else {
+      setLoadStatus('No data — download this market from ADD MARKETS')
     }
 
     setLoading(false)
-    setTimeout(() => setLoadStatus(''), 5000)
   }, [market, resolution, horizon, startDate, endDate])
 
-  // Auto-load on mount and when config changes
+  // Load data on mount and when market/settings change
   useEffect(() => { loadData() }, [loadData])
 
   const handleBulkDownload = async () => {
@@ -294,11 +257,12 @@ export default function DataExplorer() {
         const res = await fetch('/api/v1/data/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ market: mkt, resolution_s: 3600, start_ts: startTs, end_ts: endTs }),
+          body: JSON.stringify({ market: mkt, resolution_s: 3600, start_ts: startTs, end_ts: endTs, funding_venues: selectedVenues }),
         })
         const data = await res.json()
         if (data.downloaded > 0 || data.existing > 0) {
-          progress[i].status = `${(data.downloaded + data.existing).toLocaleString()} candles`
+          const fundingInfo = data.funding_fetched > 0 ? ` + ${data.funding_fetched} funding` : ''
+          progress[i].status = `${(data.downloaded + data.existing).toLocaleString()} candles${fundingInfo}`
         } else {
           progress[i].status = 'no data found'
         }
@@ -310,6 +274,8 @@ export default function DataExplorer() {
 
     setIsDownloading(false)
     refreshInventory()
+    // Reload chart data (candles + funding) for the currently selected market
+    loadData()
   }
 
   const uniqueMarkets = Array.from(new Set(markets.map(m => m.market))).sort()
@@ -317,12 +283,6 @@ export default function DataExplorer() {
   const selectedInfo = markets.find(m => m.market === market && m.resolution_s === resolution)
 
   // Stats computed from raw candles (InteractiveChart handles its own indicator rendering)
-
-  const fundingData = downsample(fundingRates.map((r: any) => ({
-    ts: r.ts, date: fmtShort(r.ts),
-    rate: r.rate * 100, // convert to percentage
-    rateBps: r.rate * 10000,
-  })), 250)
 
   const inputClass = 'bg-void border border-border text-terminal text-xs px-2.5 py-2 focus:border-amber/50 focus:outline-none transition-colors'
   const labelClass = 'block text-[10px] text-ghost tracking-[0.15em] mb-1'
@@ -535,6 +495,40 @@ export default function DataExplorer() {
               )}
             </div>
 
+            {/* Funding venues */}
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-[10px] text-ghost tracking-[0.15em]">FUNDING VENUES</span>
+                <span className="text-[9px] text-ghost/40">{selectedVenues.length} selected — funding rates will be downloaded for perp markets</span>
+                <button onClick={() => setSelectedVenues(ALL_VENUES.map(v => v.id))}
+                  className="text-[9px] text-ghost/40 hover:text-amber ml-auto">All</button>
+                <button onClick={() => setSelectedVenues(DEFAULT_VENUES)}
+                  className="text-[9px] text-ghost/40 hover:text-amber">Defaults</button>
+                <button onClick={() => setSelectedVenues([])}
+                  className="text-[9px] text-ghost/40 hover:text-terminal">None</button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {ALL_VENUES.map(v => {
+                  const sel = selectedVenues.includes(v.id)
+                  return (
+                    <button key={v.id}
+                      onClick={() => setSelectedVenues(prev =>
+                        prev.includes(v.id) ? prev.filter(x => x !== v.id) : [...prev, v.id]
+                      )}
+                      className={`px-2.5 py-1.5 text-[9px] tracking-wider border transition-all flex items-center gap-1.5 ${
+                        sel ? 'text-white' : 'border-border text-ghost/40 hover:text-terminal'
+                      }`}
+                      style={sel ? { borderColor: v.color + '66', background: v.color + '15', color: v.color } : {}}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: sel ? v.color : '#555' }} />
+                      {v.label}
+                      <span className="text-[8px] opacity-50">{v.freq}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
             {/* Market grid — split by type */}
             <div>
               <div className="flex items-center gap-3 mb-2">
@@ -649,19 +643,17 @@ export default function DataExplorer() {
         </div>
       )}
 
-      {/* ── loading status ── */}
-      {loading && (
-        <div className="border border-amber/30 bg-amber/5 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <div className="w-4 h-4 border-2 border-amber/50 border-t-amber rounded-full animate-spin" />
-            <span className="text-[11px] text-amber/80 tracking-wider">{loadStatus || 'Loading...'}</span>
+      {/* ── loading status — fixed height to prevent scroll jump ── */}
+      <div className="h-7 flex items-center px-1">
+        {loading ? (
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 border border-amber/50 border-t-amber rounded-full animate-spin" />
+            <span className="text-[10px] text-amber/60 tracking-wider">{loadStatus || 'Loading...'}</span>
           </div>
-        </div>
-      )}
-
-      {!loading && loadStatus && candles.length > 0 && (
-        <div className="text-[10px] text-gain/60 tracking-wider px-1">{loadStatus}</div>
-      )}
+        ) : loadStatus && candles.length > 0 ? (
+          <span className="text-[10px] text-gain/60 tracking-wider">{loadStatus}</span>
+        ) : null}
+      </div>
 
       {!loading && candles.length === 0 && loadStatus && (
         <div className="border border-border/50 py-8 text-center">
@@ -686,7 +678,7 @@ export default function DataExplorer() {
 
       {/* ── interactive price chart ── */}
       {activeTab === 'price' && candles.length > 0 && (
-        <div style={{ animation: 'fadeUp 0.3s ease' }}>
+        <div className={loading ? 'opacity-50 pointer-events-none transition-opacity' : 'transition-opacity'} style={{ animation: 'fadeUp 0.3s ease' }}>
           <InteractiveChart
             candles={candles}
             height={500}
@@ -699,7 +691,9 @@ export default function DataExplorer() {
               volume: showVolume,
               funding: showFunding,
             }}
-            fundingRates={showFunding ? fundingRates.map((r: any) => ({ ts: r.ts, rate: r.rate })) : []}
+            fundingRates={showFunding ? Object.entries(fundingByVenue).flatMap(([venue, rates]) =>
+              rates.map(r => ({ ts: r.ts, rate: r.rate, source: venue }))
+            ) : []}
           />
 
           {/* stats bar */}
@@ -719,148 +713,163 @@ export default function DataExplorer() {
         </div>
       )}
 
-      {/* ── funding charts ── */}
+      {/* ── funding tab ── */}
       {activeTab === 'funding' && (
-        <div style={{ animation: 'fadeUp 0.3s ease' }}>
-          {/* Venue selector */}
-          {market.includes('-PERP') && (
-            <div className="border border-border bg-surface/60 p-3 mb-3">
-              <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-[10px] text-ghost tracking-[0.15em]">VENUES</span>
-                {['drift', 'hyperliquid', 'okx', 'bybit'].map(v => (
-                  <button key={v} onClick={() => {
-                    setFundingVenues(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v])
-                  }}
-                    className={`px-2.5 py-1 text-[9px] tracking-wider border transition-all ${
-                      fundingVenues.includes(v)
-                        ? 'border-amber/50 bg-amber-glow text-amber'
-                        : 'border-border text-ghost/50 hover:text-terminal'
-                    }`}>
-                    {v.toUpperCase()}
-                  </button>
-                ))}
-                <button onClick={() => {
-                  if (!market.includes('-PERP') || fundingVenues.length === 0) return
-                  const now = Math.floor(Date.now() / 1000)
-                  const candleStart = candles.length > 0 ? candles[0].ts : now - 90 * 86400
-                  const candleEnd = candles.length > 0 ? candles[candles.length - 1].ts : now
-                  fetch(`/api/v1/data/cross-venue-funding?market=${market}&venues=${fundingVenues.join(',')}&start_ts=${candleStart}&end_ts=${candleEnd}`)
-                    .then(r => r.json())
-                    .then(d => {
-                      const venues = d.venues || {}
-                      const parsed: Record<string, {ts: number, rate: number}[]> = {}
-                      for (const [v, info] of Object.entries(venues) as any) {
-                        parsed[v] = (info.rates || []).map((r: any) => ({ ts: r.ts, rate: r.rate * 10000 }))
-                      }
-                      setCrossVenueData(parsed)
-                      setCrossVenueBenchmark((d.benchmark || []).map((r: any) => ({ ts: r.ts, rate: r.rate * 10000 })))
-                    })
-                    .catch(() => {})
-                }}
-                  className="px-3 py-1 bg-amber text-void text-[9px] font-semibold tracking-wider hover:bg-amber-dim transition-colors ml-2">
-                  COMPARE
-                </button>
-                <span className="text-[9px] text-ghost/40 ml-auto">{fundingVenues.length} venues selected</span>
-              </div>
-            </div>
-          )}
+        <div style={{ animation: 'fadeUp 0.3s ease' }} className="space-y-3">
+          {Object.keys(fundingByVenue).length > 0 ? (() => {
+            const VENUE_COLORS: Record<string, { color: string; label: string }> = {
+              drift:       { color: '#e8a849', label: 'DRIFT' },
+              hyperliquid: { color: '#22d3ee', label: 'HYPERLIQUID' },
+              okx:         { color: '#a78bfa', label: 'OKX' },
+              bybit:       { color: '#57c84d', label: 'BYBIT' },
+              gateio:      { color: '#f472b6', label: 'GATE.IO' },
+              bitget:      { color: '#fb923c', label: 'BITGET' },
+              dydx:        { color: '#818cf8', label: 'DYDX' },
+              mexc:        { color: '#34d399', label: 'MEXC' },
+              phemex:      { color: '#f87171', label: 'PHEMEX' },
+              bitmex:      { color: '#fbbf24', label: 'BITMEX' },
+            }
 
-          {/* Cross-venue comparison chart */}
-          {Object.keys(crossVenueData).length > 0 && (() => {
-            // Merge all venues into one dataset keyed by hour
-            const venueNames = Object.keys(crossVenueData)
+            const venues = Object.keys(fundingByVenue).sort()
+            const totalPts = Object.values(fundingByVenue).reduce((s, v) => s + v.length, 0)
+
+            // Merge into unified timeline (one row per hour, columns per venue).
+            // Data is already hourly in the DB (forward-filled at download time).
             const merged: Record<number, any> = {}
-            for (const venue of venueNames) {
-              for (const pt of crossVenueData[venue]) {
+            const allBps: number[] = []
+            for (const venue of venues) {
+              for (const pt of fundingByVenue[venue]) {
                 const hour = Math.floor(pt.ts / 3600) * 3600
-                if (!merged[hour]) merged[hour] = { ts: hour, date: fmtShort(hour) }
-                merged[hour][venue] = pt.rate
+                const bps = pt.rate * 10000
+                if (!merged[hour]) merged[hour] = { ts: hour, date: fmtShort(hour), tooltip: fmtHour(hour) }
+                merged[hour][venue] = bps
+                allBps.push(bps)
               }
             }
-            for (const pt of crossVenueBenchmark) {
-              const hour = Math.floor(pt.ts / 3600) * 3600
-              if (!merged[hour]) merged[hour] = { ts: hour, date: fmtShort(hour) }
-              merged[hour].benchmark = pt.rate
-            }
-            const chartData = downsample(Object.values(merged).sort((a, b) => a.ts - b.ts), 500)
-            const colors: Record<string, string> = { drift: '#e8a849', hyperliquid: '#8b5cf6', okx: '#06b6d4', bybit: '#57c84d', binance: '#e84d4d' }
+            const sortedData = Object.values(merged).sort((a, b) => a.ts - b.ts)
+            // Smart X-axis: show hours for short ranges, days for long ranges
+            const spanDays = sortedData.length > 1 ? (sortedData[sortedData.length-1].ts - sortedData[0].ts) / 86400 : 0
+            const xKey = spanDays <= 30 ? 'tooltip' : 'date'
+            const chartData = downsample(sortedData, 600)
+
+            // Stats (across all venues)
+            const avg = allBps.length > 0 ? allBps.reduce((s, v) => s + v, 0) / allBps.length : 0
+            const maxBps = allBps.length > 0 ? Math.max(...allBps) : 0
+            const minBps = allBps.length > 0 ? Math.min(...allBps) : 0
+            const annualized = avg * 8760 / 100
 
             return (
-            <div className="border border-border bg-surface/60 p-3 mb-3">
-              <div className="text-[10px] text-ghost tracking-[0.2em] mb-2">CROSS-VENUE FUNDING (bps)</div>
-              <ResponsiveContainer width="100%" height={280}>
-                <AreaChart data={chartData}>
-                  <CartesianGrid strokeDasharray="2 6" stroke="#1a1a1f" />
-                  <XAxis dataKey="date" tick={TICK} minTickGap={50} interval="preserveStartEnd" />
-                  <YAxis tick={TICK} width={50} />
-                  <Tooltip contentStyle={tooltipStyle}
-                    formatter={(v: any, name: any) => [v != null ? `${Number(v).toFixed(3)} bps` : '—', String(name)]} />
-                  {venueNames.map(venue => (
-                    <Area key={venue} type="monotone" dataKey={venue} name={venue}
-                      stroke={colors[venue] || '#888'} fill={colors[venue] || '#888'} fillOpacity={0.05}
-                      strokeWidth={1.5} isAnimationActive={false} dot={false} connectNulls={false} />
-                  ))}
-                  {crossVenueBenchmark.length > 0 && (
-                    <Area type="monotone" dataKey="benchmark" name="benchmark"
-                      stroke="#ffffff44" fill="none" strokeWidth={1} strokeDasharray="4 4"
-                      isAnimationActive={false} dot={false} connectNulls={false} />
-                  )}
-                </AreaChart>
-              </ResponsiveContainer>
-              <div className="flex gap-3 mt-2">
-                {venueNames.map(venue => {
-                  const data = crossVenueData[venue]
-                  const avg = data.length > 0 ? data.reduce((s, d) => s + d.rate, 0) / data.length : 0
-                  return (
-                    <div key={venue} className="border border-border bg-surface/60 px-3 py-2 flex-1">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <span className="w-2 h-0.5" style={{ background: colors[venue] || '#888' }} />
-                        <span className="text-[8px] text-ghost/60 tracking-wider">{venue.toUpperCase()}</span>
-                      </div>
-                      <div className="text-xs font-mono text-terminal">{avg.toFixed(3)} bps avg</div>
-                      <div className="text-[9px] text-ghost/40">{data.length} points</div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-            )
-          })()}
-
-          {/* Single-venue funding chart (default Drift/Hyperliquid) */}
-          {fundingData.length > 0 ? (
-            <>
-              <div className="border border-border bg-surface/60 p-3">
-                <div className="text-[10px] text-ghost tracking-[0.2em] mb-2">FUNDING RATE — PRIMARY (bps)</div>
-                <ResponsiveContainer width="100%" height={220}>
-                  <AreaChart data={fundingData}>
-                    <CartesianGrid strokeDasharray="2 6" stroke="#1a1a1f" />
-                    <XAxis dataKey="date" tick={TICK} minTickGap={50} interval="preserveStartEnd" />
-                    <YAxis tick={TICK} width={50} />
-                    <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => [`${Number(v).toFixed(2)} bps`, 'Rate']} />
-                    <Area type="monotone" dataKey="rateBps" stroke="#e8a849" fill="#e8a849" fillOpacity={0.08}
-                      strokeWidth={1} isAnimationActive={false} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div className="mt-4 grid grid-cols-3 gap-3">
-                {[
-                  { label: 'CURRENT', value: `${fundingData[fundingData.length-1]?.rateBps.toFixed(2)} bps` },
-                  { label: 'AVG', value: `${(fundingData.reduce((s,d) => s + d.rateBps, 0) / fundingData.length).toFixed(2)} bps` },
-                  { label: 'ANNUALIZED', value: `${((fundingData.reduce((s,d) => s + d.rateBps, 0) / fundingData.length) * 8760 / 100).toFixed(1)}%` },
-                ].map(s => (
-                  <div key={s.label} className="border border-border bg-surface/60 p-3">
-                    <div className="text-[8px] text-ghost/50 tracking-wider">{s.label}</div>
-                    <div className={`text-sm font-mono ${s.label === 'ANNUALIZED' ? 'text-amber' : 'text-terminal'}`}>{s.value}</div>
+              <>
+                {/* Venue legend bar */}
+                <div className="border border-border bg-surface/60 p-3">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="text-[10px] text-ghost tracking-[0.2em]">VENUES</span>
+                    <span className="text-[9px] text-ghost/40 ml-auto">{totalPts.toLocaleString()} data points across {venues.length} venues</span>
                   </div>
-                ))}
-              </div>
-            </>
-          ) : (
+                  <div className="flex h-2 w-full overflow-hidden" style={{ borderRadius: 1 }}>
+                    {venues.map(v => {
+                      const pct = fundingByVenue[v].length / totalPts * 100
+                      return <div key={v} style={{ width: `${pct}%`, background: VENUE_COLORS[v]?.color || '#555' }} />
+                    })}
+                  </div>
+                  <div className="flex gap-4 mt-2">
+                    {venues.map(v => (
+                      <div key={v} className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5" style={{ background: VENUE_COLORS[v]?.color || '#555' }} />
+                        <span className="text-[9px] text-ghost/60">{VENUE_COLORS[v]?.label || v.toUpperCase()}</span>
+                        <span className="text-[9px] text-ghost/30">{fundingByVenue[v].length}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Multi-venue funding chart */}
+                <div className="border border-border bg-surface/60 p-3">
+                  <div className="text-[10px] text-ghost tracking-[0.2em] mb-2">FUNDING RATE ACROSS VENUES (bps)</div>
+                  <ResponsiveContainer width="100%" height={320}>
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="2 6" stroke="#1a1a1f" />
+                      <XAxis dataKey={xKey} tick={TICK} minTickGap={80} interval="preserveStartEnd" />
+                      <YAxis tick={TICK} width={50} domain={['auto', 'auto']} />
+                      <ReferenceLine y={0} stroke="#ffffff15" strokeWidth={1} />
+                      <Tooltip
+                        contentStyle={tooltipStyle}
+                        labelFormatter={(_, payload) => {
+                          const item = payload?.[0]?.payload
+                          return item?.tooltip || item?.date || ''
+                        }}
+                        formatter={(v: any, name: any) => {
+                          const vc = VENUE_COLORS[String(name)]
+                          return [v != null ? `${Number(v).toFixed(3)} bps` : '—', vc?.label || String(name).toUpperCase()]
+                        }}
+                      />
+                      {venues.map(v => (
+                        <Line key={v} type="monotone" dataKey={v}
+                          stroke={VENUE_COLORS[v]?.color || '#888'} strokeWidth={1.5}
+                          dot={false} isAnimationActive={false} connectNulls={false} />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Stats row */}
+                <div className="grid grid-cols-4 gap-3">
+                  {[
+                    { label: 'AVERAGE', value: `${avg.toFixed(2)} bps`, accent: false },
+                    { label: 'MAX', value: `${maxBps.toFixed(2)} bps`, accent: false },
+                    { label: 'MIN', value: `${minBps.toFixed(2)} bps`, accent: false },
+                    { label: 'ANNUALIZED', value: `${annualized.toFixed(1)}%`, accent: true },
+                  ].map(s => (
+                    <div key={s.label} className="border border-border bg-surface/60 p-3">
+                      <div className="text-[8px] text-ghost/50 tracking-wider">{s.label}</div>
+                      <div className={`text-sm font-mono ${s.accent ? 'text-amber' : 'text-terminal'}`}>{s.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Per-venue stats */}
+                <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(venues.length, 4)}, 1fr)` }}>
+                  {venues.map(v => {
+                    const data = fundingByVenue[v]
+                    const bpsArr = data.map(d => d.rate * 10000)
+                    const vAvg = bpsArr.reduce((s, x) => s + x, 0) / bpsArr.length
+                    const vCurrent = bpsArr[bpsArr.length - 1] || 0
+                    return (
+                      <div key={v} className="border bg-surface/60 p-3" style={{ borderColor: (VENUE_COLORS[v]?.color || '#555') + '33' }}>
+                        <div className="flex items-center gap-1.5 mb-2">
+                          <span className="w-2.5 h-0.5" style={{ background: VENUE_COLORS[v]?.color || '#888' }} />
+                          <span className="text-[9px] tracking-[0.15em]" style={{ color: VENUE_COLORS[v]?.color || '#888' }}>
+                            {VENUE_COLORS[v]?.label || v.toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="space-y-1 text-[10px]">
+                          <div className="flex justify-between">
+                            <span className="text-ghost/40">current</span>
+                            <span className="text-terminal font-mono">{vCurrent.toFixed(3)} bps</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-ghost/40">avg</span>
+                            <span className="text-terminal font-mono">{vAvg.toFixed(3)} bps</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-ghost/40">points</span>
+                            <span className="text-terminal font-mono">{data.length.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-ghost/40">range</span>
+                            <span className="text-ghost/50 font-mono text-[9px]">{fmtShort(data[0]?.ts || 0)} — {fmtShort(data[data.length-1]?.ts || 0)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )
+          })() : (
             <div className="border border-border/50 py-12 text-center">
               <div className="text-ghost/30 text-xs tracking-[0.3em]">NO FUNDING DATA</div>
-              <div className="text-ghost/20 text-[10px] mt-2">Funding rates are collected by the data collector for perp markets</div>
+              <div className="text-ghost/20 text-[10px] mt-2">Download a perp market to see funding rates from Drift, Hyperliquid, OKX, and Bybit</div>
             </div>
           )}
         </div>

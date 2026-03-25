@@ -102,19 +102,24 @@ def stochastic(history: List[Candle], period: int = 14) -> Tuple[float, float]:
     """
     if len(history) < period:
         return 50.0, 50.0
-    h = highs(history, period)
-    l = lows(history, period)
-    c = closes(history, period)
 
-    highest = float(np.max(h))
-    lowest = float(np.min(l))
-    rng = highest - lowest
-    if rng == 0:
-        return 50.0, 50.0
+    # Compute %K for the last 3 bars, each with its own rolling window
+    k_vals = []
+    for offset in range(min(3, len(history) - period + 1)):
+        end = len(history) - offset
+        start = end - period
+        sub_h = [history[j].high for j in range(start, end)]
+        sub_l = [history[j].low for j in range(start, end)]
+        hi = max(sub_h)
+        lo = min(sub_l)
+        rng = hi - lo
+        if rng == 0:
+            k_vals.append(50.0)
+        else:
+            k_vals.append((history[end - 1].close - lo) / rng * 100)
 
-    k_values = ((c - lowest) / rng) * 100
-    k = float(k_values[-1])
-    d = float(np.mean(k_values[-3:])) if len(k_values) >= 3 else k
+    k = k_vals[0] if k_vals else 50.0
+    d = float(np.mean(k_vals)) if k_vals else k
     return k, d
 
 
@@ -154,7 +159,7 @@ def bollinger(history: List[Candle], period: int = 20, num_std: float = 2.0) -> 
         return price, price, price
     c = closes(history, period)
     middle = float(np.mean(c))
-    std = float(np.std(c))
+    std = float(np.std(c, ddof=1))
     upper = middle + num_std * std
     lower = middle - num_std * std
     return upper, middle, lower
@@ -189,7 +194,7 @@ def volatility(history: List[Candle], period: int = 20) -> float:
         return 0.0
     c = closes(history, period + 1)
     returns = np.diff(c) / c[:-1]
-    return float(np.std(returns) * np.sqrt(8760))  # annualized for hourly
+    return float(np.std(returns, ddof=1) * np.sqrt(8760))  # annualized for hourly
 
 
 # ─── Volume ──────────────────────────────────────────
@@ -202,7 +207,7 @@ def vwap(history: List[Candle], period: int = 20) -> float:
     total_vol = sum(c.volume for c in data)
     if total_vol == 0:
         return sma(history, period)
-    return sum(c.close * c.volume for c in data) / total_vol
+    return sum(((c.high + c.low + c.close) / 3) * c.volume for c in data) / total_vol
 
 
 def volume_ratio(history: List[Candle], period: int = 20) -> float:
@@ -267,7 +272,7 @@ def z_score(history: List[Candle], period: int = 20) -> float:
         return 0.0
     c = closes(history, period)
     mean = float(np.mean(c))
-    std = float(np.std(c))
+    std = float(np.std(c, ddof=1))
     if std == 0:
         return 0.0
     return (history[-1].close - mean) / std

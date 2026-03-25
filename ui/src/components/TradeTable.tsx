@@ -50,11 +50,11 @@ export default function TradeTable({ trades }: Props) {
               </td>
               <td className="py-1.5 px-2 text-ghost/60">{fmtDate(t.entry_ts)}</td>
               <td className="py-1.5 px-2 text-ghost/60">{fmtDate(t.exit_ts)}</td>
-              <td className="py-1.5 px-2 text-right text-terminal tabular-nums">{t.entry_price.toFixed(2)}</td>
-              <td className="py-1.5 px-2 text-right text-terminal tabular-nums">{t.exit_price.toFixed(2)}</td>
-              <td className="py-1.5 px-2 text-right text-ghost tabular-nums">{t.size.toFixed(2)}</td>
-              <td className={`py-1.5 px-2 text-right font-medium tabular-nums ${t.pnl >= 0 ? 'text-gain' : 'text-loss'}`}>
-                {t.pnl >= 0 ? '+' : ''}{t.pnl.toFixed(2)}
+              <td className="py-1.5 px-2 text-right text-terminal tabular-nums">{t.entry_price?.toFixed(2) ?? '-'}</td>
+              <td className="py-1.5 px-2 text-right text-terminal tabular-nums">{t.exit_price?.toFixed(2) ?? '-'}</td>
+              <td className="py-1.5 px-2 text-right text-ghost tabular-nums">{t.size?.toFixed(2) ?? '-'}</td>
+              <td className={`py-1.5 px-2 text-right font-medium tabular-nums ${(t.pnl ?? 0) >= 0 ? 'text-gain' : 'text-loss'}`}>
+                {(t.pnl ?? 0) >= 0 ? '+' : ''}{t.pnl?.toFixed(2) ?? '-'}
               </td>
             </tr>
           ))}

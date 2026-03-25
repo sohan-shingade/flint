@@ -68,7 +68,7 @@ class Position:
 
     @property
     def side(self) -> Side:
-        return Side.LONG if self.size > 0 else Side.SHORT
+        return Side.LONG if self.size >= 0 else Side.SHORT
 
     def close(self, price: float, ts: int) -> float:
         self.exit_price = price
@@ -92,6 +92,7 @@ class BacktestResult:
     fills: List["Fill"] = field(default_factory=list)
     total_fees: float = 0.0
     funding_paid: float = 0.0
+    strategy_warnings: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +106,8 @@ class AccountState:
     cash: float  # available cash
     unrealized_pnl: float = 0.0
     margin_used: float = 0.0
+    free_margin: float = 0.0
+    leverage: float = 0.0
 
 
 @dataclass
@@ -116,6 +119,7 @@ class PositionInfo:
     entry_price: float
     unrealized_pnl: float = 0.0
     entry_ts: int = 0
+    venue: str = "default"
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +134,7 @@ class FundingRate:
     oracle_price: float
     mark_price: float
     slot: int = 0
+    source: str = "drift"  # "drift", "hyperliquid", "drift_s3"
 
 
 @dataclass(frozen=True)
@@ -192,6 +197,7 @@ class Order:
     ts: int = 0
     filled_size: float = 0.0
     filled_price: float = 0.0
+    venue: str = "default"
 
 
 @dataclass(frozen=True)
@@ -204,6 +210,7 @@ class Fill:
     ts: int
     order_id: str = ""
     tx_sig: str = ""
+    venue: str = "default"
 
 
 @dataclass(frozen=True)
@@ -254,6 +261,7 @@ class OpenInterest:
     ts: int
     long_oi: float
     short_oi: float
+    venue: str = "drift"
 
     @property
     def net_oi(self) -> float:

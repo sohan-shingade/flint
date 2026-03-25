@@ -1,6 +1,7 @@
 """User strategy CRUD API routes."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -12,6 +13,23 @@ router = APIRouter()
 
 # Resolved at import time; tests monkeypatch this
 STRATEGIES_DIR = Path(__file__).resolve().parents[3] / "strategies" / "user"
+
+# Strategy names: letter-start, alphanumeric/underscore/hyphen, max 64 chars
+_SAFE_NAME = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]{0,63}$')
+
+
+def _safe_path(name: str) -> Path:
+    """Resolve strategy path, rejecting traversal attempts."""
+    if not _SAFE_NAME.match(name):
+        raise HTTPException(
+            400,
+            "Strategy name must start with a letter and contain only "
+            "letters, digits, underscores, or hyphens (max 64 chars)",
+        )
+    path = (STRATEGIES_DIR / f"{name}.py").resolve()
+    if not str(path).startswith(str(STRATEGIES_DIR.resolve())):
+        raise HTTPException(400, "Invalid strategy name")
+    return path
 
 
 class SaveStrategyRequest(BaseModel):
@@ -26,7 +44,7 @@ class ValidateRequest(BaseModel):
 @router.post("")
 def save_strategy(req: SaveStrategyRequest):
     STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
-    path = STRATEGIES_DIR / f"{req.name}.py"
+    path = _safe_path(req.name)
     path.write_text(req.code, encoding="utf-8")
     return {"name": req.name, "saved": True}
 
@@ -42,7 +60,7 @@ def list_strategies():
 
 @router.get("/{name}")
 def load_strategy(name: str):
-    path = STRATEGIES_DIR / f"{name}.py"
+    path = _safe_path(name)
     if not path.exists():
         raise HTTPException(404, f"Strategy '{name}' not found")
     code = path.read_text(encoding="utf-8")
@@ -51,7 +69,7 @@ def load_strategy(name: str):
 
 @router.delete("/{name}")
 def delete_strategy(name: str):
-    path = STRATEGIES_DIR / f"{name}.py"
+    path = _safe_path(name)
     if not path.exists():
         raise HTTPException(404, f"Strategy '{name}' not found")
     path.unlink()

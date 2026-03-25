@@ -9,6 +9,11 @@ from .mean_reversion import MeanReversionStrategy
 from .breakout_momentum import BreakoutMomentumStrategy
 from .grid_trader import GridTraderStrategy
 from .dual_timeframe import DualTimeframeStrategy
+from .vwap_reversion import VWAPReversionStrategy
+from .macd_divergence import MACDDivergenceStrategy
+from .atr_breakout import ATRBreakoutStrategy
+from .multi_venue_funding import MultiVenueFundingStrategy
+from .rsi_macd_combo import RSIMACDComboStrategy
 
 __all__ = [
     "Strategy",
@@ -22,6 +27,11 @@ __all__ = [
     "BreakoutMomentumStrategy",
     "GridTraderStrategy",
     "DualTimeframeStrategy",
+    "VWAPReversionStrategy",
+    "MACDDivergenceStrategy",
+    "ATRBreakoutStrategy",
+    "MultiVenueFundingStrategy",
+    "RSIMACDComboStrategy",
 ]
 
 # Re-export ExecutionContext for convenience

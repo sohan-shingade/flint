@@ -46,7 +46,7 @@ class InverseVolAllocator(Allocator):
             if r and len(r.equity_curve) > 2:
                 arr = np.array(r.equity_curve)
                 returns = np.diff(arr) / arr[:-1]
-                vol = float(np.std(returns)) if len(returns) > 0 else 1.0
+                vol = float(np.std(returns, ddof=1)) if len(returns) > 1 else 1.0
                 vols[name] = max(vol, 1e-10)  # avoid div by zero
             else:
                 vols[name] = 1.0

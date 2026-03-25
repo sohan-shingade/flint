@@ -21,6 +21,8 @@ class TradeRecord:
     size: float
     pnl: float
     holding_s: int
+    market: str = ""
+    venue: str = "default"
 
 
 @dataclass
@@ -40,9 +42,14 @@ class Tearsheet:
     monthly_returns: Dict[int, Dict[int, float]]
     # trade log
     trades: List[Dict[str, Any]]
-    # buy-and-hold comparison
+    # benchmark comparison
     buy_hold_equity: List[List[float]]
     buy_hold_return_pct: float
+    # multi-market info
+    benchmark_label: str = "BUY & HOLD"
+    markets_used: List[str] = field(default_factory=list)
+    # per-instrument exposure timeline: {market: [{ts, exposure, notional}, ...]}
+    instrument_exposure: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -53,6 +60,7 @@ def generate_tearsheet(
     candles: List[Candle],
     strategy_name: str = "",
     initial_capital: float = 10_000.0,
+    all_candles: Optional[Dict[str, List[Candle]]] = None,
 ) -> Tearsheet:
     metrics = compute_metrics(result, initial_capital)
 
@@ -76,9 +84,10 @@ def generate_tearsheet(
     # --- Monthly returns ---
     monthly = _compute_monthly_returns(timestamps, eq)
 
-    # --- Trade log ---
-    trades = [
-        asdict(TradeRecord(
+    # --- Trade log (with market/venue) ---
+    trades = []
+    for p in result.positions:
+        rec = TradeRecord(
             entry_ts=p.entry_ts,
             exit_ts=p.exit_ts,
             side="long" if p.size > 0 else "short",
@@ -87,15 +96,40 @@ def generate_tearsheet(
             size=abs(p.size),
             pnl=p.pnl,
             holding_s=p.exit_ts - p.entry_ts,
-        ))
-        for p in result.positions
-    ]
+        )
+        trades.append(asdict(rec))
 
-    # --- Buy and hold comparison ---
-    bh_equity, bh_return = _buy_and_hold(candles, initial_capital)
+    # Match trades to fills by entry timestamp (not by index — each trade has 2+ fills)
+    fill_by_ts = {}
+    for f in result.fills:
+        if f.ts not in fill_by_ts:
+            fill_by_ts[f.ts] = f
+    for t in trades:
+        entry_fill = fill_by_ts.get(t["entry_ts"])
+        if entry_fill:
+            t["market"] = entry_fill.market
+            t["venue"] = entry_fill.venue
+        elif result.fills:
+            t["market"] = result.fills[0].market
+            t["venue"] = result.fills[0].venue if result.fills[0].venue else "default"
+
+    # --- Benchmark: equal-weight portfolio of all markets ---
+    markets_used = [market]
+    if all_candles and len(all_candles) > 1:
+        markets_used = sorted(all_candles.keys())
+        bh_equity, bh_return, bh_label = _equal_weight_benchmark(
+            all_candles, initial_capital, timestamps
+        )
+    else:
+        bh_equity, bh_return = _buy_and_hold(candles, initial_capital)
+        bh_label = f"BUY & HOLD {market}"
+
     buy_hold_curve = [
         [timestamps[i], bh_equity[i]] for i in range(min(len(timestamps), len(bh_equity)))
     ]
+
+    # --- Per-instrument exposure timeline ---
+    instrument_exposure = _compute_instrument_exposure(result, timestamps)
 
     return Tearsheet(
         strategy_name=strategy_name,
@@ -111,6 +145,9 @@ def generate_tearsheet(
         trades=trades,
         buy_hold_equity=buy_hold_curve,
         buy_hold_return_pct=bh_return,
+        benchmark_label=bh_label,
+        markets_used=markets_used,
+        instrument_exposure=instrument_exposure,
     )
 
 
@@ -151,3 +188,118 @@ def _buy_and_hold(candles: List[Candle], capital: float) -> tuple:
     bh = [size * c.close for c in candles]
     ret_pct = (bh[-1] / capital - 1) * 100 if capital else 0
     return bh, ret_pct
+
+
+def _equal_weight_benchmark(
+    all_candles: Dict[str, List[Candle]],
+    capital: float,
+    timestamps: List[int],
+) -> tuple:
+    """Equal-weight buy-and-hold across all markets.
+
+    Splits capital equally, buys each at first close, holds.
+    Returns (equity_list, return_pct, label).
+    """
+    n_markets = len(all_candles)
+    if n_markets == 0:
+        return [capital] * len(timestamps), 0.0, "BENCHMARK"
+
+    capital_per = capital / n_markets
+
+    # Index each market's candles by timestamp for alignment
+    market_prices: Dict[str, Dict[int, float]] = {}
+    for mkt, mkt_candles in all_candles.items():
+        market_prices[mkt] = {c.ts: c.close for c in mkt_candles}
+
+    # Compute per-market sizes at entry
+    sizes = {}
+    for mkt, mkt_candles in all_candles.items():
+        if mkt_candles:
+            entry_price = mkt_candles[0].close
+            sizes[mkt] = capital_per / entry_price if entry_price else 0
+        else:
+            sizes[mkt] = 0
+
+    # Build equity curve aligned to primary timestamps
+    equity = []
+    for ts in timestamps:
+        total = 0.0
+        for mkt in all_candles:
+            price = market_prices[mkt].get(ts)
+            if price is None:
+                # Use nearest earlier price
+                mkt_ts = sorted(t for t in market_prices[mkt] if t <= ts)
+                price = market_prices[mkt][mkt_ts[-1]] if mkt_ts else 0
+            total += sizes[mkt] * price
+        equity.append(total)
+
+    ret_pct = (equity[-1] / capital - 1) * 100 if capital and equity else 0
+    label = "EQ-WEIGHT " + "+".join(sorted(all_candles.keys()))
+    return equity, ret_pct, label
+
+
+def _compute_instrument_exposure(
+    result: BacktestResult, timestamps: List[int]
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Compute per-instrument exposure over time from trade history.
+
+    Returns {market: [{ts, direction, size}, ...]} where direction is
+    +1 (long), -1 (short), or 0 (flat).
+    """
+    if not result.positions or not timestamps:
+        return {}
+
+    # Collect all markets from trades (match by entry timestamp)
+    fill_by_ts = {}
+    for f in result.fills:
+        if f.ts not in fill_by_ts:
+            fill_by_ts[f.ts] = f
+    markets = set()
+    for p in result.positions:
+        entry_fill = fill_by_ts.get(p.entry_ts)
+        m = entry_fill.market if entry_fill else (
+            result.fills[0].market if result.fills else "unknown")
+        markets.add(m)
+
+    if not markets or markets == {"unknown"}:
+        return {}
+
+    # Build per-market exposure events from fills
+    exposure: Dict[str, List[Dict[str, Any]]] = {}
+    for mkt in sorted(markets):
+        # Get fills for this market
+        mkt_fills = [f for f in result.fills if f.market == mkt]
+        if not mkt_fills:
+            continue
+
+        events = []
+        pos_size = 0.0
+        pos_side = 0  # +1 long, -1 short, 0 flat
+
+        for f in sorted(mkt_fills, key=lambda x: x.ts):
+            fill_dir = 1 if f.side.value == "long" else -1
+            notional = f.size * f.price
+
+            # Track net position
+            if pos_side == 0:
+                pos_size = f.size
+                pos_side = fill_dir
+            elif fill_dir == pos_side:
+                pos_size += f.size
+            else:
+                pos_size -= f.size
+                if pos_size <= 0.0001:
+                    pos_size = 0
+                    pos_side = 0
+
+            events.append({
+                "ts": f.ts,
+                "direction": pos_side,
+                "size": pos_size,
+                "notional": pos_size * f.price if pos_size > 0 else 0,
+            })
+
+        if events:
+            exposure[mkt] = events
+
+    return exposure

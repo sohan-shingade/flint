@@ -26,7 +26,7 @@ class DriftS3Provider(CandleProvider):
     """Fetches trade records from Drift's public S3 bucket and builds candles."""
 
     def __init__(self, client: Optional[httpx.Client] = None) -> None:
-        self._client = client or httpx.Client(timeout=60)
+        self._client = client or httpx.Client(timeout=30)
         self._owns_client = client is None
 
     def close(self) -> None:
@@ -72,11 +72,19 @@ class DriftS3Provider(CandleProvider):
         return f"program/{_PROGRAM}/market/{market}/tradeRecords/{year}/{date_str}"
 
     def _download_day(self, market: str, date_str: str) -> Optional[str]:
+        import logging as _log
+        _logger = _log.getLogger("flint.providers.drift_s3")
         url = f"{_BASE_URL}/{self._s3_key(market, date_str)}"
-        resp = self._client.get(url)
+        try:
+            resp = self._client.get(url)
+        except Exception as e:
+            _logger.warning("S3 request failed for %s/%s: %s", market, date_str, e)
+            return None
         if resp.status_code == 404:
             return None
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            _logger.warning("S3 %d for %s/%s", resp.status_code, market, date_str)
+            return None
         try:
             return gzip.decompress(resp.content).decode("utf-8")
         except gzip.BadGzipFile:
