@@ -162,11 +162,13 @@ class BacktestContext(ExecutionContext):
 
     def market_order(self, market: str, side: Side, size: float,
                      reduce_only: bool = False, tag: str = "",
-                     venue: str = "default") -> str:
+                     venue: str = "default",
+                     time_in_force=None) -> str:
         oid = self._next_order_id()
         order = Order(
             market=market, side=side, order_type=OrderType.MARKET,
             size=size, order_id=oid, ts=self.timestamp, venue=venue,
+            time_in_force=time_in_force or TimeInForce.IOC,
         )
         checked = self._check_risk(order)
         if checked is None:

@@ -213,3 +213,24 @@ class TestEngineDefaultPipeline:
         from flint.execution.backtest_context import BacktestContext
         ctx = BacktestContext(initial_capital=10_000)
         assert isinstance(ctx._fill_model, FillPipeline)
+
+
+class TestContextTIF:
+    def test_market_order_accepts_tif(self):
+        from flint.execution.backtest_context import BacktestContext
+        pipeline = FillPipeline(latency_enabled=False)
+        ctx = BacktestContext(initial_capital=10_000, fill_model=pipeline)
+        candle = _c(1000, 100.0, volume=500)
+        ctx.set_candle(candle)
+        oid = ctx.market_order("SOL-PERP", Side.LONG, 10, time_in_force=TimeInForce.GTC)
+        assert oid != ""
+        assert len(ctx._market_orders_queue) == 1
+        assert ctx._market_orders_queue[0].time_in_force == TimeInForce.GTC
+
+    def test_market_order_default_tif_is_ioc(self):
+        from flint.execution.backtest_context import BacktestContext
+        ctx = BacktestContext(initial_capital=10_000, fill_model=FillPipeline(latency_enabled=False))
+        candle = _c(1000, 100.0, volume=500)
+        ctx.set_candle(candle)
+        ctx.market_order("SOL-PERP", Side.LONG, 10)
+        assert ctx._market_orders_queue[0].time_in_force == TimeInForce.IOC
