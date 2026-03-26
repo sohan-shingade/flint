@@ -25,9 +25,7 @@ Everything runs on your machine. Market data comes free from Drift Protocol's pu
 Flint is built specifically for **Solana DeFi** — Drift perpetuals, Jupiter swaps, on-chain funding rates — but also supports 100+ centralized exchanges via CCXT if you need CEX data.
 
 <p align="center">
-  <img src="imgs/IMG_1390.png" alt="Strategy Lab — write code, configure, and run backtests" width="100%">
-  <br/>
-  <em>Strategy Lab — write strategies in Monaco, configure parameters, run backtests and optimizations</em>
+  <img src="imgs/homepage.png" alt="Flint homepage" width="100%">
 </p>
 
 ---
