@@ -509,10 +509,25 @@ class BacktestContext(ExecutionContext):
             fill = None
             if order.order_type in (OrderType.STOP_LOSS, OrderType.TAKE_PROFIT):
                 if self._fill_model.check_stop_trigger(order, order_candle):
+                    # Stop triggers become market orders — fill at candle close,
+                    # not the trigger price. In a gap-down the fill can be worse.
+                    fill_price = order_candle.close
+                    if order.order_type == OrderType.STOP_LOSS:
+                        # Stops fill at the worse of trigger or close (slippage through)
+                        if order.side == Side.SHORT:  # long stop: selling
+                            fill_price = min(order.price, order_candle.close)
+                        else:  # short stop: buying
+                            fill_price = max(order.price, order_candle.close)
+                    else:
+                        # Take-profits fill at the better of trigger or close
+                        if order.side == Side.SHORT:  # long TP: selling
+                            fill_price = max(order.price, order_candle.close)
+                        else:  # short TP: buying
+                            fill_price = min(order.price, order_candle.close)
                     fill = Fill(
                         market=order.market,
                         side=order.side,
-                        price=order.price,
+                        price=fill_price,
                         size=order.size,
                         fee=0.0,
                         ts=order_candle.ts,

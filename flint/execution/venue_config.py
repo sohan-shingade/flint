@@ -64,10 +64,10 @@ VENUE_DEFAULTS: Dict[str, VenueConfig] = {
         initial_margin=0.05, maintenance_margin=0.03, max_leverage=20,
         impact_coefficient=0.06, base_latency_s=2.0, latency_jitter_s=1.0,
     ),
-    # Default venue (used when no venue specified)
+    # Default venue (used when no venue specified) — Drift-like defaults
     "default": VenueConfig(
         name="default", taker_fee_bps=5, maker_fee_bps=0,
-        initial_margin=1.0, maintenance_margin=1.0, max_leverage=1,
+        initial_margin=0.10, maintenance_margin=0.05, max_leverage=10,
         impact_coefficient=0.05, base_latency_s=1.0, latency_jitter_s=0.5,
     ),
 }
