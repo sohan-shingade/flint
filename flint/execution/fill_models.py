@@ -200,8 +200,8 @@ class FillPipeline(FillModel):
         self,
         impact_coefficient: float = 0.05,
         fallback_bps: float = 10.0,
-        base_latency_s: float = 0.0,
-        latency_jitter_s: float = 0.0,
+        base_latency_s: float = 1.0,
+        latency_jitter_s: float = 0.5,
         latency_seed: Optional[int] = None,
         latency_enabled: bool = True,
     ):

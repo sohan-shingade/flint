@@ -65,7 +65,7 @@ class TestFillPipelineIsAFillModel:
 
 class TestPipelineMarketFill:
     def test_fill_with_orderbook(self):
-        pipeline = FillPipeline()
+        pipeline = FillPipeline(latency_enabled=False)
         book = OrderbookSnapshot(
             market="SOL-PERP", ts=1000,
             bids=(), asks=(OrderbookLevel(100.5, 20),),
@@ -80,7 +80,7 @@ class TestPipelineMarketFill:
         assert fill.impact_bps > 0
 
     def test_fill_without_orderbook_uses_sqrt(self):
-        pipeline = FillPipeline(impact_coefficient=0.1)
+        pipeline = FillPipeline(impact_coefficient=0.1, latency_enabled=False)
         order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
                       size=10, order_id="o1", ts=1000)
         candle = _c(1000, 100.0, volume=1000)
@@ -89,7 +89,7 @@ class TestPipelineMarketFill:
         assert fill.price > 100.0
 
     def test_fill_no_volume_uses_fallback(self):
-        pipeline = FillPipeline(fallback_bps=10.0)
+        pipeline = FillPipeline(fallback_bps=10.0, latency_enabled=False)
         order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
                       size=10, order_id="o1", ts=1000)
         candle = _c(1000, 100.0, volume=0)
@@ -98,7 +98,7 @@ class TestPipelineMarketFill:
         assert fill.price == pytest.approx(100.1)
 
     def test_fok_rejects_partial(self):
-        pipeline = FillPipeline()
+        pipeline = FillPipeline(latency_enabled=False)
         book = OrderbookSnapshot(
             market="SOL-PERP", ts=1000,
             bids=(), asks=(OrderbookLevel(100.5, 3),),
@@ -111,7 +111,7 @@ class TestPipelineMarketFill:
         assert fill is None
 
     def test_ioc_partial_fill(self):
-        pipeline = FillPipeline()
+        pipeline = FillPipeline(latency_enabled=False)
         book = OrderbookSnapshot(
             market="SOL-PERP", ts=1000,
             bids=(), asks=(OrderbookLevel(100.5, 3),),
@@ -169,7 +169,7 @@ class TestPipelineLatency:
 
 class TestPipelineGTCResting:
     def test_gtc_returns_resting_orders(self):
-        pipeline = FillPipeline()
+        pipeline = FillPipeline(latency_enabled=False)
         book = OrderbookSnapshot(
             market="SOL-PERP", ts=1000,
             bids=(), asks=(OrderbookLevel(100.5, 3),),
