@@ -10,12 +10,15 @@ class DualTimeframe(Strategy):
     Uses long-period SMA for trend direction, short-period momentum for entry.
     Only enters in the direction of the higher-timeframe trend.
     Uses v2 execution: stop-loss, impact checks, position sizing.
+    Volatility filter: skips entries when ATR/price > 3% (too choppy).
+    5-bar cooldown after closing a position to avoid whipsaws.
     """
-    def __init__(self, trend_period=50, entry_period=10, threshold=0.02, stop_pct=3.0):
+    def __init__(self, trend_period=50, entry_period=10, threshold=0.03, stop_pct=5.0):
         self.trend_period = trend_period
         self.entry_period = entry_period
         self.threshold = threshold
         self.stop_pct = stop_pct / 100
+        self._cooldown = 0
 
     @property
     def name(self) -> str:
@@ -26,8 +29,8 @@ class DualTimeframe(Strategy):
         return {
             "trend_period": {"type": "int", "low": 30, "high": 100, "default": 50},
             "entry_period": {"type": "int", "low": 5, "high": 20, "default": 10},
-            "threshold": {"type": "float", "low": 0.005, "high": 0.05, "default": 0.02},
-            "stop_pct": {"type": "float", "low": 1.0, "high": 8.0, "default": 3.0},
+            "threshold": {"type": "float", "low": 0.01, "high": 0.06, "default": 0.03},
+            "stop_pct": {"type": "float", "low": 2.0, "high": 10.0, "default": 5.0},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
@@ -36,12 +39,28 @@ class DualTimeframe(Strategy):
         if ctx is None:
             return Signal.HOLD
 
+        # Decrement cooldown
+        if self._cooldown > 0:
+            self._cooldown -= 1
+
         long_closes = np.array([c.close for c in history[-self.trend_period:]])
         trend_up = float(np.mean(long_closes)) > float(np.mean(long_closes[:-1]))
         short = [c.close for c in history[-self.entry_period:]]
         momentum = (short[-1] - short[0]) / short[0] if short[0] else 0
 
-        if trend_up and momentum > self.threshold and not ctx.positions:
+        # Volatility filter: ATR over entry_period
+        atr_window = history[-self.entry_period:]
+        trs = []
+        for i in range(1, len(atr_window)):
+            h = atr_window[i].high
+            l = atr_window[i].low
+            pc = atr_window[i - 1].close
+            trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        atr = np.mean(trs) if trs else 0
+        if candle.close > 0 and atr / candle.close > 0.03:
+            return Signal.HOLD
+
+        if trend_up and momentum > self.threshold and not ctx.positions and self._cooldown == 0:
             size = (ctx.account.cash * 0.9) / candle.close
             impact = ctx.get_impact_price(candle.market, Side.LONG, size)
             if impact and abs(impact - candle.close) / candle.close > 0.002:
@@ -51,7 +70,7 @@ class DualTimeframe(Strategy):
                 ctx.stop_order(candle.market, Side.SHORT, size,
                                candle.close * (1 - self.stop_pct))
 
-        elif not trend_up and momentum < -self.threshold and not ctx.positions:
+        elif not trend_up and momentum < -self.threshold and not ctx.positions and self._cooldown == 0:
             size = (ctx.account.cash * 0.9) / candle.close
             impact = ctx.get_impact_price(candle.market, Side.SHORT, size)
             if impact and abs(impact - candle.close) / candle.close > 0.002:
@@ -66,9 +85,10 @@ class DualTimeframe(Strategy):
             if abs(momentum) < self.threshold * 0.3:
                 ctx.close_position(candle.market)
                 ctx.cancel_all(candle.market)
+                self._cooldown = 5
 
         return Signal.HOLD
 
     def reset(self) -> None:
-        pass
+        self._cooldown = 0
 `

@@ -8,12 +8,14 @@ class RSIMeanReversion(Strategy):
     """RSI Mean Reversion — buy oversold, sell overbought.
 
     Uses v2 execution: stop-loss, impact checks, proper sizing.
+    Trend filter: only mean-revert in the direction of a 100-bar SMA.
     """
-    def __init__(self, period=14, oversold=30, overbought=70, stop_pct=4.0):
+    def __init__(self, period=14, oversold=30, overbought=70, stop_pct=5.0, trend_period=100):
         self.period = period
         self.oversold = oversold
         self.overbought = overbought
         self.stop_pct = stop_pct / 100
+        self.trend_period = trend_period
 
     @property
     def name(self) -> str:
@@ -25,11 +27,13 @@ class RSIMeanReversion(Strategy):
             "period": {"type": "int", "low": 5, "high": 30, "default": 14},
             "oversold": {"type": "float", "low": 15, "high": 40, "default": 30},
             "overbought": {"type": "float", "low": 60, "high": 85, "default": 70},
-            "stop_pct": {"type": "float", "low": 2.0, "high": 8.0, "default": 4.0},
+            "stop_pct": {"type": "float", "low": 2.0, "high": 10.0, "default": 5.0},
+            "trend_period": {"type": "int", "low": 50, "high": 200, "default": 100},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
-        if ctx is None or len(history) < self.period + 1:
+        min_bars = max(self.period + 1, self.trend_period)
+        if ctx is None or len(history) < min_bars:
             return Signal.HOLD
         closes = [c.close for c in history[-(self.period + 1):]]
         deltas = np.diff(closes)
@@ -37,11 +41,16 @@ class RSIMeanReversion(Strategy):
         avg_loss = float(np.mean(np.where(deltas < 0, -deltas, 0)))
         rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100
 
+        # Trend filter: 100-bar SMA
+        trend_closes = [c.close for c in history[-self.trend_period:]]
+        sma = np.mean(trend_closes)
+        uptrend = candle.close > sma
+
         if not ctx.positions:
             side = None
-            if rsi < self.oversold:
+            if uptrend and rsi < self.oversold:
                 side = Side.LONG
-            elif rsi > self.overbought:
+            elif not uptrend and rsi > self.overbought:
                 side = Side.SHORT
             if side:
                 size = (ctx.account.cash * 0.9) / candle.close

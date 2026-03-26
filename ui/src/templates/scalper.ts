@@ -5,13 +5,14 @@ import numpy as np
 
 
 class Scalper(Strategy):
-    """Scalper — fast mean-reversion on short timeframes.
+    """Scalper — mean-reversion in calm markets.
 
     Enters on extreme short-term deviation from VWAP-like average.
-    Exits quickly near the mean. Designed for 5m-15m candles.
-    Uses v2 execution with tight stops and impact checks.
+    Exits when price reverts toward the mean. Uses a volatility filter
+    to only trade when recent volatility is below average (calm markets
+    mean-revert better). Wider thresholds reduce trade count and fees.
     """
-    def __init__(self, window=10, entry_dev=0.008, exit_dev=0.002, stop_pct=1.5):
+    def __init__(self, window=20, entry_dev=0.015, exit_dev=0.005, stop_pct=2.5):
         self.window = window
         self.entry_dev = entry_dev
         self.exit_dev = exit_dev
@@ -24,14 +25,14 @@ class Scalper(Strategy):
     @classmethod
     def parameters(cls):
         return {
-            "window": {"type": "int", "low": 5, "high": 20, "default": 10},
-            "entry_dev": {"type": "float", "low": 0.003, "high": 0.02, "default": 0.008},
-            "exit_dev": {"type": "float", "low": 0.001, "high": 0.005, "default": 0.002},
-            "stop_pct": {"type": "float", "low": 0.5, "high": 3.0, "default": 1.5},
+            "window": {"type": "int", "low": 10, "high": 40, "default": 20},
+            "entry_dev": {"type": "float", "low": 0.008, "high": 0.03, "default": 0.015},
+            "exit_dev": {"type": "float", "low": 0.002, "high": 0.01, "default": 0.005},
+            "stop_pct": {"type": "float", "low": 1.0, "high": 5.0, "default": 2.5},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
-        if ctx is None or len(history) < self.window:
+        if ctx is None or len(history) < self.window * 2:
             return Signal.HOLD
 
         recent = history[-self.window:]
@@ -41,7 +42,19 @@ class Scalper(Strategy):
         vwap = sum(c.close * c.volume for c in recent) / total_vol
         deviation = (candle.close - vwap) / vwap
 
+        # Volatility filter: only trade when recent vol is below longer-term average
+        recent_returns = [abs(history[i].close - history[i - 1].close) / history[i - 1].close
+                          for i in range(-self.window + 1, 0)]
+        long_returns = [abs(history[i].close - history[i - 1].close) / history[i - 1].close
+                        for i in range(-self.window * 2 + 1, -self.window)]
+        recent_vol = np.mean(recent_returns)
+        long_vol = np.mean(long_returns)
+
         if not ctx.positions:
+            # Skip entries in volatile markets — mean reversion fails when trending
+            if recent_vol > long_vol:
+                return Signal.HOLD
+
             side = None
             if deviation < -self.entry_dev:
                 side = Side.LONG
