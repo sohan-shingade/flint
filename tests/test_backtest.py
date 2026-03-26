@@ -2,6 +2,7 @@
 import pytest
 
 from flint.backtest.engine import BacktestEngine, _max_drawdown, _sharpe_ratio
+from flint.execution.fill_models import ClosePriceFill, SlippageFill
 from flint.models import Candle, Signal
 from flint.strategy.ma_crossover import MACrossoverStrategy
 
@@ -41,7 +42,8 @@ def test_backtest_no_candles():
 
 def test_backtest_on_synthetic(sample_candles):
     strategy = MACrossoverStrategy(fast_period=5, slow_period=10)
-    engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0)
+    engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0,
+                            fill_model=SlippageFill(slippage_bps=5))
     result = engine.run(sample_candles)
 
     assert result.total_trades > 0
@@ -54,11 +56,13 @@ def test_backtest_on_synthetic(sample_candles):
 def test_backtest_fees_reduce_pnl(sample_candles):
     strategy = MACrossoverStrategy(fast_period=5, slow_period=10)
 
-    engine_no_fee = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0)
+    engine_no_fee = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0,
+                                   fill_model=SlippageFill(slippage_bps=5))
     result_no_fee = engine_no_fee.run(sample_candles)
 
     strategy2 = MACrossoverStrategy(fast_period=5, slow_period=10)
-    engine_fee = BacktestEngine(strategy2, initial_capital=10_000, fee_rate=0.001)
+    engine_fee = BacktestEngine(strategy2, initial_capital=10_000, fee_rate=0.001,
+                                fill_model=SlippageFill(slippage_bps=5))
     result_fee = engine_fee.run(sample_candles)
 
     assert result_no_fee.total_pnl >= result_fee.total_pnl
@@ -74,7 +78,8 @@ def test_backtest_closes_open_position(sample_candles):
             return Signal.HOLD
 
     strategy = AlwaysBuy(fast_period=3, slow_period=5)
-    engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0)
+    engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0,
+                            fill_model=ClosePriceFill())
     result = engine.run(sample_candles)
 
     assert result.total_trades == 1

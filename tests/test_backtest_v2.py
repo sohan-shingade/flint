@@ -193,7 +193,7 @@ class TestBacktestContext:
         assert ctx.pending_orders == []
 
     def test_market_order_opens_position(self):
-        ctx = BacktestContext(10000, fee_model=ZeroFeeModel())
+        ctx = BacktestContext(10000, fill_model=ClosePriceFill(), fee_model=ZeroFeeModel())
         candle = _c(1000, 100.0)
         ctx.set_candle(candle)
         ctx.market_order("SOL-PERP", Side.LONG, 10.0)
@@ -204,7 +204,7 @@ class TestBacktestContext:
         assert ctx.positions[0].size == 10.0
 
     def test_close_position(self):
-        ctx = BacktestContext(10000, fee_model=ZeroFeeModel())
+        ctx = BacktestContext(10000, fill_model=ClosePriceFill(), fee_model=ZeroFeeModel())
         c1 = _c(1000, 100.0)
         ctx.set_candle(c1)
         ctx.market_order("SOL-PERP", Side.LONG, 10.0)
@@ -219,7 +219,7 @@ class TestBacktestContext:
         assert ctx.closed_trades[0]["pnl"] == 100.0  # (110-100)*10
 
     def test_stop_loss_triggers(self):
-        ctx = BacktestContext(10000, fee_model=ZeroFeeModel())
+        ctx = BacktestContext(10000, fill_model=ClosePriceFill(), fee_model=ZeroFeeModel())
         c1 = _c(1000, 100.0)
         ctx.set_candle(c1)
         ctx.market_order("SOL-PERP", Side.LONG, 10.0)
@@ -274,7 +274,7 @@ class TestBacktestContext:
         assert len(ctx.pending_orders) == 0
 
     def test_funding_payment(self):
-        ctx = BacktestContext(10000, fee_model=ZeroFeeModel())
+        ctx = BacktestContext(10000, fill_model=ClosePriceFill(), fee_model=ZeroFeeModel())
         c1 = _c(1000, 100.0)
         ctx.set_candle(c1)
         ctx.market_order("SOL-PERP", Side.LONG, 10.0)
@@ -288,7 +288,7 @@ class TestBacktestContext:
         assert ctx.total_funding > 0
 
     def test_fees_deducted(self):
-        ctx = BacktestContext(10000, fee_model=FlatFeeModel(fee_bps=10))
+        ctx = BacktestContext(10000, fill_model=ClosePriceFill(), fee_model=FlatFeeModel(fee_bps=10))
         c1 = _c(1000, 100.0)
         ctx.set_candle(c1)
         ctx.market_order("SOL-PERP", Side.LONG, 10.0)
@@ -304,7 +304,8 @@ class TestEngineV2:
     def test_v1_strategy_backwards_compat(self):
         """v0.1 MACrossover strategy should still produce trades."""
         strategy = MACrossoverStrategy(fast_period=5, slow_period=10)
-        engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0)
+        engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0,
+                                fill_model=SlippageFill(slippage_bps=5))
         candles = _down_up(60)
         result = engine.run(candles)
         assert result.total_trades > 0
@@ -326,7 +327,8 @@ class TestEngineV2:
     def test_v2_strategy_with_stop_loss(self):
         """v2 strategy that places stop-loss should have it trigger."""
         strategy = StopLossStrategy()
-        engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0)
+        engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0,
+                                fill_model=ClosePriceFill())
         # Price drops enough to trigger 5% stop
         candles = [
             _c(0, 100.0),
@@ -341,7 +343,8 @@ class TestEngineV2:
     def test_v2_limit_order_strategy(self):
         """v2 strategy that places limit order should fill when price drops."""
         strategy = LimitOrderStrategy()
-        engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0)
+        engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0,
+                                fill_model=ClosePriceFill())
         candles = [
             _c(0, 100.0),
             _c(3600, 100.0),  # places limit at 98

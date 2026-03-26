@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional, Type
 import optuna
 
 from ..backtest.engine import BacktestEngine
-from ..models import Candle
+from ..execution.fill_models import FillModel
+from ..models import Candle, FundingRate
 from ..strategy.base import Strategy
 
 logger = logging.getLogger("flint.optimization")
@@ -49,6 +50,12 @@ class StrategyOptimizer:
         initial_capital: float = 10_000.0,
         fee_rate: float = 0.0005,
         train_ratio: float = 1.0,
+        fill_model: Optional[FillModel] = None,
+        funding_rates: Optional[List] = None,
+        orderbook_snapshots: Optional[List] = None,
+        open_interest: Optional[List] = None,
+        margin_engine=None,
+        capital_allocator=None,
     ):
         self.strategy_cls = strategy_cls
         self.candles = candles
@@ -57,6 +64,12 @@ class StrategyOptimizer:
         self.initial_capital = initial_capital
         self.fee_rate = fee_rate
         self.train_ratio = train_ratio
+        self._fill_model = fill_model
+        self._funding_rates = funding_rates or []
+        self._orderbook_snapshots = orderbook_snapshots or []
+        self._open_interest = open_interest or []
+        self._margin_engine = margin_engine
+        self._capital_allocator = capital_allocator
 
         self._param_defs = strategy_cls.parameters()
         if not self._param_defs:
@@ -108,10 +121,23 @@ class StrategyOptimizer:
                 logger.debug("Invalid params %s: %s", params, e)
                 return float("-inf")
 
+            # Filter market data to training window
+            train_start = train_candles[0].ts if train_candles else 0
+            train_end = train_candles[-1].ts if train_candles else 0
+            funding = [f for f in self._funding_rates if train_start <= f.ts <= train_end]
+            orderbooks = [o for o in self._orderbook_snapshots if train_start <= o.ts <= train_end]
+            oi = [o for o in self._open_interest if train_start <= o.ts <= train_end]
+
             engine = BacktestEngine(
                 strategy,
                 initial_capital=self.initial_capital,
                 fee_rate=self.fee_rate,
+                fill_model=self._fill_model,
+                funding_rates=funding,
+                orderbook_snapshots=orderbooks,
+                open_interest=oi,
+                margin_engine=self._margin_engine,
+                capital_allocator=self._capital_allocator,
             )
             result = engine.run(train_candles)
 
@@ -177,6 +203,12 @@ class StrategyOptimizer:
                 n_trials=trials_per_split,
                 initial_capital=self.initial_capital,
                 fee_rate=self.fee_rate,
+                fill_model=self._fill_model,
+                funding_rates=self._funding_rates,
+                orderbook_snapshots=self._orderbook_snapshots,
+                open_interest=self._open_interest,
+                margin_engine=self._margin_engine,
+                capital_allocator=self._capital_allocator,
             )
             opt_result = opt.optimize()
 
@@ -185,7 +217,22 @@ class StrategyOptimizer:
                 strategy = self.strategy_cls(**opt_result.best_params)
             except (TypeError, ValueError):
                 continue
-            engine = BacktestEngine(strategy, self.initial_capital, self.fee_rate)
+
+            test_start = test[0].ts if test else 0
+            test_end = test[-1].ts if test else 0
+            test_funding = [f for f in self._funding_rates if test_start <= f.ts <= test_end]
+            test_ob = [o for o in self._orderbook_snapshots if test_start <= o.ts <= test_end]
+            test_oi = [o for o in self._open_interest if test_start <= o.ts <= test_end]
+
+            engine = BacktestEngine(
+                strategy, self.initial_capital, self.fee_rate,
+                fill_model=self._fill_model,
+                funding_rates=test_funding,
+                orderbook_snapshots=test_ob,
+                open_interest=test_oi,
+                margin_engine=self._margin_engine,
+                capital_allocator=self._capital_allocator,
+            )
             test_result = engine.run(test)
 
             results.append({

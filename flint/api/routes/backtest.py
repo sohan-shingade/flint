@@ -98,6 +98,12 @@ class BacktestRequest(BaseModel):
     # v0.3 execution features (opt-in)
     margin_tracking: bool = False
     capital_allocation: Optional[Dict[str, float]] = None  # e.g. {"drift": 5000, "hyperliquid": 3000}
+    # Fill pipeline configuration
+    fill_model: str = "pipeline"  # "pipeline", "slippage", "close", "next_bar_open"
+    slippage_bps: float = Field(default=10.0, ge=0, le=1000)
+    latency_enabled: bool = True
+    latency_seed: Optional[int] = None
+    impact_coefficient: Optional[float] = Field(default=None, ge=0, le=1.0)
 
 
 def _build_strategy(name: str, params: Dict, code: str = None):
@@ -451,7 +457,34 @@ def run_backtest(req: BacktestRequest, request: Request):
                 from ...execution.capital import VenueAllocator
                 cap_alloc = VenueAllocator(req.capital_allocation)
 
+            # Build fill model
+            from ...execution.fill_models import (
+                FillPipeline, SlippageFill, ClosePriceFill, NextBarOpenFill,
+            )
+            if req.fill_model == "slippage":
+                fill_model = SlippageFill(slippage_bps=req.slippage_bps)
+            elif req.fill_model == "close":
+                fill_model = ClosePriceFill()
+            elif req.fill_model == "next_bar_open":
+                fill_model = NextBarOpenFill()
+            else:
+                # Default: pipeline
+                from ...execution.venue_config import get_venue_config
+                venue_name = "default"
+                if req.capital_allocation:
+                    venue_name = max(req.capital_allocation, key=req.capital_allocation.get)
+                vcfg = get_venue_config(venue_name)
+                fill_model = FillPipeline(
+                    impact_coefficient=req.impact_coefficient or vcfg.impact_coefficient,
+                    fallback_bps=req.slippage_bps,
+                    base_latency_s=vcfg.base_latency_s,
+                    latency_jitter_s=vcfg.latency_jitter_s,
+                    latency_seed=req.latency_seed,
+                    latency_enabled=req.latency_enabled,
+                )
+
             engine = BacktestEngine(strategy, req.initial_capital, req.fee_rate,
+                                    fill_model=fill_model,
                                     funding_rates=funding_rates,
                                     orderbook_snapshots=orderbook_snapshots,
                                     open_interest=open_interest,

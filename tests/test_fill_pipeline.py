@@ -1,0 +1,242 @@
+"""Tests for the composable fill pipeline."""
+from __future__ import annotations
+
+import pytest
+
+from flint.models import (
+    Candle, Fill, Order, OrderType, Side, TimeInForce,
+)
+
+
+def _c(ts: int, close: float, high: float = 0, low: float = 0,
+       open_: float = 0, volume: float = 100.0, market: str = "SOL-PERP") -> Candle:
+    h = high or close + 1
+    l = low or close - 1
+    o = open_ or close
+    return Candle(ts=ts, open=o, high=h, low=l, close=close,
+                  volume=volume, market=market, resolution_s=3600)
+
+
+class TestTimeInForce:
+    def test_enum_values(self):
+        assert TimeInForce.IOC.value == "ioc"
+        assert TimeInForce.FOK.value == "fok"
+        assert TimeInForce.GTC.value == "gtc"
+
+    def test_order_default_tif_is_ioc(self):
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET, size=10)
+        assert order.time_in_force == TimeInForce.IOC
+
+    def test_order_accepts_tif(self):
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                      size=10, time_in_force=TimeInForce.GTC)
+        assert order.time_in_force == TimeInForce.GTC
+
+    def test_fill_has_impact_fields(self):
+        fill = Fill(market="SOL-PERP", side=Side.LONG, price=100.0, size=10,
+                    fee=0.05, ts=1000, is_partial=True, latency_ms=8000, impact_bps=15.0)
+        assert fill.is_partial is True
+        assert fill.latency_ms == 8000
+        assert fill.impact_bps == 15.0
+
+    def test_fill_defaults_backward_compat(self):
+        fill = Fill(market="SOL-PERP", side=Side.LONG, price=100.0, size=10,
+                    fee=0.05, ts=1000)
+        assert fill.is_partial is False
+        assert fill.latency_ms == 0.0
+        assert fill.impact_bps == 0.0
+
+
+from flint.execution.fill_models import FillModel, FillPipeline, SlippageFill
+from flint.execution.impact import ImpactStage
+from flint.execution.latency import LatencyStage
+from flint.execution.partial_fill import PartialFillStage
+from flint.models import OrderbookLevel, OrderbookSnapshot, TimeInForce
+
+
+class TestFillPipelineIsAFillModel:
+    def test_subclass(self):
+        assert issubclass(FillPipeline, FillModel)
+
+    def test_default_construction(self):
+        pipeline = FillPipeline()
+        assert pipeline is not None
+
+
+class TestPipelineMarketFill:
+    def test_fill_with_orderbook(self):
+        pipeline = FillPipeline(latency_enabled=False)
+        book = OrderbookSnapshot(
+            market="SOL-PERP", ts=1000,
+            bids=(), asks=(OrderbookLevel(100.5, 20),),
+        )
+        pipeline.set_orderbook(book)
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                      size=10, order_id="o1", ts=1000)
+        candle = _c(1000, 100.0)
+        fill = pipeline.fill_market(order, candle)
+        assert fill is not None
+        assert fill.price == pytest.approx(100.5)
+        assert fill.impact_bps > 0
+
+    def test_fill_without_orderbook_uses_sqrt(self):
+        pipeline = FillPipeline(impact_coefficient=0.1, latency_enabled=False)
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                      size=10, order_id="o1", ts=1000)
+        candle = _c(1000, 100.0, volume=1000)
+        fill = pipeline.fill_market(order, candle)
+        assert fill is not None
+        assert fill.price > 100.0
+
+    def test_fill_no_volume_uses_fallback(self):
+        pipeline = FillPipeline(fallback_bps=10.0, latency_enabled=False)
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                      size=10, order_id="o1", ts=1000)
+        candle = _c(1000, 100.0, volume=0)
+        fill = pipeline.fill_market(order, candle)
+        assert fill is not None
+        assert fill.price == pytest.approx(100.1)
+
+    def test_fok_rejects_partial(self):
+        pipeline = FillPipeline(latency_enabled=False)
+        book = OrderbookSnapshot(
+            market="SOL-PERP", ts=1000,
+            bids=(), asks=(OrderbookLevel(100.5, 3),),
+        )
+        pipeline.set_orderbook(book)
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                      size=10, order_id="o1", ts=1000, time_in_force=TimeInForce.FOK)
+        candle = _c(1000, 100.0)
+        fill = pipeline.fill_market(order, candle)
+        assert fill is None
+
+    def test_ioc_partial_fill(self):
+        pipeline = FillPipeline(latency_enabled=False)
+        book = OrderbookSnapshot(
+            market="SOL-PERP", ts=1000,
+            bids=(), asks=(OrderbookLevel(100.5, 3),),
+        )
+        pipeline.set_orderbook(book)
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                      size=10, order_id="o1", ts=1000, time_in_force=TimeInForce.IOC)
+        candle = _c(1000, 100.0)
+        fill = pipeline.fill_market(order, candle)
+        assert fill is not None
+        assert fill.size == 3.0
+        assert fill.is_partial is True
+
+
+class TestPipelineLimitFill:
+    def test_limit_buy_triggers(self):
+        pipeline = FillPipeline()
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.LIMIT,
+                      size=10, price=99.0, order_id="o1")
+        candle = _c(1000, 100.0, low=98.0)
+        fill = pipeline.fill_limit(order, candle)
+        assert fill is not None
+        assert fill.price == 99.0
+
+    def test_limit_buy_no_trigger(self):
+        pipeline = FillPipeline()
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.LIMIT,
+                      size=10, price=99.0, order_id="o1")
+        candle = _c(1000, 100.0, low=99.5)
+        fill = pipeline.fill_limit(order, candle)
+        assert fill is None
+
+
+class TestPipelineLatency:
+    def test_latency_delays_fill(self):
+        """Latency > bar width should delay fill to the next bar.
+        Bar resolution is 3600s. Latency of 5000s means the order
+        won't fill until a bar whose end (ts + 3600) >= eligible_ts.
+        """
+        pipeline = FillPipeline(base_latency_s=5000.0, latency_jitter_s=0.0)
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                      size=10, order_id="o1", ts=1000)
+        # Bar at ts=1000: fill_time = 1000+3600 = 4600 < 6000 (eligible) → no fill
+        candle_early = _c(1000, 100.0, volume=1000)
+        fill_early = pipeline.fill_market(order, candle_early)
+        assert fill_early is None
+
+        # Bar at ts=3600: fill_time = 3600+3600 = 7200 >= 6000 → fills
+        candle_ready = _c(3600, 101.0, volume=1000)
+        fill_ready = pipeline.fill_market(order, candle_ready)
+        assert fill_ready is not None
+
+    def test_latency_disabled(self):
+        pipeline = FillPipeline(latency_enabled=False)
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                      size=10, order_id="o1", ts=1000)
+        candle = _c(1000, 100.0, volume=1000)
+        fill = pipeline.fill_market(order, candle)
+        assert fill is not None
+
+
+class TestPipelineGTCResting:
+    def test_gtc_returns_resting_orders(self):
+        pipeline = FillPipeline(latency_enabled=False)
+        book = OrderbookSnapshot(
+            market="SOL-PERP", ts=1000,
+            bids=(), asks=(OrderbookLevel(100.5, 3),),
+        )
+        pipeline.set_orderbook(book)
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                      size=10, order_id="o1", ts=1000, time_in_force=TimeInForce.GTC)
+        candle = _c(1000, 100.0)
+        fill = pipeline.fill_market(order, candle)
+        assert fill is not None
+        assert fill.size == 3.0
+        assert len(pipeline.pending_resting_orders) == 1
+        resting = pipeline.pending_resting_orders[0]
+        assert resting.size == 7.0
+        assert resting.order_type == OrderType.LIMIT
+
+
+from flint.backtest.engine import BacktestEngine
+from flint.strategy import MACrossoverStrategy
+
+
+class TestEngineDefaultPipeline:
+    def test_engine_uses_pipeline_by_default(self):
+        engine = BacktestEngine(MACrossoverStrategy())
+        assert isinstance(engine._fill_model, FillPipeline)
+
+    def test_engine_accepts_legacy_fill_model(self):
+        engine = BacktestEngine(MACrossoverStrategy(), fill_model=SlippageFill(5))
+        assert isinstance(engine._fill_model, SlippageFill)
+
+    def test_full_backtest_with_pipeline(self):
+        candles = [_c(i * 3600, 100 + i * 0.5, volume=500) for i in range(60)]
+        engine = BacktestEngine(MACrossoverStrategy(), initial_capital=10_000)
+        result = engine.run(candles)
+        assert result.total_trades >= 0
+        for fill in result.fills:
+            assert hasattr(fill, 'impact_bps')
+            assert hasattr(fill, 'latency_ms')
+
+    def test_pipeline_context_default(self):
+        from flint.execution.backtest_context import BacktestContext
+        ctx = BacktestContext(initial_capital=10_000)
+        assert isinstance(ctx._fill_model, FillPipeline)
+
+
+class TestContextTIF:
+    def test_market_order_accepts_tif(self):
+        from flint.execution.backtest_context import BacktestContext
+        pipeline = FillPipeline(latency_enabled=False)
+        ctx = BacktestContext(initial_capital=10_000, fill_model=pipeline)
+        candle = _c(1000, 100.0, volume=500)
+        ctx.set_candle(candle)
+        oid = ctx.market_order("SOL-PERP", Side.LONG, 10, time_in_force=TimeInForce.GTC)
+        assert oid != ""
+        assert len(ctx._market_orders_queue) == 1
+        assert ctx._market_orders_queue[0].time_in_force == TimeInForce.GTC
+
+    def test_market_order_default_tif_is_ioc(self):
+        from flint.execution.backtest_context import BacktestContext
+        ctx = BacktestContext(initial_capital=10_000, fill_model=FillPipeline(latency_enabled=False))
+        candle = _c(1000, 100.0, volume=500)
+        ctx.set_candle(candle)
+        ctx.market_order("SOL-PERP", Side.LONG, 10)
+        assert ctx._market_orders_queue[0].time_in_force == TimeInForce.IOC

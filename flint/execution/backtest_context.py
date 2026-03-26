@@ -18,10 +18,11 @@ from ..models import (
     OrderType,
     PositionInfo,
     Side,
+    TimeInForce,
 )
 from .context import ExecutionContext
 from .fee_models import FeeModel, FlatFeeModel
-from .fill_models import FillModel, ClosePriceFill
+from .fill_models import FillModel, FillPipeline
 
 logger = logging.getLogger("flint.backtest")
 
@@ -76,7 +77,7 @@ class BacktestContext(ExecutionContext):
     ):
         self._initial_capital = initial_capital
         self._cash = initial_capital
-        self._fill_model = fill_model or ClosePriceFill()
+        self._fill_model = fill_model or FillPipeline()
         self._fee_model = fee_model or FlatFeeModel()
         self._position_size_pct = position_size_pct
         self._risk_manager = risk_manager
@@ -161,11 +162,13 @@ class BacktestContext(ExecutionContext):
 
     def market_order(self, market: str, side: Side, size: float,
                      reduce_only: bool = False, tag: str = "",
-                     venue: str = "default") -> str:
+                     venue: str = "default",
+                     time_in_force=None) -> str:
         oid = self._next_order_id()
         order = Order(
             market=market, side=side, order_type=OrderType.MARKET,
             size=size, order_id=oid, ts=self.timestamp, venue=venue,
+            time_in_force=time_in_force or TimeInForce.IOC,
         )
         checked = self._check_risk(order)
         if checked is None:
@@ -366,9 +369,34 @@ class BacktestContext(ExecutionContext):
         return history[-1]
 
     def get_impact_price(self, market: Optional[str] = None, side=None, size: float = 0) -> Optional[float]:
-        """Walk the current orderbook to estimate fill price for a given size."""
-        book = self.get_orderbook(market)
-        if book is None or side is None or size <= 0:
+        """Estimate fill price for a given size, using the same model as the fill pipeline.
+
+        Uses orderbook walk if book data exists, otherwise falls back to the
+        sqrt participation model (same tiers as FillPipeline). This ensures
+        the pre-trade estimate matches what the fill pipeline will charge.
+        """
+        if side is None or size <= 0:
+            return None
+
+        mkt = market or (self._current_candle.market if self._current_candle else None)
+        if not mkt:
+            return None
+
+        # Use the fill pipeline's impact stage if available
+        if hasattr(self._fill_model, '_impact'):
+            candle = self._current_candle
+            if candle is None:
+                return None
+            book = self.get_orderbook(mkt)
+            from ..models import Order, OrderType
+            order = Order(market=mkt, side=side, order_type=OrderType.MARKET,
+                          size=size, order_id="estimate")
+            result = self._fill_model._impact.compute(order, candle, book)
+            return result.fill_price
+
+        # Legacy fallback: orderbook-only walk
+        book = self.get_orderbook(mkt)
+        if book is None:
             return None
 
         levels = book.asks if side == Side.LONG else book.bids
@@ -506,10 +534,25 @@ class BacktestContext(ExecutionContext):
             fill = None
             if order.order_type in (OrderType.STOP_LOSS, OrderType.TAKE_PROFIT):
                 if self._fill_model.check_stop_trigger(order, order_candle):
+                    # Stop triggers become market orders — fill at candle close,
+                    # not the trigger price. In a gap-down the fill can be worse.
+                    fill_price = order_candle.close
+                    if order.order_type == OrderType.STOP_LOSS:
+                        # Stops fill at the worse of trigger or close (slippage through)
+                        if order.side == Side.SHORT:  # long stop: selling
+                            fill_price = min(order.price, order_candle.close)
+                        else:  # short stop: buying
+                            fill_price = max(order.price, order_candle.close)
+                    else:
+                        # Take-profits fill at the better of trigger or close
+                        if order.side == Side.SHORT:  # long TP: selling
+                            fill_price = max(order.price, order_candle.close)
+                        else:  # short TP: buying
+                            fill_price = min(order.price, order_candle.close)
                     fill = Fill(
                         market=order.market,
                         side=order.side,
-                        price=order.price,
+                        price=fill_price,
                         size=order.size,
                         fee=0.0,
                         ts=order_candle.ts,
@@ -556,9 +599,17 @@ class BacktestContext(ExecutionContext):
                     market=fill.market, side=fill.side, price=fill.price,
                     size=fill.size, fee=fee, ts=fill.ts, order_id=fill.order_id,
                     venue=order.venue,
+                    is_partial=fill.is_partial,
+                    latency_ms=fill.latency_ms,
+                    impact_bps=fill.impact_bps,
                 )
                 self._apply_fill(fill)
                 fills.append(fill)
+            # Drain GTC resting orders from pipeline
+            if hasattr(self._fill_model, 'drain_resting_orders'):
+                for resting in self._fill_model.drain_resting_orders():
+                    if self._check_order_cap():
+                        self._pending_orders.append(resting)
         self._market_orders_queue.clear()
         return fills
 
@@ -607,6 +658,9 @@ class BacktestContext(ExecutionContext):
                     market=fill.market, side=fill.side, price=fill.price,
                     size=fill.size, fee=fee, ts=fill.ts, order_id=fill.order_id,
                     venue=venue,
+                    is_partial=fill.is_partial,
+                    latency_ms=fill.latency_ms,
+                    impact_bps=fill.impact_bps,
                 )
                 self._apply_fill(fill)
                 fills.append(fill)

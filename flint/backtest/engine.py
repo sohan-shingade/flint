@@ -22,7 +22,7 @@ from ..models import (
 )
 from ..execution.backtest_context import BacktestContext
 from ..execution.fee_models import FeeModel, FlatFeeModel
-from ..execution.fill_models import FillModel, SlippageFill, OrderbookFillModel
+from ..execution.fill_models import FillModel, FillPipeline, OrderbookFillModel
 from ..strategy.base import Strategy
 
 
@@ -70,7 +70,7 @@ class BacktestEngine:
         self.initial_capital = initial_capital
         self.fee_rate = fee_rate
         self.position_size = position_size
-        self._fill_model = fill_model or SlippageFill(slippage_bps=5.0)
+        self._fill_model = fill_model or FillPipeline()
         self._fee_model = fee_model or FlatFeeModel(fee_bps=fee_rate * 10_000)
         self._funding_rates = funding_rates or []
         self._orderbook_snapshots = orderbook_snapshots or []
@@ -204,7 +204,7 @@ class BacktestEngine:
             ctx.process_transfers(candle.ts)
 
             # 3d. Update fill model's orderbook if it's book-aware
-            if isinstance(self._fill_model, OrderbookFillModel):
+            if isinstance(self._fill_model, (OrderbookFillModel, FillPipeline)):
                 book = ctx.get_orderbook(candle.market)
                 self._fill_model.set_orderbook(book)
 

@@ -4,6 +4,7 @@ from typing import List, Optional, Dict
 
 from flint.backtest.engine import BacktestEngine
 from flint.execution.context import ExecutionContext
+from flint.execution.fill_models import SlippageFill
 from flint.models import Candle, Signal, Side
 from flint.strategy.base import Strategy
 
@@ -50,7 +51,8 @@ class TestMultiMarket:
     def test_get_candles_returns_data(self):
         sol = [_c(i*3600, 100+i, "SOL-PERP") for i in range(50)]
         btc = [_c(i*3600, 40000+i*100, "BTC-PERP") for i in range(50)]
-        engine = BacktestEngine(CrossMarketStrategy(), fee_rate=0.0)
+        engine = BacktestEngine(CrossMarketStrategy(), fee_rate=0.0,
+                                fill_model=SlippageFill(slippage_bps=5))
         result = engine.run(sol, extra_markets={"BTC-PERP": btc})
         # CrossMarketStrategy uses ctx.get_candles("BTC-PERP", 5)
         # and BTC is always rising, so it should generate trades
