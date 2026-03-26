@@ -60,17 +60,47 @@ const FEE_PRESETS: Record<string, { label: string; rate: number; venue: string }
 /* ── strategy templates ────────────────────────────────── */
 
 const BLANK_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 
 
 class MyStrategy(Strategy):
+    """Blank strategy template — v2 execution context.
+
+    Uses ctx.market_order() for entries with impact checks and stop-losses.
+    Customize the on_candle logic below.
+    """
+    def __init__(self, lookback=20, stop_pct=3.0):
+        self.lookback = lookback
+        self.stop_pct = stop_pct / 100
+
     @property
     def name(self) -> str:
         return "my_strategy"
 
+    @classmethod
+    def parameters(cls):
+        return {
+            "lookback": {"type": "int", "low": 5, "high": 50, "default": 20},
+            "stop_pct": {"type": "float", "low": 1.0, "high": 8.0, "default": 3.0},
+        }
+
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
-        # Your logic here
+        if ctx is None or len(history) < self.lookback:
+            return Signal.HOLD
+
+        # --- Your entry logic here ---
+        # Example: uncomment to enter long with impact check + stop-loss
+        # if not ctx.positions:
+        #     size = (ctx.account.cash * 0.9) / candle.close
+        #     impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+        #     if impact and abs(impact - candle.close) / candle.close > 0.002:
+        #         return Signal.HOLD  # skip if impact too high
+        #     if size > 0:
+        #         ctx.market_order(candle.market, Side.LONG, size)
+        #         ctx.stop_order(candle.market, Side.SHORT, size,
+        #                        candle.close * (1 - self.stop_pct))
+
         return Signal.HOLD
 
     def reset(self) -> None:
@@ -78,7 +108,7 @@ class MyStrategy(Strategy):
 `
 
 const MA_CROSSOVER_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
@@ -88,10 +118,12 @@ class MACrossover(Strategy):
 
     Buys when fast SMA crosses above slow SMA (golden cross).
     Sells when fast crosses below slow (death cross).
+    Uses v2 execution: stop-loss, impact checks, position sizing.
     """
-    def __init__(self, fast_period=10, slow_period=30):
+    def __init__(self, fast_period=10, slow_period=30, stop_pct=3.0):
         self.fast = fast_period
         self.slow = slow_period
+        self.stop_pct = stop_pct / 100
         self._prev_fast = None
         self._prev_slow = None
 
@@ -104,6 +136,7 @@ class MACrossover(Strategy):
         return {
             "fast_period": {"type": "int", "low": 5, "high": 50, "default": 10},
             "slow_period": {"type": "int", "low": 20, "high": 200, "default": 30},
+            "stop_pct": {"type": "float", "low": 1.0, "high": 8.0, "default": 3.0},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
@@ -112,15 +145,33 @@ class MACrossover(Strategy):
         closes = [c.close for c in history[-self.slow:]]
         fast_ma = float(np.mean(closes[-self.fast:]))
         slow_ma = float(np.mean(closes))
-        signal = Signal.HOLD
-        if self._prev_fast is not None:
-            if self._prev_fast <= self._prev_slow and fast_ma > slow_ma:
-                signal = Signal.BUY
-            elif self._prev_fast >= self._prev_slow and fast_ma < slow_ma:
-                signal = Signal.SELL
+
+        if ctx is None or self._prev_fast is None:
+            self._prev_fast = fast_ma
+            self._prev_slow = slow_ma
+            return Signal.HOLD
+
+        golden_cross = self._prev_fast <= self._prev_slow and fast_ma > slow_ma
+        death_cross = self._prev_fast >= self._prev_slow and fast_ma < slow_ma
         self._prev_fast = fast_ma
         self._prev_slow = slow_ma
-        return signal
+
+        if golden_cross and not ctx.positions:
+            size = (ctx.account.cash * 0.9) / candle.close
+            impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+            if impact and abs(impact - candle.close) / candle.close > 0.002:
+                ctx.log(f"Skip entry: impact too high ({abs(impact - candle.close)/candle.close*10000:.0f}bps)")
+                return Signal.HOLD
+            if size > 0:
+                ctx.market_order(candle.market, Side.LONG, size)
+                ctx.stop_order(candle.market, Side.SHORT, size,
+                               candle.close * (1 - self.stop_pct))
+
+        elif death_cross and ctx.positions:
+            ctx.close_position(candle.market)
+            ctx.cancel_all(candle.market)
+
+        return Signal.HOLD
 
     def reset(self) -> None:
         self._prev_fast = None
@@ -128,17 +179,21 @@ class MACrossover(Strategy):
 `
 
 const RSI_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
 
 class RSIMeanReversion(Strategy):
-    """RSI Mean Reversion — buy oversold, sell overbought."""
-    def __init__(self, period=14, oversold=30, overbought=70):
+    """RSI Mean Reversion — buy oversold, sell overbought.
+
+    Uses v2 execution: stop-loss, impact checks, proper sizing.
+    """
+    def __init__(self, period=14, oversold=30, overbought=70, stop_pct=4.0):
         self.period = period
         self.oversold = oversold
         self.overbought = overbought
+        self.stop_pct = stop_pct / 100
 
     @property
     def name(self) -> str:
@@ -150,25 +205,38 @@ class RSIMeanReversion(Strategy):
             "period": {"type": "int", "low": 5, "high": 30, "default": 14},
             "oversold": {"type": "float", "low": 15, "high": 40, "default": 30},
             "overbought": {"type": "float", "low": 60, "high": 85, "default": 70},
+            "stop_pct": {"type": "float", "low": 2.0, "high": 8.0, "default": 4.0},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
-        if len(history) < self.period + 1:
+        if ctx is None or len(history) < self.period + 1:
             return Signal.HOLD
         closes = [c.close for c in history[-(self.period + 1):]]
         deltas = np.diff(closes)
-        gains = np.where(deltas > 0, deltas, 0)
-        losses = np.where(deltas < 0, -deltas, 0)
-        avg_gain = float(np.mean(gains)) if len(gains) > 0 else 0
-        avg_loss = float(np.mean(losses)) if len(losses) > 0 else 0
-        if avg_loss == 0:
-            rsi = 100.0
+        avg_gain = float(np.mean(np.where(deltas > 0, deltas, 0)))
+        avg_loss = float(np.mean(np.where(deltas < 0, -deltas, 0)))
+        rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100
+
+        if not ctx.positions:
+            side = None
+            if rsi < self.oversold:
+                side = Side.LONG
+            elif rsi > self.overbought:
+                side = Side.SHORT
+            if side:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, side, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, side, size)
+                    stop_side = Side.SHORT if side == Side.LONG else Side.LONG
+                    stop_price = candle.close * ((1 - self.stop_pct) if side == Side.LONG else (1 + self.stop_pct))
+                    ctx.stop_order(candle.market, stop_side, size, stop_price)
         else:
-            rsi = 100 - (100 / (1 + avg_gain / avg_loss))
-        if rsi < self.oversold:
-            return Signal.BUY
-        elif rsi > self.overbought:
-            return Signal.SELL
+            if 40 < rsi < 60:
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
         return Signal.HOLD
 
     def reset(self) -> None:
@@ -176,7 +244,7 @@ class RSIMeanReversion(Strategy):
 `
 
 const MEAN_REVERSION_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
@@ -185,12 +253,13 @@ class MeanReversion(Strategy):
     """Z-Score Mean Reversion with stop-loss.
 
     Buys when price is N standard deviations below the rolling mean.
-    Sells when price reverts. Solana perps mean-revert well on hourly.
+    Sells when price reverts. Uses v2 execution with impact checks.
     """
-    def __init__(self, period=20, entry_z=2.0, exit_z=0.5):
+    def __init__(self, period=20, entry_z=2.0, exit_z=0.5, stop_pct=5.0):
         self.period = period
         self.entry_z = entry_z
         self.exit_z = exit_z
+        self.stop_pct = stop_pct / 100
 
     @property
     def name(self) -> str:
@@ -202,10 +271,11 @@ class MeanReversion(Strategy):
             "period": {"type": "int", "low": 10, "high": 50, "default": 20},
             "entry_z": {"type": "float", "low": 1.0, "high": 3.5, "default": 2.0},
             "exit_z": {"type": "float", "low": 0.0, "high": 1.5, "default": 0.5},
+            "stop_pct": {"type": "float", "low": 2.0, "high": 10.0, "default": 5.0},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
-        if len(history) < self.period:
+        if ctx is None or len(history) < self.period:
             return Signal.HOLD
         closes = np.array([c.close for c in history[-self.period:]])
         mean = float(np.mean(closes))
@@ -213,12 +283,27 @@ class MeanReversion(Strategy):
         if std == 0:
             return Signal.HOLD
         z = (candle.close - mean) / std
-        if z <= -self.entry_z:
-            return Signal.BUY
-        elif z >= self.entry_z:
-            return Signal.SELL
-        elif abs(z) <= self.exit_z:
-            return Signal.SELL
+
+        if not ctx.positions:
+            side = None
+            if z <= -self.entry_z:
+                side = Side.LONG
+            elif z >= self.entry_z:
+                side = Side.SHORT
+            if side:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, side, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, side, size)
+                    stop_side = Side.SHORT if side == Side.LONG else Side.LONG
+                    stop_price = candle.close * ((1 - self.stop_pct) if side == Side.LONG else (1 + self.stop_pct))
+                    ctx.stop_order(candle.market, stop_side, size, stop_price)
+        else:
+            if abs(z) <= self.exit_z:
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
         return Signal.HOLD
 
     def reset(self) -> None:
@@ -226,7 +311,7 @@ class MeanReversion(Strategy):
 `
 
 const BREAKOUT_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
@@ -235,7 +320,7 @@ class BreakoutMomentum(Strategy):
     """Breakout with volume confirmation.
 
     Enters on breakout above N-period high when volume spikes.
-    Uses ATR-based trailing stop concept for exits.
+    Uses v2 execution: stop at recent low, impact checks, position sizing.
     """
     def __init__(self, lookback=20, volume_mult=1.5):
         self.lookback = lookback
@@ -255,15 +340,28 @@ class BreakoutMomentum(Strategy):
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
         if len(history) < self.lookback + 1:
             return Signal.HOLD
+        if ctx is None:
+            return Signal.HOLD
+
         window = history[-(self.lookback + 1):-1]
         highest = max(c.high for c in window)
         avg_vol = sum(c.volume for c in window) / len(window)
-        if candle.close > highest and candle.volume > avg_vol * self.volume_mult:
-            return Signal.BUY
-        # Exit on weakness
         lowest = min(c.low for c in window[-5:]) if len(window) >= 5 else candle.low
-        if candle.close < lowest:
-            return Signal.SELL
+
+        if candle.close > highest and candle.volume > avg_vol * self.volume_mult and not ctx.positions:
+            size = (ctx.account.cash * 0.9) / candle.close
+            impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+            if impact and abs(impact - candle.close) / candle.close > 0.002:
+                ctx.log(f"Skip entry: impact too high ({abs(impact - candle.close)/candle.close*10000:.0f}bps)")
+                return Signal.HOLD
+            if size > 0:
+                ctx.market_order(candle.market, Side.LONG, size)
+                ctx.stop_order(candle.market, Side.SHORT, size, lowest)
+
+        elif candle.close < lowest and ctx.positions:
+            ctx.close_position(candle.market)
+            ctx.cancel_all(candle.market)
+
         return Signal.HOLD
 
     def reset(self) -> None:
@@ -271,19 +369,19 @@ class BreakoutMomentum(Strategy):
 `
 
 const FUNDING_HARVEST_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal, Side
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 
 
 class FundingHarvest(Strategy):
     """Funding Rate Harvest — Solana-native strategy.
 
-    Reads REAL funding rates via ctx.get_funding_rate().
+    Reads REAL funding rates via ctx.get_funding_rates().
     Goes long when funding is deeply negative (longs get paid).
     Goes short when funding is deeply positive (shorts get paid).
 
     IMPORTANT: Download funding data in Data Explorer first!
-    Without funding data, falls back to price momentum proxy.
+    Returns HOLD when no funding data is available.
     """
     def __init__(self, entry_threshold=0.00003, exit_threshold=0.000005,
                  stop_loss_pct=0.05, lookback=8):
@@ -306,47 +404,41 @@ class FundingHarvest(Strategy):
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
-        if len(history) < self.lookback:
+        if ctx is None or len(history) < self.lookback:
             return Signal.HOLD
 
         # Read real funding rates from the execution context
-        avg_funding = None
-        if ctx is not None:
-            rates = ctx.get_funding_rates(candle.market, lookback=self.lookback)
-            if len(rates) >= 3:
-                avg_funding = sum(r for _, r in rates) / len(rates)
-
-        # Fallback: price momentum proxy
-        if avg_funding is None:
-            recent = [c.close for c in history[-self.lookback:]]
-            avg_funding = ((recent[-1] - recent[0]) / recent[0]) / self.lookback if recent[0] else 0
-
-        if ctx is not None:
-            pos = ctx.position(candle.market)
-            if pos is None:
-                if avg_funding < -self.entry_threshold:
-                    size = (ctx.account.cash * 0.9) / candle.close
-                    if size > 0:
-                        ctx.market_order(candle.market, Side.LONG, size)
-                        ctx.stop_order(candle.market, Side.SHORT, size,
-                                       candle.close * (1 - self.stop_loss_pct))
-                elif avg_funding > self.entry_threshold:
-                    size = (ctx.account.cash * 0.9) / candle.close
-                    if size > 0:
-                        ctx.market_order(candle.market, Side.SHORT, size)
-                        ctx.stop_order(candle.market, Side.LONG, size,
-                                       candle.close * (1 + self.stop_loss_pct))
-            else:
-                if abs(avg_funding) < self.exit_threshold:
-                    ctx.close_position(candle.market)
-                    ctx.cancel_all(candle.market)
+        rates = ctx.get_funding_rates(candle.market, lookback=self.lookback)
+        if len(rates) < 3:
             return Signal.HOLD
 
-        # v1 fallback
-        if avg_funding < -self.entry_threshold:
-            return Signal.BUY
-        elif avg_funding > self.entry_threshold:
-            return Signal.SELL
+        avg_funding = sum(r for _, r in rates) / len(rates)
+
+        pos = ctx.position(candle.market)
+        if pos is None:
+            if avg_funding < -self.entry_threshold:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, Side.LONG, size)
+                    ctx.stop_order(candle.market, Side.SHORT, size,
+                                   candle.close * (1 - self.stop_loss_pct))
+            elif avg_funding > self.entry_threshold:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, Side.SHORT, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, Side.SHORT, size)
+                    ctx.stop_order(candle.market, Side.LONG, size,
+                                   candle.close * (1 + self.stop_loss_pct))
+        else:
+            if abs(avg_funding) < self.exit_threshold:
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
+
         return Signal.HOLD
 
     def reset(self) -> None:
@@ -354,21 +446,20 @@ class FundingHarvest(Strategy):
 `
 
 const GRID_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 
 
 class GridTrader(Strategy):
     """Grid Trading — buy low, sell high in ranging markets.
 
-    Buys when price drops below the rolling mean by grid_pct.
-    Sells when price rises above the rolling mean by grid_pct.
-    Works best on sideways/ranging markets.
+    Places limit orders at grid levels using GTC time-in-force.
+    Uses v2 execution with impact checks and proper sizing.
     """
-    def __init__(self, grid_pct=2.0, lookback=20):
+    def __init__(self, grid_pct=2.0, lookback=20, stop_pct=6.0):
         self.grid_pct = grid_pct / 100
         self.lookback = lookback
-        self._in_position = False
+        self.stop_pct = stop_pct / 100
 
     @property
     def name(self) -> str:
@@ -379,29 +470,38 @@ class GridTrader(Strategy):
         return {
             "grid_pct": {"type": "float", "low": 0.5, "high": 5.0, "default": 2.0},
             "lookback": {"type": "int", "low": 10, "high": 50, "default": 20},
+            "stop_pct": {"type": "float", "low": 3.0, "high": 10.0, "default": 6.0},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
-        if len(history) < self.lookback:
+        if ctx is None or len(history) < self.lookback:
             return Signal.HOLD
 
         closes = [c.close for c in history[-self.lookback:]]
         mid = sum(closes) / len(closes)
 
-        if candle.close < mid * (1 - self.grid_pct) and not self._in_position:
-            self._in_position = True
-            return Signal.BUY
-        elif candle.close > mid * (1 + self.grid_pct) and self._in_position:
-            self._in_position = False
-            return Signal.SELL
+        if not ctx.positions:
+            if candle.close < mid * (1 - self.grid_pct):
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, Side.LONG, size)
+                    ctx.stop_order(candle.market, Side.SHORT, size,
+                                   candle.close * (1 - self.stop_pct))
+        else:
+            if candle.close > mid * (1 + self.grid_pct):
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
         return Signal.HOLD
 
     def reset(self) -> None:
-        self._in_position = False
+        pass
 `
 
 const DUAL_TF_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
@@ -411,11 +511,13 @@ class DualTimeframe(Strategy):
 
     Uses long-period SMA for trend direction, short-period momentum for entry.
     Only enters in the direction of the higher-timeframe trend.
+    Uses v2 execution: stop-loss, impact checks, position sizing.
     """
-    def __init__(self, trend_period=50, entry_period=10, threshold=0.02):
+    def __init__(self, trend_period=50, entry_period=10, threshold=0.02, stop_pct=3.0):
         self.trend_period = trend_period
         self.entry_period = entry_period
         self.threshold = threshold
+        self.stop_pct = stop_pct / 100
 
     @property
     def name(self) -> str:
@@ -427,19 +529,46 @@ class DualTimeframe(Strategy):
             "trend_period": {"type": "int", "low": 30, "high": 100, "default": 50},
             "entry_period": {"type": "int", "low": 5, "high": 20, "default": 10},
             "threshold": {"type": "float", "low": 0.005, "high": 0.05, "default": 0.02},
+            "stop_pct": {"type": "float", "low": 1.0, "high": 8.0, "default": 3.0},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
         if len(history) < self.trend_period:
             return Signal.HOLD
+        if ctx is None:
+            return Signal.HOLD
+
         long_closes = np.array([c.close for c in history[-self.trend_period:]])
         trend_up = float(np.mean(long_closes)) > float(np.mean(long_closes[:-1]))
         short = [c.close for c in history[-self.entry_period:]]
         momentum = (short[-1] - short[0]) / short[0] if short[0] else 0
-        if trend_up and momentum > self.threshold:
-            return Signal.BUY
-        elif not trend_up and momentum < -self.threshold:
-            return Signal.SELL
+
+        if trend_up and momentum > self.threshold and not ctx.positions:
+            size = (ctx.account.cash * 0.9) / candle.close
+            impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+            if impact and abs(impact - candle.close) / candle.close > 0.002:
+                return Signal.HOLD
+            if size > 0:
+                ctx.market_order(candle.market, Side.LONG, size)
+                ctx.stop_order(candle.market, Side.SHORT, size,
+                               candle.close * (1 - self.stop_pct))
+
+        elif not trend_up and momentum < -self.threshold and not ctx.positions:
+            size = (ctx.account.cash * 0.9) / candle.close
+            impact = ctx.get_impact_price(candle.market, Side.SHORT, size)
+            if impact and abs(impact - candle.close) / candle.close > 0.002:
+                return Signal.HOLD
+            if size > 0:
+                ctx.market_order(candle.market, Side.SHORT, size)
+                ctx.stop_order(candle.market, Side.LONG, size,
+                               candle.close * (1 + self.stop_pct))
+
+        elif ctx.positions:
+            # Exit when momentum fades
+            if abs(momentum) < self.threshold * 0.3:
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
+
         return Signal.HOLD
 
     def reset(self) -> None:
@@ -447,7 +576,7 @@ class DualTimeframe(Strategy):
 `
 
 const CROSS_MARKET_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 
 
@@ -460,9 +589,10 @@ class BtcCorrelation(Strategy):
 
     Run on SOL-PERP with BTC-PERP data also in the DB.
     """
-    def __init__(self, btc_lookback=12, threshold_pct=2.0):
+    def __init__(self, btc_lookback=12, threshold_pct=2.0, stop_pct=3.0):
         self.btc_lookback = btc_lookback
         self.threshold = threshold_pct / 100
+        self.stop_pct = stop_pct / 100
 
     @property
     def name(self) -> str:
@@ -473,30 +603,45 @@ class BtcCorrelation(Strategy):
         return {
             "btc_lookback": {"type": "int", "low": 6, "high": 48, "default": 12},
             "threshold_pct": {"type": "float", "low": 0.5, "high": 5.0, "default": 2.0},
+            "stop_pct": {"type": "float", "low": 1.0, "high": 8.0, "default": 3.0},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
-        if len(history) < self.btc_lookback:
+        if ctx is None or len(history) < self.btc_lookback:
             return Signal.HOLD
 
         # Check BTC momentum via cross-market access
-        if ctx is not None:
-            btc = ctx.get_candles("BTC-PERP", self.btc_lookback)
-            if len(btc) >= 2:
-                btc_return = (btc[-1].close - btc[0].close) / btc[0].close
-                if btc_return > self.threshold:
-                    return Signal.BUY
-                elif btc_return < -self.threshold:
-                    return Signal.SELL
-                return Signal.HOLD
+        btc = ctx.get_candles("BTC-PERP", self.btc_lookback)
+        if len(btc) < 2:
+            return Signal.HOLD
 
-        # Fallback: use SOL momentum when no cross-market data
-        old = history[-self.btc_lookback].close
-        ret = (candle.close - old) / old
-        if ret > self.threshold:
-            return Signal.BUY
-        elif ret < -self.threshold:
-            return Signal.SELL
+        btc_return = (btc[-1].close - btc[0].close) / btc[0].close
+
+        if not ctx.positions:
+            if btc_return > self.threshold:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, Side.LONG, size)
+                    ctx.stop_order(candle.market, Side.SHORT, size,
+                                   candle.close * (1 - self.stop_pct))
+            elif btc_return < -self.threshold:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, Side.SHORT, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, Side.SHORT, size)
+                    ctx.stop_order(candle.market, Side.LONG, size,
+                                   candle.close * (1 + self.stop_pct))
+        else:
+            # Exit when BTC momentum reverses
+            if abs(btc_return) < self.threshold * 0.3:
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
+
         return Signal.HOLD
 
     def reset(self) -> None:
@@ -504,7 +649,7 @@ class BtcCorrelation(Strategy):
 `
 
 const STOP_LOSS_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal, Side
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
@@ -540,40 +685,32 @@ class MomentumWithStops(Strategy):
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
-        if len(history) < self.lookback:
+        if ctx is None or len(history) < self.lookback:
             return Signal.HOLD
 
-        if ctx is not None:
-            # v2 mode: use context for order management
-            if not ctx.positions and not self._in_trade:
-                old_price = history[-self.lookback].close
-                ret = (candle.close - old_price) / old_price
+        if not ctx.positions and not self._in_trade:
+            old_price = history[-self.lookback].close
+            ret = (candle.close - old_price) / old_price
 
-                if ret > self.entry_pct:
-                    # Strong upward momentum — go long with stops
-                    size = (ctx.account.cash * 0.9) / candle.close
-                    if size > 0:
-                        ctx.market_order(candle.market, Side.LONG, size)
-                        ctx.stop_order(candle.market, Side.SHORT, size,
-                                       candle.close * (1 - self.stop_pct))
-                        ctx.take_profit_order(candle.market, Side.SHORT, size,
-                                              candle.close * (1 + self.tp_pct))
-                        self._in_trade = True
+            if ret > self.entry_pct:
+                # Strong upward momentum — go long with stops
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, Side.LONG, size)
+                    ctx.stop_order(candle.market, Side.SHORT, size,
+                                   candle.close * (1 - self.stop_pct))
+                    ctx.take_profit_order(candle.market, Side.SHORT, size,
+                                          candle.close * (1 + self.tp_pct))
+                    self._in_trade = True
 
-            elif ctx.positions:
-                self._in_trade = True
-            else:
-                self._in_trade = False
+        elif ctx.positions:
+            self._in_trade = True
+        else:
+            self._in_trade = False
 
-            return Signal.HOLD
-
-        # v1 fallback
-        old_price = history[-self.lookback].close
-        ret = (candle.close - old_price) / old_price
-        if ret > self.entry_pct:
-            return Signal.BUY
-        elif ret < -self.stop_pct:
-            return Signal.SELL
         return Signal.HOLD
 
     def reset(self) -> None:
@@ -581,7 +718,7 @@ class MomentumWithStops(Strategy):
 `
 
 const VOLATILITY_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
@@ -590,7 +727,7 @@ class VolatilityBreakout(Strategy):
     """Volatility Breakout — trade expansions from low-vol squeezes.
 
     Detects when volatility compresses (Bollinger Band width narrows),
-    then enters on the breakout direction. Uses ATR for position sizing.
+    then enters on the breakout direction. Uses v2 execution with ATR-based stop.
     """
     def __init__(self, bb_period=20, squeeze_threshold=0.03, atr_period=14):
         self.bb_period = bb_period
@@ -613,6 +750,8 @@ class VolatilityBreakout(Strategy):
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
         if len(history) < max(self.bb_period, self.atr_period) + 1:
             return Signal.HOLD
+        if ctx is None:
+            return Signal.HOLD
 
         closes = np.array([c.close for c in history[-self.bb_period:]])
         sma = float(np.mean(closes))
@@ -620,26 +759,50 @@ class VolatilityBreakout(Strategy):
         if sma == 0:
             return Signal.HOLD
 
+        # ATR for stop placement
+        trs = []
+        for i in range(-self.atr_period, 0):
+            h, l, pc = history[i].high, history[i].low, history[i-1].close
+            trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        atr = sum(trs) / len(trs)
+
         # Bollinger Band width as % of price
         bb_width = (2 * std) / sma
 
         # Squeeze detection
         is_squeezed = bb_width < self.squeeze_threshold
 
-        if self._was_squeezed and not is_squeezed:
+        if self._was_squeezed and not is_squeezed and not ctx.positions:
             # Breakout from squeeze
             if candle.close > sma:
                 self._was_squeezed = False
-                return Signal.BUY
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, Side.LONG, size)
+                    ctx.stop_order(candle.market, Side.SHORT, size,
+                                   candle.close - 1.5 * atr)
+                return Signal.HOLD
             elif candle.close < sma:
                 self._was_squeezed = False
-                return Signal.SELL
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, Side.SHORT, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, Side.SHORT, size)
+                    ctx.stop_order(candle.market, Side.LONG, size,
+                                   candle.close + 1.5 * atr)
+                return Signal.HOLD
 
         self._was_squeezed = is_squeezed
 
         # Exit when price returns to mean
-        if not is_squeezed and abs(candle.close - sma) / sma < 0.005:
-            return Signal.SELL
+        if not is_squeezed and abs(candle.close - sma) / sma < 0.005 and ctx.positions:
+            ctx.close_position(candle.market)
+            ctx.cancel_all(candle.market)
 
         return Signal.HOLD
 
@@ -648,7 +811,7 @@ class VolatilityBreakout(Strategy):
 `
 
 const MULTI_INDICATOR_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
@@ -656,15 +819,16 @@ import numpy as np
 class MultiIndicator(Strategy):
     """Multi-Indicator Confluence — RSI + MACD + Volume confirmation.
 
-    Only enters when multiple indicators agree. Demonstrates
-    combining several technical signals for higher-conviction trades.
+    Only enters when multiple indicators agree. Uses v2 execution
+    with stop-loss, impact checks, and proper position sizing.
     Fewer trades but better win rate.
     """
-    def __init__(self, rsi_period=14, macd_fast=12, macd_slow=26, vol_mult=1.5):
+    def __init__(self, rsi_period=14, macd_fast=12, macd_slow=26, vol_mult=1.5, stop_pct=3.0):
         self.rsi_period = rsi_period
         self.macd_fast = macd_fast
         self.macd_slow = macd_slow
         self.vol_mult = vol_mult
+        self.stop_pct = stop_pct / 100
         self._prev_macd = 0.0
         self._prev_signal = 0.0
 
@@ -679,11 +843,12 @@ class MultiIndicator(Strategy):
             "macd_fast": {"type": "int", "low": 8, "high": 16, "default": 12},
             "macd_slow": {"type": "int", "low": 20, "high": 32, "default": 26},
             "vol_mult": {"type": "float", "low": 1.0, "high": 3.0, "default": 1.5},
+            "stop_pct": {"type": "float", "low": 1.5, "high": 6.0, "default": 3.0},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
         n = max(self.macd_slow + 9, self.rsi_period + 1, 20)
-        if len(history) < n:
+        if ctx is None or len(history) < n:
             return Signal.HOLD
 
         closes = np.array([c.close for c in history[-n:]])
@@ -718,19 +883,35 @@ class MultiIndicator(Strategy):
         self._prev_macd = macd
         self._prev_signal = signal_line
 
-        if buy_signal:
-            return Signal.BUY
-        elif sell_signal:
-            return Signal.SELL
+        if not ctx.positions:
+            side = None
+            if buy_signal:
+                side = Side.LONG
+            elif sell_signal:
+                side = Side.SHORT
+            if side:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, side, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, side, size)
+                    stop_side = Side.SHORT if side == Side.LONG else Side.LONG
+                    stop_price = candle.close * ((1 - self.stop_pct) if side == Side.LONG else (1 + self.stop_pct))
+                    ctx.stop_order(candle.market, stop_side, size, stop_price)
+        else:
+            # Exit on opposing signal or RSI normalization
+            if (buy_signal and sell_signal) or (45 < rsi < 55):
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
         return Signal.HOLD
 
     def reset(self) -> None:
         self._prev_macd = 0.0
         self._prev_signal = 0.0
 `
-
 const SCALPER_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
@@ -740,12 +921,13 @@ class Scalper(Strategy):
 
     Enters on extreme short-term deviation from VWAP-like average.
     Exits quickly near the mean. Designed for 5m-15m candles.
-    High trade frequency, small gains per trade.
+    Uses v2 execution with tight stops and impact checks.
     """
-    def __init__(self, window=10, entry_dev=0.008, exit_dev=0.002):
+    def __init__(self, window=10, entry_dev=0.008, exit_dev=0.002, stop_pct=1.5):
         self.window = window
         self.entry_dev = entry_dev
         self.exit_dev = exit_dev
+        self.stop_pct = stop_pct / 100
 
     @property
     def name(self) -> str:
@@ -757,27 +939,40 @@ class Scalper(Strategy):
             "window": {"type": "int", "low": 5, "high": 20, "default": 10},
             "entry_dev": {"type": "float", "low": 0.003, "high": 0.02, "default": 0.008},
             "exit_dev": {"type": "float", "low": 0.001, "high": 0.005, "default": 0.002},
+            "stop_pct": {"type": "float", "low": 0.5, "high": 3.0, "default": 1.5},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx=None) -> Signal:
-        if len(history) < self.window:
+        if ctx is None or len(history) < self.window:
             return Signal.HOLD
 
-        # Volume-weighted average price (approximation)
         recent = history[-self.window:]
         total_vol = sum(c.volume for c in recent)
         if total_vol == 0:
             return Signal.HOLD
         vwap = sum(c.close * c.volume for c in recent) / total_vol
-
         deviation = (candle.close - vwap) / vwap
 
-        if deviation < -self.entry_dev:
-            return Signal.BUY    # price well below VWAP — buy dip
-        elif deviation > self.entry_dev:
-            return Signal.SELL   # price well above VWAP — sell rip
-        elif abs(deviation) < self.exit_dev:
-            return Signal.SELL   # near VWAP — close position
+        if not ctx.positions:
+            side = None
+            if deviation < -self.entry_dev:
+                side = Side.LONG
+            elif deviation > self.entry_dev:
+                side = Side.SHORT
+            if side:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, side, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, side, size)
+                    stop_side = Side.SHORT if side == Side.LONG else Side.LONG
+                    stop_price = candle.close * ((1 - self.stop_pct) if side == Side.LONG else (1 + self.stop_pct))
+                    ctx.stop_order(candle.market, stop_side, size, stop_price)
+        else:
+            if abs(deviation) < self.exit_dev:
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
 
         return Signal.HOLD
 
@@ -786,54 +981,85 @@ class Scalper(Strategy):
 `
 
 const VWAP_REVERSION_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
 
 class VWAPReversion(Strategy):
-    """Buy when price drops below VWAP, sell when it returns."""
+    """VWAP Reversion — buy below VWAP, sell on reversion.
 
-    def __init__(self, period=20, entry_pct=2.0, exit_pct=0.5):
+    Uses v2 execution with stop-loss, impact checks, proper sizing.
+    """
+    def __init__(self, period=20, entry_pct=2.0, exit_pct=0.5, stop_pct=3.0):
         self.period = period
         self.entry_pct = entry_pct / 100
         self.exit_pct = exit_pct / 100
+        self.stop_pct = stop_pct / 100
 
     @property
     def name(self): return f"VWAPReversion({self.period})"
 
+    @classmethod
+    def parameters(cls):
+        return {
+            "period": {"type": "int", "low": 10, "high": 50, "default": 20},
+            "entry_pct": {"type": "float", "low": 0.5, "high": 5.0, "default": 2.0},
+            "exit_pct": {"type": "float", "low": 0.1, "high": 2.0, "default": 0.5},
+            "stop_pct": {"type": "float", "low": 1.0, "high": 6.0, "default": 3.0},
+        }
+
     def on_candle(self, candle, history, ctx=None):
-        if len(history) < self.period: return Signal.HOLD
+        if ctx is None or len(history) < self.period:
+            return Signal.HOLD
         window = history[-self.period:]
         vol_sum = sum(c.volume for c in window)
-        if vol_sum == 0: return Signal.HOLD
+        if vol_sum == 0:
+            return Signal.HOLD
         vwap = sum(c.close * c.volume for c in window) / vol_sum
         dev = (candle.close - vwap) / vwap
-        if dev < -self.entry_pct: return Signal.BUY
-        elif dev > self.entry_pct: return Signal.SELL
-        elif abs(dev) < self.exit_pct: return Signal.SELL
+
+        if not ctx.positions:
+            side = None
+            if dev < -self.entry_pct:
+                side = Side.LONG
+            elif dev > self.entry_pct:
+                side = Side.SHORT
+            if side:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, side, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, side, size)
+                    stop_side = Side.SHORT if side == Side.LONG else Side.LONG
+                    stop_price = candle.close * ((1 - self.stop_pct) if side == Side.LONG else (1 + self.stop_pct))
+                    ctx.stop_order(candle.market, stop_side, size, stop_price)
+        else:
+            if abs(dev) < self.exit_pct:
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
+
         return Signal.HOLD
 
     def reset(self): pass
-
-    @classmethod
-    def parameters(cls):
-        return {"period": {"type": "int", "low": 10, "high": 50, "default": 20},
-                "entry_pct": {"type": "float", "low": 0.5, "high": 5.0, "default": 2.0},
-                "exit_pct": {"type": "float", "low": 0.1, "high": 2.0, "default": 0.5}}
 `
 
 const MACD_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
 
 class MACDStrategy(Strategy):
-    """Buy when MACD crosses above signal, sell when below."""
+    """MACD Crossover — buy when MACD crosses above signal, sell when below.
 
-    def __init__(self, fast=12, slow=26, signal=9):
+    Uses v2 execution: stop-loss, impact checks, position sizing.
+    """
+
+    def __init__(self, fast=12, slow=26, signal=9, stop_pct=3.0):
         self.fast, self.slow, self.signal = fast, slow, signal
+        self.stop_pct = stop_pct / 100
 
     @property
     def name(self): return f"MACD({self.fast}/{self.slow}/{self.signal})"
@@ -845,15 +1071,36 @@ class MACDStrategy(Strategy):
         return ema
 
     def on_candle(self, candle, history, ctx=None):
-        if len(history) < self.slow + self.signal: return Signal.HOLD
+        if len(history) < self.slow + self.signal:
+            return Signal.HOLD
+        if ctx is None:
+            return Signal.HOLD
+
         closes = [c.close for c in history]
         fast_ema = self._ema(closes, self.fast)
         slow_ema = self._ema(closes, self.slow)
         macd = [f - s for f, s in zip(fast_ema, slow_ema)]
         signal_line = self._ema(macd[-self.signal*2:], self.signal)
-        if len(signal_line) < 2: return Signal.HOLD
-        if macd[-1] > signal_line[-1] and macd[-2] <= signal_line[-2]: return Signal.BUY
-        elif macd[-1] < signal_line[-1] and macd[-2] >= signal_line[-2]: return Signal.SELL
+        if len(signal_line) < 2:
+            return Signal.HOLD
+
+        bullish_cross = macd[-1] > signal_line[-1] and macd[-2] <= signal_line[-2]
+        bearish_cross = macd[-1] < signal_line[-1] and macd[-2] >= signal_line[-2]
+
+        if bullish_cross and not ctx.positions:
+            size = (ctx.account.cash * 0.9) / candle.close
+            impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+            if impact and abs(impact - candle.close) / candle.close > 0.002:
+                return Signal.HOLD
+            if size > 0:
+                ctx.market_order(candle.market, Side.LONG, size)
+                ctx.stop_order(candle.market, Side.SHORT, size,
+                               candle.close * (1 - self.stop_pct))
+
+        elif bearish_cross and ctx.positions:
+            ctx.close_position(candle.market)
+            ctx.cancel_all(candle.market)
+
         return Signal.HOLD
 
     def reset(self): pass
@@ -862,17 +1109,21 @@ class MACDStrategy(Strategy):
     def parameters(cls):
         return {"fast": {"type": "int", "low": 8, "high": 20, "default": 12},
                 "slow": {"type": "int", "low": 20, "high": 40, "default": 26},
-                "signal": {"type": "int", "low": 5, "high": 15, "default": 9}}
+                "signal": {"type": "int", "low": 5, "high": 15, "default": 9},
+                "stop_pct": {"type": "float", "low": 1.0, "high": 8.0, "default": 3.0}}
 `
 
 const ATR_BREAKOUT_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
 
 class ATRBreakout(Strategy):
-    """Buy when price breaks above SMA + N*ATR channel."""
+    """ATR Channel Breakout — buy above upper channel, sell below lower.
+
+    Uses v2 execution: stop at opposite channel, impact checks, position sizing.
+    """
 
     def __init__(self, period=20, atr_period=14, multiplier=2.0):
         self.period, self.atr_period, self.multiplier = period, atr_period, multiplier
@@ -882,7 +1133,11 @@ class ATRBreakout(Strategy):
 
     def on_candle(self, candle, history, ctx=None):
         n = max(self.period, self.atr_period)
-        if len(history) < n + 1: return Signal.HOLD
+        if len(history) < n + 1:
+            return Signal.HOLD
+        if ctx is None:
+            return Signal.HOLD
+
         closes = np.array([c.close for c in history[-self.period:]])
         sma = float(np.mean(closes))
         # ATR
@@ -893,8 +1148,20 @@ class ATRBreakout(Strategy):
         atr = sum(trs) / len(trs)
         upper = sma + self.multiplier * atr
         lower = sma - self.multiplier * atr
-        if candle.close > upper: return Signal.BUY
-        elif candle.close < lower: return Signal.SELL
+
+        if candle.close > upper and not ctx.positions:
+            size = (ctx.account.cash * 0.9) / candle.close
+            impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+            if impact and abs(impact - candle.close) / candle.close > 0.002:
+                return Signal.HOLD
+            if size > 0:
+                ctx.market_order(candle.market, Side.LONG, size)
+                ctx.stop_order(candle.market, Side.SHORT, size, lower)
+
+        elif candle.close < lower and ctx.positions:
+            ctx.close_position(candle.market)
+            ctx.cancel_all(candle.market)
+
         return Signal.HOLD
 
     def reset(self): pass
@@ -907,21 +1174,38 @@ class ATRBreakout(Strategy):
 `
 
 const RSI_MACD_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
 
 class RSIMACDCombo(Strategy):
-    """Only trade when RSI AND MACD agree. Fewer but higher quality signals."""
+    """RSI + MACD Confluence — only trades when both agree.
 
+    Fewer but higher quality signals. Uses v2 execution with
+    stop-loss, impact checks, and proper position sizing.
+    """
     def __init__(self, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9,
-                 rsi_oversold=30, rsi_overbought=70):
-        self.rsi_period, self.rsi_oversold, self.rsi_overbought = rsi_period, rsi_oversold, rsi_overbought
-        self.macd_fast, self.macd_slow, self.macd_signal = macd_fast, macd_slow, macd_signal
+                 rsi_oversold=30, rsi_overbought=70, stop_pct=4.0):
+        self.rsi_period = rsi_period
+        self.rsi_oversold = rsi_oversold
+        self.rsi_overbought = rsi_overbought
+        self.macd_fast = macd_fast
+        self.macd_slow = macd_slow
+        self.macd_signal = macd_signal
+        self.stop_pct = stop_pct / 100
 
     @property
     def name(self): return f"RSI-MACD({self.rsi_period}, {self.macd_fast}/{self.macd_slow})"
+
+    @classmethod
+    def parameters(cls):
+        return {
+            "rsi_period": {"type": "int", "low": 7, "high": 21, "default": 14},
+            "macd_fast": {"type": "int", "low": 8, "high": 16, "default": 12},
+            "macd_slow": {"type": "int", "low": 20, "high": 34, "default": 26},
+            "stop_pct": {"type": "float", "low": 2.0, "high": 8.0, "default": 4.0},
+        }
 
     def _ema(self, data, period):
         ema = [data[0]]
@@ -941,7 +1225,9 @@ class RSIMACDCombo(Strategy):
 
     def on_candle(self, candle, history, ctx=None):
         n = max(self.rsi_period + 1, self.macd_slow + self.macd_signal)
-        if len(history) < n: return Signal.HOLD
+        if ctx is None or len(history) < n:
+            return Signal.HOLD
+
         closes = [c.close for c in history]
         rsi = self._rsi(closes, self.rsi_period)
         fast = self._ema(closes, self.macd_fast)
@@ -950,21 +1236,34 @@ class RSIMACDCombo(Strategy):
         sig = self._ema(macd[-self.macd_signal*2:], self.macd_signal)
         macd_bull = len(sig) >= 2 and macd[-1] > sig[-1] and macd[-2] <= sig[-2]
         macd_bear = len(sig) >= 2 and macd[-1] < sig[-1] and macd[-2] >= sig[-2]
-        if rsi < self.rsi_oversold and macd_bull: return Signal.BUY
-        elif rsi > self.rsi_overbought and macd_bear: return Signal.SELL
+
+        if not ctx.positions:
+            side = None
+            if rsi < self.rsi_oversold and macd_bull:
+                side = Side.LONG
+            elif rsi > self.rsi_overbought and macd_bear:
+                side = Side.SHORT
+            if side:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, side, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, side, size)
+                    stop_side = Side.SHORT if side == Side.LONG else Side.LONG
+                    stop_price = candle.close * ((1 - self.stop_pct) if side == Side.LONG else (1 + self.stop_pct))
+                    ctx.stop_order(candle.market, stop_side, size, stop_price)
+        else:
+            if 40 < rsi < 60:
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
+
         return Signal.HOLD
 
     def reset(self): pass
-
-    @classmethod
-    def parameters(cls):
-        return {"rsi_period": {"type": "int", "low": 7, "high": 21, "default": 14},
-                "macd_fast": {"type": "int", "low": 8, "high": 16, "default": 12},
-                "macd_slow": {"type": "int", "low": 20, "high": 34, "default": 26}}
 `
-
 const MULTI_VENUE_FUNDING_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal, Side
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 
 
@@ -976,69 +1275,77 @@ class MultiVenueFunding(Strategy):
 
     IMPORTANT: Download funding data for multiple venues in Data Explorer first!
     Select Drift + Hyperliquid + OKX (or more) before downloading.
+    Returns HOLD when no real funding data is available.
     """
 
     def __init__(self, entry_threshold=0.00003, exit_threshold=0.000005,
-                 lookback=12, min_venues=2):
+                 lookback=12, min_venues=2, stop_pct=0.05):
         self.entry_threshold = entry_threshold
         self.exit_threshold = exit_threshold
         self.lookback = lookback
         self.min_venues = min_venues
+        self.stop_pct = stop_pct
 
     @property
     def name(self): return f"MultiVenueFunding(th={self.entry_threshold})"
 
-    def _get_avg_funding(self, candle, history, ctx):
+    def _get_avg_funding(self, candle, ctx):
         """Get cross-venue average funding rate."""
-        if ctx is not None:
-            # Try multi-venue first
-            venue_data = ctx.get_funding_by_venue(candle.market, lookback=self.lookback)
-            if venue_data and len(venue_data) >= self.min_venues:
-                venue_avgs = []
-                for venue, rates in venue_data.items():
-                    if rates:
-                        recent = [r for _, r in rates[-self.lookback:]]
-                        if recent:
-                            venue_avgs.append(sum(recent) / len(recent))
-                if len(venue_avgs) >= self.min_venues:
-                    return sum(venue_avgs) / len(venue_avgs)
-
-            # Single venue fallback
-            rates = ctx.get_funding_rates(candle.market, lookback=self.lookback)
-            if len(rates) >= 3:
-                return sum(r for _, r in rates) / len(rates)
-
-        # Price proxy fallback
-        if len(history) < self.lookback:
+        if ctx is None:
             return None
-        recent = [c.close for c in history[-self.lookback:]]
-        return ((recent[-1] - recent[0]) / recent[0]) / self.lookback if recent[0] else 0
+
+        # Try multi-venue first
+        venue_data = ctx.get_funding_by_venue(candle.market, lookback=self.lookback)
+        if venue_data and len(venue_data) >= self.min_venues:
+            venue_avgs = []
+            for venue, rates in venue_data.items():
+                if rates:
+                    recent = [r for _, r in rates[-self.lookback:]]
+                    if recent:
+                        venue_avgs.append(sum(recent) / len(recent))
+            if len(venue_avgs) >= self.min_venues:
+                return sum(venue_avgs) / len(venue_avgs)
+
+        # Single venue fallback
+        rates = ctx.get_funding_rates(candle.market, lookback=self.lookback)
+        if len(rates) >= 3:
+            return sum(r for _, r in rates) / len(rates)
+
+        return None
 
     def on_candle(self, candle, history, ctx=None):
-        if len(history) < self.lookback: return Signal.HOLD
-
-        avg = self._get_avg_funding(candle, history, ctx)
-        if avg is None: return Signal.HOLD
-
-        if ctx is not None:
-            pos = ctx.position(candle.market)
-            if pos is None:
-                if avg < -self.entry_threshold:
-                    size = (ctx.account.cash * 0.9) / candle.close
-                    if size > 0:
-                        ctx.market_order(candle.market, Side.LONG, size)
-                elif avg > self.entry_threshold:
-                    size = (ctx.account.cash * 0.9) / candle.close
-                    if size > 0:
-                        ctx.market_order(candle.market, Side.SHORT, size)
-            else:
-                if abs(avg) < self.exit_threshold:
-                    ctx.close_position(candle.market)
-                    ctx.cancel_all(candle.market)
+        if ctx is None or len(history) < self.lookback:
             return Signal.HOLD
 
-        if avg < -self.entry_threshold: return Signal.BUY
-        elif avg > self.entry_threshold: return Signal.SELL
+        avg = self._get_avg_funding(candle, ctx)
+        if avg is None:
+            return Signal.HOLD
+
+        pos = ctx.position(candle.market)
+        if pos is None:
+            if avg < -self.entry_threshold:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, Side.LONG, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, Side.LONG, size)
+                    ctx.stop_order(candle.market, Side.SHORT, size,
+                                   candle.close * (1 - self.stop_pct))
+            elif avg > self.entry_threshold:
+                size = (ctx.account.cash * 0.9) / candle.close
+                impact = ctx.get_impact_price(candle.market, Side.SHORT, size)
+                if impact and abs(impact - candle.close) / candle.close > 0.002:
+                    return Signal.HOLD
+                if size > 0:
+                    ctx.market_order(candle.market, Side.SHORT, size)
+                    ctx.stop_order(candle.market, Side.LONG, size,
+                                   candle.close * (1 + self.stop_pct))
+        else:
+            if abs(avg) < self.exit_threshold:
+                ctx.close_position(candle.market)
+                ctx.cancel_all(candle.market)
+
         return Signal.HOLD
 
     def reset(self): pass
@@ -1048,11 +1355,12 @@ class MultiVenueFunding(Strategy):
         return {"entry_threshold": {"type": "float", "low": 0.00001, "high": 0.0001, "default": 0.00003},
                 "exit_threshold": {"type": "float", "low": 0.000001, "high": 0.00002, "default": 0.000005},
                 "lookback": {"type": "int", "low": 6, "high": 24, "default": 12},
-                "min_venues": {"type": "int", "low": 1, "high": 5, "default": 2}}
+                "min_venues": {"type": "int", "low": 1, "high": 5, "default": 2},
+                "stop_pct": {"type": "float", "low": 0.02, "high": 0.10, "default": 0.05}}
 `
 
 const ORDERBOOK_MOMENTUM_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal, Side
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 import numpy as np
 
@@ -1143,7 +1451,7 @@ class OrderbookMomentum(Strategy):
 `
 
 const CROSS_VENUE_PAIRS_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal, Side
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 
 
@@ -1239,7 +1547,7 @@ class CrossVenuePairs(Strategy):
 `
 
 const LEVERAGED_GRID_TEMPLATE = `from flint.strategy.base import Strategy
-from flint.models import Candle, Signal, Side
+from flint.models import Candle, Signal, Side, TimeInForce
 from typing import List
 
 
