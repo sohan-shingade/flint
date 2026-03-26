@@ -9,6 +9,9 @@ import abc
 from typing import Optional
 
 from ..models import Candle, Fill, Order, OrderbookSnapshot, OrderType, Side
+from .impact import ImpactStage
+from .latency import LatencyStage
+from .partial_fill import PartialFillStage
 
 
 class FillModel(abc.ABC):
@@ -174,6 +177,103 @@ class OrderbookFillModel(FillModel):
         )
 
     def fill_limit(self, order: Order, candle: Candle) -> Optional[Fill]:
+        if order.side == Side.LONG and candle.low <= order.price:
+            fill_price = order.price
+        elif order.side == Side.SHORT and candle.high >= order.price:
+            fill_price = order.price
+        else:
+            return None
+        return Fill(
+            market=order.market, side=order.side, price=fill_price,
+            size=order.size, fee=0.0, ts=candle.ts, order_id=order.order_id,
+        )
+
+
+class FillPipeline(FillModel):
+    """Composable fill pipeline: latency -> impact -> partial fill.
+
+    Subclasses FillModel so the engine can use it as a drop-in replacement.
+    Default: orderbook walk -> sqrt model -> bps fallback, with venue latency and IOC.
+    """
+
+    def __init__(
+        self,
+        impact_coefficient: float = 0.05,
+        fallback_bps: float = 10.0,
+        base_latency_s: float = 0.0,
+        latency_jitter_s: float = 0.0,
+        latency_seed: Optional[int] = None,
+        latency_enabled: bool = True,
+    ):
+        self._impact = ImpactStage(
+            impact_coefficient=impact_coefficient,
+            fallback_bps=fallback_bps,
+        )
+        self._latency = LatencyStage(
+            base_latency_s=base_latency_s,
+            latency_jitter_s=latency_jitter_s,
+            seed=latency_seed,
+            enabled=latency_enabled,
+        )
+        self._partial = PartialFillStage()
+        self._current_book: Optional[OrderbookSnapshot] = None
+        self._pending_resting: list = []
+
+    def set_orderbook(self, book: Optional[OrderbookSnapshot]) -> None:
+        """Called by the engine to set the current orderbook state."""
+        self._current_book = book
+
+    @property
+    def pending_resting_orders(self) -> list:
+        """GTC resting orders created during the last fill_market call."""
+        return list(self._pending_resting)
+
+    def drain_resting_orders(self) -> list:
+        """Pop and return resting orders. Called by context to add to pending."""
+        orders = self._pending_resting
+        self._pending_resting = []
+        return orders
+
+    def fill_market(self, order: Order, candle: Candle) -> Optional[Fill]:
+        # Stage 1: Latency check
+        eligible_ts = self._latency.compute_eligible_ts(order)
+        if not self._latency.is_eligible(eligible_ts, candle.ts):
+            return None
+
+        latency_ms = (eligible_ts - order.ts) * 1000
+
+        # Stage 2: Impact
+        book = self._current_book if (
+            self._current_book is not None and order.market == self._current_book.market
+        ) else None
+        impact = self._impact.compute(order, candle, book)
+
+        # Stage 3: Partial fill
+        decision = self._partial.decide(order, impact)
+
+        if decision.fill_size <= 0:
+            if decision.resting_order is not None:
+                self._pending_resting.append(decision.resting_order)
+            return None
+
+        if decision.resting_order is not None:
+            self._pending_resting.append(decision.resting_order)
+
+        return Fill(
+            market=order.market,
+            side=order.side,
+            price=decision.fill_price,
+            size=decision.fill_size,
+            fee=0.0,
+            ts=candle.ts,
+            order_id=order.order_id,
+            is_partial=decision.is_partial,
+            latency_ms=latency_ms,
+            impact_bps=impact.impact_bps,
+        )
+
+    def fill_limit(self, order: Order, candle: Candle) -> Optional[Fill]:
+        """Limit orders use simple price-cross logic (same as legacy)."""
         if order.side == Side.LONG and candle.low <= order.price:
             fill_price = order.price
         elif order.side == Side.SHORT and candle.high >= order.price:
