@@ -169,9 +169,14 @@ class DriftS3Provider(CandleProvider):
                     ts = int(row.get("ts", 0))
                     if ts < start_ts or ts > end_ts:
                         continue
-                    rate = float(row.get("fundingRate", 0))
+                    raw_rate = float(row.get("fundingRate", 0))
                     oracle = float(row.get("oraclePriceTwap", 0))
                     mark = float(row.get("markPriceTwap", 0))
+
+                    # Drift S3 fundingRate is payment-per-base-unit (USDC).
+                    # Normalize to a fraction of notional by dividing by oracle price.
+                    # This way apply_funding() correctly computes: size * price * rate
+                    rate = raw_rate / oracle if oracle > 0 else 0.0
 
                     all_rates.append(FundingRate(
                         market=market,
