@@ -31,6 +31,12 @@ class OrderStatus(enum.Enum):
     CANCELLED = "cancelled"
 
 
+class TimeInForce(str, enum.Enum):
+    IOC = "ioc"
+    FOK = "fok"
+    GTC = "gtc"
+
+
 # ---------------------------------------------------------------------------
 # Phase 1-2 models
 # ---------------------------------------------------------------------------
@@ -198,6 +204,7 @@ class Order:
     filled_size: float = 0.0
     filled_price: float = 0.0
     venue: str = "default"
+    time_in_force: TimeInForce = TimeInForce.IOC
 
 
 @dataclass(frozen=True)
@@ -211,6 +218,9 @@ class Fill:
     order_id: str = ""
     tx_sig: str = ""
     venue: str = "default"
+    is_partial: bool = False
+    latency_ms: float = 0.0
+    impact_bps: float = 0.0
 
 
 @dataclass(frozen=True)
