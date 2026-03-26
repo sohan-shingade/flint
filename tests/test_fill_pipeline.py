@@ -147,14 +147,20 @@ class TestPipelineLimitFill:
 
 class TestPipelineLatency:
     def test_latency_delays_fill(self):
-        pipeline = FillPipeline(base_latency_s=10.0, latency_jitter_s=0.0)
+        """Latency > bar width should delay fill to the next bar.
+        Bar resolution is 3600s. Latency of 5000s means the order
+        won't fill until a bar whose end (ts + 3600) >= eligible_ts.
+        """
+        pipeline = FillPipeline(base_latency_s=5000.0, latency_jitter_s=0.0)
         order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
                       size=10, order_id="o1", ts=1000)
-        candle_early = _c(1005, 100.0, volume=1000)
+        # Bar at ts=1000: fill_time = 1000+3600 = 4600 < 6000 (eligible) → no fill
+        candle_early = _c(1000, 100.0, volume=1000)
         fill_early = pipeline.fill_market(order, candle_early)
         assert fill_early is None
 
-        candle_ready = _c(1010, 101.0, volume=1000)
+        # Bar at ts=3600: fill_time = 3600+3600 = 7200 >= 6000 → fills
+        candle_ready = _c(3600, 101.0, volume=1000)
         fill_ready = pipeline.fill_market(order, candle_ready)
         assert fill_ready is not None
 

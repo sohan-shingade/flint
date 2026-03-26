@@ -369,9 +369,34 @@ class BacktestContext(ExecutionContext):
         return history[-1]
 
     def get_impact_price(self, market: Optional[str] = None, side=None, size: float = 0) -> Optional[float]:
-        """Walk the current orderbook to estimate fill price for a given size."""
-        book = self.get_orderbook(market)
-        if book is None or side is None or size <= 0:
+        """Estimate fill price for a given size, using the same model as the fill pipeline.
+
+        Uses orderbook walk if book data exists, otherwise falls back to the
+        sqrt participation model (same tiers as FillPipeline). This ensures
+        the pre-trade estimate matches what the fill pipeline will charge.
+        """
+        if side is None or size <= 0:
+            return None
+
+        mkt = market or (self._current_candle.market if self._current_candle else None)
+        if not mkt:
+            return None
+
+        # Use the fill pipeline's impact stage if available
+        if hasattr(self._fill_model, '_impact'):
+            candle = self._current_candle
+            if candle is None:
+                return None
+            book = self.get_orderbook(mkt)
+            from ..models import Order, OrderType
+            order = Order(market=mkt, side=side, order_type=OrderType.MARKET,
+                          size=size, order_id="estimate")
+            result = self._fill_model._impact.compute(order, candle, book)
+            return result.fill_price
+
+        # Legacy fallback: orderbook-only walk
+        book = self.get_orderbook(mkt)
+        if book is None:
             return None
 
         levels = book.asks if side == Side.LONG else book.bids

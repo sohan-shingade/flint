@@ -198,8 +198,8 @@ class FillPipeline(FillModel):
 
     def __init__(
         self,
-        impact_coefficient: float = 0.05,
-        fallback_bps: float = 10.0,
+        impact_coefficient: float = 0.005,
+        fallback_bps: float = 5.0,
         base_latency_s: float = 1.0,
         latency_jitter_s: float = 0.5,
         latency_seed: Optional[int] = None,
@@ -236,8 +236,12 @@ class FillPipeline(FillModel):
 
     def fill_market(self, order: Order, candle: Candle) -> Optional[Fill]:
         # Stage 1: Latency check
+        # Market orders are processed at bar close (ts + resolution_s), not bar open.
+        # Use end-of-bar as the "current time" so that latency < bar_width fills
+        # on the same bar, and latency > bar_width spills to the next bar.
         eligible_ts = self._latency.compute_eligible_ts(order)
-        if not self._latency.is_eligible(eligible_ts, candle.ts):
+        fill_time = candle.ts + candle.resolution_s
+        if not self._latency.is_eligible(eligible_ts, fill_time):
             return None
 
         latency_ms = (eligible_ts - order.ts) * 1000

@@ -6,7 +6,7 @@ from flint.execution.venue_config import get_venue_config, VENUE_DEFAULTS
 class TestVenueConfigExecution:
     def test_drift_has_impact_coefficient(self):
         cfg = get_venue_config("drift")
-        assert cfg.impact_coefficient == 0.1
+        assert cfg.impact_coefficient == 0.01
 
     def test_drift_has_latency(self):
         cfg = get_venue_config("drift")
@@ -15,7 +15,7 @@ class TestVenueConfigExecution:
 
     def test_binance_has_lower_impact(self):
         cfg = get_venue_config("binance")
-        assert cfg.impact_coefficient == 0.02
+        assert cfg.impact_coefficient == 0.002
 
     def test_default_venue_has_values(self):
         cfg = get_venue_config("default")

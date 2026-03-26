@@ -27,8 +27,8 @@ class ImpactStage:
 
     def __init__(
         self,
-        impact_coefficient: float = 0.05,
-        fallback_bps: float = 10.0,
+        impact_coefficient: float = 0.005,
+        fallback_bps: float = 5.0,
     ):
         self._k = impact_coefficient
         self._fallback_bps = fallback_bps
