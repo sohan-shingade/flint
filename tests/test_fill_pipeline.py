@@ -185,3 +185,31 @@ class TestPipelineGTCResting:
         resting = pipeline.pending_resting_orders[0]
         assert resting.size == 7.0
         assert resting.order_type == OrderType.LIMIT
+
+
+from flint.backtest.engine import BacktestEngine
+from flint.strategy import MACrossoverStrategy
+
+
+class TestEngineDefaultPipeline:
+    def test_engine_uses_pipeline_by_default(self):
+        engine = BacktestEngine(MACrossoverStrategy())
+        assert isinstance(engine._fill_model, FillPipeline)
+
+    def test_engine_accepts_legacy_fill_model(self):
+        engine = BacktestEngine(MACrossoverStrategy(), fill_model=SlippageFill(5))
+        assert isinstance(engine._fill_model, SlippageFill)
+
+    def test_full_backtest_with_pipeline(self):
+        candles = [_c(i * 3600, 100 + i * 0.5, volume=500) for i in range(60)]
+        engine = BacktestEngine(MACrossoverStrategy(), initial_capital=10_000)
+        result = engine.run(candles)
+        assert result.total_trades >= 0
+        for fill in result.fills:
+            assert hasattr(fill, 'impact_bps')
+            assert hasattr(fill, 'latency_ms')
+
+    def test_pipeline_context_default(self):
+        from flint.execution.backtest_context import BacktestContext
+        ctx = BacktestContext(initial_capital=10_000)
+        assert isinstance(ctx._fill_model, FillPipeline)

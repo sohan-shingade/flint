@@ -18,10 +18,11 @@ from ..models import (
     OrderType,
     PositionInfo,
     Side,
+    TimeInForce,
 )
 from .context import ExecutionContext
 from .fee_models import FeeModel, FlatFeeModel
-from .fill_models import FillModel, ClosePriceFill
+from .fill_models import FillModel, FillPipeline
 
 logger = logging.getLogger("flint.backtest")
 
@@ -76,7 +77,7 @@ class BacktestContext(ExecutionContext):
     ):
         self._initial_capital = initial_capital
         self._cash = initial_capital
-        self._fill_model = fill_model or ClosePriceFill()
+        self._fill_model = fill_model or FillPipeline()
         self._fee_model = fee_model or FlatFeeModel()
         self._position_size_pct = position_size_pct
         self._risk_manager = risk_manager
@@ -556,9 +557,17 @@ class BacktestContext(ExecutionContext):
                     market=fill.market, side=fill.side, price=fill.price,
                     size=fill.size, fee=fee, ts=fill.ts, order_id=fill.order_id,
                     venue=order.venue,
+                    is_partial=fill.is_partial,
+                    latency_ms=fill.latency_ms,
+                    impact_bps=fill.impact_bps,
                 )
                 self._apply_fill(fill)
                 fills.append(fill)
+            # Drain GTC resting orders from pipeline
+            if hasattr(self._fill_model, 'drain_resting_orders'):
+                for resting in self._fill_model.drain_resting_orders():
+                    if self._check_order_cap():
+                        self._pending_orders.append(resting)
         self._market_orders_queue.clear()
         return fills
 
@@ -607,6 +616,9 @@ class BacktestContext(ExecutionContext):
                     market=fill.market, side=fill.side, price=fill.price,
                     size=fill.size, fee=fee, ts=fill.ts, order_id=fill.order_id,
                     venue=venue,
+                    is_partial=fill.is_partial,
+                    latency_ms=fill.latency_ms,
+                    impact_bps=fill.impact_bps,
                 )
                 self._apply_fill(fill)
                 fills.append(fill)
