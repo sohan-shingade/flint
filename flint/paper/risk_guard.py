@@ -72,17 +72,30 @@ class RiskGuard:
 
         return None
 
+    def _get_venue_margins(self, broker):
+        """Extract margin params from broker's venue config, or use defaults."""
+        mmr = MAINTENANCE_MARGIN_RATIO
+        liq_fee = LIQUIDATION_FEE_PCT
+        vc = getattr(broker, '_venue_config', None)
+        if vc is not None and isinstance(getattr(vc, 'maintenance_margin', None), (int, float)):
+            mmr = vc.maintenance_margin
+            liq_fee = getattr(vc, 'liquidation_penalty', LIQUIDATION_FEE_PCT)
+        return mmr, liq_fee
+
     def _check_liquidation(self, broker, mark_prices: dict) -> Optional[str]:
+        # Use broker's venue config if available, otherwise fall back to defaults
+        mmr, liq_fee = self._get_venue_margins(broker)
+
         total_margin_required = 0.0
         for market, pos in broker.positions.items():
             mark = mark_prices.get(market, pos.get("entry_price", 0))
             notional = pos["size"] * mark
-            total_margin_required += notional * MAINTENANCE_MARGIN_RATIO
+            total_margin_required += notional * mmr
 
         if total_margin_required > 0 and broker.equity <= total_margin_required:
             for market, pos in list(broker.positions.items()):
                 mark = mark_prices.get(market, pos.get("entry_price", 0))
-                penalty = pos["size"] * mark * LIQUIDATION_FEE_PCT
+                penalty = pos["size"] * mark * liq_fee
                 broker.cash -= penalty
             if hasattr(broker, "close_all_positions"):
                 broker.close_all_positions(mark_prices)
@@ -90,10 +103,11 @@ class RiskGuard:
         return None
 
     def margin_ratio(self, broker, mark_prices: dict) -> float:
+        mmr, _ = self._get_venue_margins(broker)
         total_req = 0.0
         for market, pos in broker.positions.items():
             mark = mark_prices.get(market, pos.get("entry_price", 0))
-            total_req += pos["size"] * mark * MAINTENANCE_MARGIN_RATIO
+            total_req += pos["size"] * mark * mmr
         return broker.equity / total_req if total_req > 0 else float("inf")
 
     def liquidation_distance_pct(self, broker, mark_prices: dict) -> float:

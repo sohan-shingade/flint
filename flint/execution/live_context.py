@@ -31,6 +31,9 @@ class LiveContext(ExecutionContext):
             equity=self._broker.equity,
             cash=self._broker.cash,
             unrealized_pnl=unrealized,
+            margin_used=self._broker.margin_used,
+            free_margin=self._broker.free_margin,
+            leverage=self._broker.leverage,
         )
 
     @property

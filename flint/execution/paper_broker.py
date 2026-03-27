@@ -5,6 +5,7 @@ Same fill/fee model interface as backtest for consistency.
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import Dict, List, Optional
 
@@ -13,6 +14,8 @@ from ..models import (
 )
 from .fee_models import FeeModel, FlatFeeModel
 from .fill_models import FillModel, ClosePriceFill
+
+logger = logging.getLogger("flint.paper")
 
 
 class PaperBroker:
@@ -23,11 +26,13 @@ class PaperBroker:
         initial_capital: float = 10_000.0,
         fill_model: Optional[FillModel] = None,
         fee_model: Optional[FeeModel] = None,
+        venue: str = "drift",
     ):
         self.initial_capital = initial_capital
         self.cash = initial_capital
         self.fill_model = fill_model or ClosePriceFill()
         self.fee_model = fee_model or FlatFeeModel()
+        self.venue = venue
 
         self.positions: Dict[str, dict] = {}  # market -> position dict
         self.pending_orders: List[Order] = []
@@ -36,13 +41,94 @@ class PaperBroker:
         self.total_fees = 0.0
         self.total_funding = 0.0
 
+        # Margin tracking via venue config
+        self._venue_config = None
+        try:
+            from .venue_config import get_venue_config
+            self._venue_config = get_venue_config(venue)
+        except Exception:
+            pass
+
     @property
     def equity(self) -> float:
         unrealized = sum(p.get("unrealized_pnl", 0) for p in self.positions.values())
         return self.cash + unrealized
 
+    @property
+    def margin_used(self) -> float:
+        """Total margin allocated to open positions."""
+        if not self._venue_config:
+            return 0.0
+        total = 0.0
+        for pos in self.positions.values():
+            mark = pos.get("mark_price", pos.get("entry_price", 0))
+            notional = pos["size"] * mark
+            total += notional * self._venue_config.initial_margin
+        return total
+
+    @property
+    def free_margin(self) -> float:
+        """Available margin for new positions."""
+        return max(0, self.equity - self.margin_used)
+
+    @property
+    def leverage(self) -> float:
+        """Current leverage: total notional / equity."""
+        if self.equity <= 0:
+            return 0.0
+        total_notional = sum(
+            pos["size"] * pos.get("mark_price", pos.get("entry_price", 0))
+            for pos in self.positions.values()
+        )
+        return total_notional / self.equity if self.equity > 0 else 0.0
+
+    @property
+    def margin_ratio(self) -> float:
+        """Equity / total notional. Below maintenance_margin = liquidation."""
+        total_notional = sum(
+            pos["size"] * pos.get("mark_price", pos.get("entry_price", 0))
+            for pos in self.positions.values()
+        )
+        if total_notional <= 0:
+            return float("inf")
+        return self.equity / total_notional
+
+    def can_open_position(self, size: float, price: float) -> bool:
+        """Check if there's enough free margin to open a position."""
+        if not self._venue_config:
+            return True  # no margin enforcement without config
+        required = size * price * self._venue_config.initial_margin
+        return self.free_margin >= required
+
+    def get_liquidation_price(self, market: str) -> float:
+        """Compute liquidation price for a position."""
+        pos = self.positions.get(market)
+        if not pos or not self._venue_config:
+            return 0.0
+        mmr = self._venue_config.maintenance_margin
+        entry = pos["entry_price"]
+        size = pos["size"]
+        collateral = self.equity  # simplified: full equity backs position
+        notional = size * entry
+        if pos["side"] == "long":
+            return entry - (collateral - mmr * notional) / size if size > 0 else 0
+        else:
+            return entry + (collateral - mmr * notional) / size if size > 0 else 0
+
     def submit_order(self, order: Order) -> str:
         """Accept an order for processing."""
+        # Margin check: warn if insufficient margin for new positions
+        if self._venue_config and not getattr(order, "reduce_only", False):
+            price = order.price if order.price else 0
+            # For market orders, price is unknown until fill; use 0 to skip check
+            if price > 0 and not self.can_open_position(order.size, price):
+                logger.warning(
+                    "Insufficient margin for %s %s %.4f @ %.2f "
+                    "(free_margin=%.2f, required=%.2f)",
+                    order.side.value, order.market, order.size, price,
+                    self.free_margin,
+                    order.size * price * self._venue_config.initial_margin,
+                )
         if order.order_type == OrderType.MARKET:
             # Market orders get queued for immediate fill
             self.pending_orders.append(order)
@@ -85,9 +171,10 @@ class PaperBroker:
                 remaining.append(order)
 
         self.pending_orders = remaining
-        # Update unrealized PnL
+        # Update unrealized PnL and mark price
         for market, pos in self.positions.items():
             if candle.market == market:
+                pos["mark_price"] = candle.close
                 if pos["side"] == "long":
                     pos["unrealized_pnl"] = (candle.close - pos["entry_price"]) * pos["size"]
                 else:
