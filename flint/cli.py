@@ -14,7 +14,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -541,7 +541,7 @@ def serve(
 
 @data_app.command("download")
 def data_download(
-    market: str = typer.Option("SOL-PERP", "--market", "-m"),
+    market: Optional[List[str]] = typer.Option(None, "--market", "-m", help="Market(s) to download (repeatable)"),
     days: int = typer.Option(365, "--days", "-d"),
     resolution: int = typer.Option(3600, "--resolution", "-r"),
     end_date: Optional[str] = typer.Option(None, "--end-date", help="End date YYYY-MM-DD"),
@@ -551,38 +551,40 @@ def data_download(
     from flint.store import FlintStore
     from flint.providers.drift_s3 import DriftS3Provider, _date_range
 
+    markets = market if market else ["SOL-PERP"]
+
     if end_date:
         end_ts = int(datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
     else:
         end_ts = int(time.time())
     start_ts = end_ts - days * 86400
 
-    console.print(f"  Market:     {market}")
-    console.print(f"  Resolution: {resolution}s")
-    console.print(f"  Days:       {days}")
-
     store = FlintStore("./data/flint.duckdb")
     provider = DriftS3Provider()
 
-    dates = _date_range(start_ts, end_ts)
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), BarColumn(),
-                  TextColumn("{task.percentage:>3.0f}%"), console=console) as progress:
-        task = progress.add_task(f"Downloading {market}", total=len(dates))
+    for mkt in markets:
+        console.print(f"\n  Market:     {mkt}")
+        console.print(f"  Resolution: {resolution}s")
+        console.print(f"  Days:       {days}")
 
-        def on_progress(done, total, date_str):
-            progress.update(task, completed=done)
+        dates = _date_range(start_ts, end_ts)
+        with Progress(SpinnerColumn(), TextColumn("{task.description}"), BarColumn(),
+                      TextColumn("{task.percentage:>3.0f}%"), console=console) as progress:
+            task = progress.add_task(f"Downloading {mkt}", total=len(dates))
 
-        candles = provider.fetch_candles(market, resolution, start_ts, end_ts, on_progress=on_progress)
-        progress.update(task, completed=len(dates))
+            def on_progress(done, total, date_str):
+                progress.update(task, completed=done)
+
+            candles = provider.fetch_candles(mkt, resolution, start_ts, end_ts, on_progress=on_progress)
+            progress.update(task, completed=len(dates))
+
+        if candles:
+            count = store.upsert_candles(candles)
+            console.print(f"  [green]✓[/green] Stored {count:,} candles for {mkt}")
+        else:
+            console.print(f"  [yellow]No data found for {mkt}[/yellow]")
 
     provider.close()
-
-    if candles:
-        count = store.upsert_candles(candles)
-        console.print(f"  [green]✓[/green] Stored {count:,} candles")
-    else:
-        console.print("  [yellow]No data found for this range[/yellow]")
-
     store.close()
 
 
