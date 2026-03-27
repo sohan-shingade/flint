@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import {
   usePaperPortfolio,
@@ -53,6 +53,7 @@ interface SidebarCardProps {
     equity: number
     pnl: number
     status: string
+    initial_capital?: number
   }
   selected: boolean
   onClick: () => void
@@ -60,6 +61,9 @@ interface SidebarCardProps {
 
 function SidebarCard({ session, selected, onClick }: SidebarCardProps) {
   const pnlPositive = session.pnl >= 0
+  const capital = session.initial_capital || 10000
+  const returnPct = session.equity > 0 ? ((session.equity - capital) / capital * 100) : 0
+  const returnPositive = returnPct >= 0
 
   return (
     <button
@@ -82,140 +86,15 @@ function SidebarCard({ session, selected, onClick }: SidebarCardProps) {
           {pnlPositive ? '+' : ''}{fmtUsd(session.pnl)}
         </span>
       </div>
-      <div className="pl-3.5 mt-0.5">
+      <div className="flex items-center justify-between pl-3.5 mt-0.5">
         <span className={`text-[9px] tracking-[0.15em] ${statusTextColor(session.status)}`}>
           {statusLabel(session.status)}
         </span>
+        <span className={`text-[9px] tabular-nums ${returnPositive ? 'text-phosphor/70' : 'text-loss/70'}`}>
+          {returnPositive ? '+' : ''}{fmt(returnPct)}%
+        </span>
       </div>
     </button>
-  )
-}
-
-/* ── portfolio overview (no session selected) ────────────── */
-
-interface PortfolioViewProps {
-  portfolio: {
-    total_equity: number
-    total_pnl: number
-    total_initial_capital: number
-    active_sessions: number
-    total_sessions: number
-    per_strategy: any[]
-  }
-}
-
-function PortfolioView({ portfolio }: PortfolioViewProps) {
-  const totalReturn =
-    portfolio.total_initial_capital > 0
-      ? ((portfolio.total_pnl / portfolio.total_initial_capital) * 100)
-      : 0
-  const pnlPositive = portfolio.total_pnl >= 0
-
-  return (
-    <div className="space-y-6">
-      {/* total account value hero */}
-      <div className="bg-surface/60 border border-border p-6 text-center">
-        <div className="text-[9px] text-ghost/60 tracking-[0.25em] mb-2">TOTAL ACCOUNT VALUE</div>
-        <div className="text-4xl font-bold text-white/90 tabular-nums">
-          {fmtUsd(portfolio.total_equity)}
-        </div>
-        <div className={`text-lg font-medium tabular-nums mt-1 ${pnlPositive ? 'text-phosphor' : 'text-loss'}`}>
-          {pnlPositive ? '+' : ''}{fmtUsd(portfolio.total_pnl)}
-        </div>
-      </div>
-
-      {/* metrics row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-border">
-        {[
-          {
-            label: 'TOTAL.EQUITY',
-            value: fmtUsd(portfolio.total_equity),
-            accent: undefined as boolean | undefined,
-          },
-          {
-            label: 'TOTAL.PNL',
-            value: (pnlPositive ? '+' : '') + fmtUsd(portfolio.total_pnl),
-            accent: pnlPositive,
-          },
-          {
-            label: 'RETURN',
-            value: `${totalReturn >= 0 ? '+' : ''}${fmt(totalReturn)}%`,
-            accent: totalReturn >= 0,
-          },
-          {
-            label: 'SESSIONS',
-            value: `${portfolio.active_sessions} / ${portfolio.total_sessions}`,
-            accent: undefined,
-          },
-        ].map((item, i) => (
-          <div
-            key={item.label}
-            className="bg-surface p-4 hover:bg-panel transition-colors"
-            style={{ animation: `fadeUp 0.3s ease ${i * 0.05}s both` }}
-          >
-            <div className="text-[9px] text-ghost/60 tracking-[0.2em] mb-2">{item.label}</div>
-            <div
-              className={`text-xl font-bold tabular-nums ${
-                item.accent === undefined
-                  ? 'text-white/80'
-                  : item.accent
-                    ? 'text-phosphor'
-                    : 'text-loss'
-              }`}
-            >
-              {item.value}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* portfolio equity chart */}
-      <div className="border border-border bg-surface/60 p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="w-2 h-2 bg-amber/60" />
-          <span className="text-[10px] text-ghost tracking-[0.2em]">PORTFOLIO.EQUITY</span>
-        </div>
-        <div className="text-[10px] text-ghost/40 tracking-wider text-center py-8">
-          Equity chart updates as strategies trade
-        </div>
-      </div>
-
-      {/* prompt */}
-      <div className="border border-border bg-surface/40 p-8 text-center">
-        <p className="text-ghost/60 text-sm mb-4">
-          Select a strategy from the sidebar to view details, or deploy one from BacktestLab
-        </p>
-        <Link
-          to="/backtest"
-          className="inline-flex items-center gap-2 px-5 py-2 bg-amber text-void text-xs font-semibold tracking-[0.15em] hover:bg-amber-dim transition-colors"
-        >
-          {'>'} DEPLOY_FROM_LAB
-        </Link>
-      </div>
-
-      {/* per-strategy table */}
-      {portfolio.per_strategy.length > 0 && (
-        <div className="border border-border bg-surface/60 backdrop-blur">
-          <div className="px-4 py-2.5 border-b border-border flex items-center gap-2">
-            <span className="w-2 h-2 bg-phosphor/60" />
-            <span className="text-[10px] text-ghost tracking-[0.2em]">ALL.STRATEGIES</span>
-          </div>
-          <div className="divide-y divide-border">
-            {portfolio.per_strategy.map((s: any) => (
-              <div key={s.session_id} className="px-4 py-3 flex items-center gap-4 hover:bg-amber-glow transition-colors">
-                <StatusDot status={s.status} />
-                <span className="text-xs text-white/80 font-medium w-40 truncate">{s.strategy_name}</span>
-                <span className="text-[10px] text-ghost w-24">{s.market}</span>
-                <span className="text-xs tabular-nums text-white/60 w-28">{fmtUsd(s.equity)}</span>
-                <span className={`text-xs tabular-nums font-medium ml-auto ${s.pnl >= 0 ? 'text-phosphor' : 'text-loss'}`}>
-                  {s.pnl >= 0 ? '+' : ''}{fmtUsd(s.pnl)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -230,6 +109,40 @@ function SessionDetail({ sessionId, onStop, onKill }: {
   const trades = useSessionTrades(sessionId)
   const [confirming, setConfirming] = useState<'stop' | 'kill' | null>(null)
 
+  // Fetch equity history from DB (has replay + live data)
+  const [eqHistory, setEqHistory] = useState<any[]>([])
+  useEffect(() => {
+    if (!sessionId) return
+    fetch(`/api/v1/paper/${sessionId}/equity-history`)
+      .then(r => r.json())
+      .then(d => setEqHistory(d.equity_curve || []))
+      .catch(() => {})
+  }, [sessionId])
+
+  // Fetch candle data for buy-and-hold baseline
+  const [buyHoldData, setBuyHoldData] = useState<[number, number][]>([])
+  useEffect(() => {
+    if (!status?.market || eqHistory.length === 0) return
+    const startTs = eqHistory[0]?.ts || 0
+    const endTs = eqHistory[eqHistory.length - 1]?.ts || 0
+    if (!startTs) return
+    fetch(`/api/v1/data/ohlcv?market=${status.market}&resolution=3600&start_ts=${startTs}&end_ts=${endTs}`)
+      .then(r => r.json())
+      .then(d => {
+        const candles = d.candles || []
+        if (candles.length === 0) return
+        // Compute buy-and-hold: invest initial_capital at first close, track value
+        const initialPrice = candles[0].close
+        const initialCapital = eqHistory[0]?.equity || 10000
+        const bh: [number, number][] = candles.map((c: any) => [
+          c.ts,
+          initialCapital * (c.close / initialPrice),
+        ])
+        setBuyHoldData(bh)
+      })
+      .catch(() => {})
+  }, [status?.market, eqHistory])
+
   if (!status) {
     return (
       <div className="flex items-center justify-center h-40">
@@ -240,6 +153,9 @@ function SessionDetail({ sessionId, onStop, onKill }: {
 
   const pnlPositive = (status.pnl ?? 0) >= 0
   const upnlPositive = (status.unrealized_pnl ?? 0) >= 0
+
+  // Use equity history from dedicated endpoint if available, fall back to status.equity_curve
+  const equityCurve = eqHistory.length > 0 ? eqHistory : (status.equity_curve || [])
 
   const metrics: { label: string; value: string; accent: boolean | undefined }[] = [
     { label: 'EQUITY', value: fmtUsd(status.equity), accent: undefined },
@@ -279,14 +195,32 @@ function SessionDetail({ sessionId, onStop, onKill }: {
     <div className="space-y-6" style={{ animation: 'fadeUp 0.25s ease' }}>
       {/* header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-baseline gap-3">
-          <h2 className="font-[var(--font-display)] text-xl text-white/90 italic">
-            {status.strategy}
-          </h2>
-          <span className="text-[10px] text-ghost tracking-[0.2em]">// {status.market}</span>
-          <span className={`text-[10px] tracking-[0.15em] ${statusTextColor(status.status ?? status.phase)}`}>
-            {statusLabel(status.status ?? status.phase)}
-          </span>
+        <div>
+          <div className="flex items-baseline gap-3">
+            <h2 className="font-[var(--font-display)] text-xl text-white/90 italic">
+              {status.strategy}
+            </h2>
+            <span className="text-[10px] text-ghost tracking-[0.2em]">// {status.market}</span>
+            <span className={`text-[10px] tracking-[0.15em] ${statusTextColor(status.status ?? status.phase)}`}>
+              {statusLabel(status.status ?? status.phase)}
+            </span>
+          </div>
+          {/* deployment info */}
+          <div className="text-[10px] text-ghost/50 tracking-wide mt-1">
+            Deployed {new Date(((status as any).started_at ?? 0) * 1000).toLocaleDateString('en-US', {
+              month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
+              timeZone: 'UTC',
+            })} UTC
+            {(() => {
+              const liveStart = eqHistory.find(e => !e.is_replay)
+              if (liveStart) {
+                return ` \u00b7 Live since ${new Date(liveStart.ts * 1000).toLocaleDateString('en-US', {
+                  month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+                })} UTC`
+              }
+              return ''
+            })()}
+          </div>
         </div>
         {/* action buttons */}
         <div className="flex items-center gap-2">
@@ -345,17 +279,29 @@ function SessionDetail({ sessionId, onStop, onKill }: {
         ))}
       </div>
 
-      {/* equity curve */}
-      {status.equity_curve && status.equity_curve.length > 0 && (
+      {/* equity curve with buy-and-hold baseline */}
+      {equityCurve.length > 0 && (
         <div className="border border-border bg-surface/60 p-4">
           <div className="flex items-center gap-2 mb-3">
             <span className="w-2 h-2 bg-amber/60" />
             <span className="text-[10px] text-ghost tracking-[0.2em]">EQUITY.CURVE</span>
           </div>
           <EquityCurve
-            equity={status.equity_curve.map((e: any) => [e.ts, e.equity] as [number, number])}
-            height={250}
+            equity={equityCurve.map((e: any) => [e.ts, e.equity] as [number, number])}
+            buyHold={buyHoldData.length > 0 ? buyHoldData : undefined}
+            height={280}
           />
+          <div className="flex items-center gap-4 mt-2 text-[9px] text-ghost/50">
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-px bg-amber inline-block"></span> Strategy
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-px bg-ghost/30 inline-block" style={{borderTop: '1px dashed'}}></span> Buy &amp; Hold ({status.market})
+            </span>
+            {eqHistory.some(e => e.is_replay) && eqHistory.some(e => !e.is_replay) && (
+              <span className="text-ghost/30">| dashed = replay · solid = live</span>
+            )}
+          </div>
         </div>
       )}
 
@@ -461,9 +407,13 @@ export default function PaperTrading() {
 
   const sessions = portfolio?.per_strategy ?? []
 
+  // Auto-select first live session when portfolio loads
+  const liveStrategies = sessions.filter((s: any) => s.status === 'live')
+  const activeSession = selectedSession || (liveStrategies.length > 0 ? liveStrategies[0].session_id : (sessions.length > 0 ? sessions[0].session_id : null))
+
   // Deselect if the selected session disappears
-  const sessionExists = sessions.some((s: any) => s.session_id === selectedSession)
-  if (selectedSession && !sessionExists && sessions.length > 0) {
+  const sessionExists = sessions.some((s: any) => s.session_id === activeSession)
+  if (activeSession && !sessionExists && sessions.length > 0) {
     setSelectedSession(null)
   }
 
@@ -488,7 +438,7 @@ export default function PaperTrading() {
               <SidebarCard
                 key={s.session_id}
                 session={s}
-                selected={selectedSession === s.session_id}
+                selected={activeSession === s.session_id}
                 onClick={() => setSelectedSession(s.session_id)}
               />
             ))
@@ -527,15 +477,15 @@ export default function PaperTrading() {
           </div>
         ) : sessions.length === 0 ? (
           <EmptyState />
-        ) : selectedSession ? (
+        ) : activeSession ? (
           <SessionDetail
-            key={selectedSession}
-            sessionId={selectedSession}
+            key={activeSession}
+            sessionId={activeSession}
             onStop={() => setSelectedSession(null)}
             onKill={() => setSelectedSession(null)}
           />
         ) : (
-          <PortfolioView portfolio={portfolio} />
+          <EmptyState />
         )}
       </main>
     </div>
