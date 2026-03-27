@@ -145,6 +145,30 @@ def test_mev_liq_scan():
     assert len(r.json()["opportunities"]) == 1
 
 
+def test_data_freshness_returns_data_after_download():
+    """Freshness endpoint should return metadata after sync_metadata is populated."""
+    from flint.store import FlintStore
+    from flint.models import SyncMetadata
+    import tempfile, os
+
+    db_path = os.path.join(tempfile.gettempdir(), "test_freshness.duckdb")
+    try:
+        store = FlintStore(db_path)
+        meta = SyncMetadata(
+            provider="drift_api", market="SOL-PERP", data_type="candles",
+            last_sync_ts=1700000000, record_count=100, status="ok", error_msg="",
+        )
+        store.upsert_sync_metadata(meta)
+        freshness = store.get_data_freshness()
+        assert len(freshness) == 1
+        assert freshness[0]["market"] == "SOL-PERP"
+        assert freshness[0]["record_count"] == 100
+        store.close()
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+
 def test_collector_status():
     resp = client.get("/api/v1/collector/status")
     assert resp.status_code == 200

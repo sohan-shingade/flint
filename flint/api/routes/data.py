@@ -519,6 +519,31 @@ def download_market_data(request: Request, body: dict):
                     funding_fetched = _download_funding_all_venues(store, market, start_ts, end_ts, logger, venues=funding_venues)
                 except Exception as e:
                     logger.warning("Funding sync failed for %s: %s", market, e)
+            # Update sync_metadata for freshness tracking
+            try:
+                from ...models import SyncMetadata
+                import time as _time
+                store.upsert_sync_metadata(SyncMetadata(
+                    provider="local",
+                    market=market,
+                    data_type="candles",
+                    last_sync_ts=int(_time.time()),
+                    record_count=existing_count,
+                    status="ok",
+                    error_msg="",
+                ))
+                if funding_fetched > 0:
+                    store.upsert_sync_metadata(SyncMetadata(
+                        provider="multi_venue",
+                        market=market,
+                        data_type="funding_rates",
+                        last_sync_ts=int(_time.time()),
+                        record_count=funding_fetched,
+                        status="ok",
+                        error_msg="",
+                    ))
+            except Exception as e:
+                logger.warning("Failed to update sync_metadata: %s", e)
             return {
                 "market": market,
                 "resolution_s": resolution_s,
@@ -556,6 +581,32 @@ def download_market_data(request: Request, body: dict):
                 funding_fetched = _download_funding_all_venues(store, market, start_ts, end_ts, logger)
             except Exception as e:
                 logger.warning("Funding sync failed for %s: %s", market, e)
+
+        # Update sync_metadata for freshness tracking
+        try:
+            from ...models import SyncMetadata
+            import time as _time
+            store.upsert_sync_metadata(SyncMetadata(
+                provider=source or "drift_api",
+                market=market,
+                data_type="candles",
+                last_sync_ts=int(_time.time()),
+                record_count=final_count,
+                status="ok",
+                error_msg="",
+            ))
+            if funding_fetched > 0:
+                store.upsert_sync_metadata(SyncMetadata(
+                    provider="multi_venue",
+                    market=market,
+                    data_type="funding_rates",
+                    last_sync_ts=int(_time.time()),
+                    record_count=funding_fetched,
+                    status="ok",
+                    error_msg="",
+                ))
+        except Exception as e:
+            logger.warning("Failed to update sync_metadata: %s", e)
 
         result = {
             "market": market,
