@@ -62,6 +62,44 @@ def test_close_all_positions():
     assert broker.closed_trades[0]["pnl"] == 100.0  # (110-100)*10
 
 
+def test_limit_order_expires_after_timeout():
+    """Limit orders should expire after N bars."""
+    from flint.models import Order, OrderType, Side, Candle
+    broker = PaperBroker(initial_capital=10000)
+    broker._limit_timeout_bars = 3
+    broker._resolution_s = 3600
+
+    order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.LIMIT,
+                  size=10, price=50.0, order_id="test-timeout", ts=1000)
+    broker.submit_order(order)
+    assert len(broker.pending_orders) == 1
+
+    # Process 4 candles at higher prices (limit won't fill since price > 50)
+    for i in range(4):
+        candle = Candle(market="SOL-PERP", resolution_s=3600, ts=1000 + (i + 1) * 3600,
+                        open=100, high=101, low=99, close=100, volume=1000)
+        broker.process_candle(candle)
+
+    assert len(broker.pending_orders) == 0  # expired after 3 bars
+
+
+def test_market_orders_dont_expire():
+    """Market orders should not be affected by timeout."""
+    from flint.models import Order, OrderType, Side, Candle
+    broker = PaperBroker(initial_capital=10000)
+    broker._limit_timeout_bars = 1
+
+    order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                  size=10, order_id="test-market", ts=1000)
+    broker.submit_order(order)
+
+    # Market order should fill on next candle, not expire
+    candle = Candle(market="SOL-PERP", resolution_s=3600, ts=5000,
+                    open=100, high=101, low=99, close=100, volume=1000)
+    fills = broker.process_candle(candle)
+    assert len(fills) == 1  # filled, not expired
+
+
 def test_funding_persistence():
     """Test funding payment save/load through session store."""
     from flint.store import FlintStore

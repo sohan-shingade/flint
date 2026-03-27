@@ -12,8 +12,8 @@ from typing import Dict, List, Optional
 from ..models import (
     Candle, Fill, Order, OrderStatus, OrderType, Side,
 )
-from .fee_models import FeeModel, FlatFeeModel
-from .fill_models import FillModel, ClosePriceFill
+from .fee_models import FeeModel, FlatFeeModel, DriftFeeModel
+from .fill_models import FillModel, ClosePriceFill, SlippageFill
 
 logger = logging.getLogger("flint.paper")
 
@@ -30,8 +30,8 @@ class PaperBroker:
     ):
         self.initial_capital = initial_capital
         self.cash = initial_capital
-        self.fill_model = fill_model or ClosePriceFill()
-        self.fee_model = fee_model or FlatFeeModel()
+        self.fill_model = fill_model or SlippageFill(slippage_bps=5.0)
+        self.fee_model = fee_model or DriftFeeModel()
         self.venue = venue
 
         self.positions: Dict[str, dict] = {}  # market -> position dict
@@ -40,6 +40,9 @@ class PaperBroker:
         self.closed_trades: List[dict] = []
         self.total_fees = 0.0
         self.total_funding = 0.0
+
+        self._limit_timeout_bars = 24  # expire limit/stop orders after N bars
+        self._resolution_s = 3600      # candle resolution for age calculation
 
         # Margin tracking via venue config
         self._venue_config = None
@@ -178,6 +181,18 @@ class PaperBroker:
 
     def process_candle(self, candle: Candle) -> List[Fill]:
         """Process all pending orders against this candle."""
+        # Expire timed-out limit/stop orders
+        if self._limit_timeout_bars > 0:
+            expired = []
+            for order in self.pending_orders:
+                if order.order_type != OrderType.MARKET and order.ts > 0:
+                    age_bars = (candle.ts - order.ts) // max(self._resolution_s, 1)
+                    if age_bars >= self._limit_timeout_bars:
+                        expired.append(order)
+            for order in expired:
+                self.pending_orders.remove(order)
+                logger.debug("Order %s expired after %d bars", order.order_id, self._limit_timeout_bars)
+
         fills = []
         remaining = []
 
