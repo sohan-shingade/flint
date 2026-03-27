@@ -224,10 +224,7 @@ def run_optimization(req: OptimizeRequest, request: Request):
                 study.optimize(multi_objective, n_trials=req.trials)
 
                 best = study.best_trial
-                _set(run_id, status="complete", progress={
-                    "phase": "done", "pct": 100,
-                    "detail": f"Best {req.multi_market_objective}: {best.value:.4f}",
-                }, result={
+                mm_result_dict = {
                     "best_params": best.params,
                     "best_value": round(best.value, 4),
                     "metric": req.multi_market_objective,
@@ -237,7 +234,14 @@ def run_optimization(req: OptimizeRequest, request: Request):
                     "market": req.market,
                     "markets": req.markets,
                     "candles": len(candles),
-                })
+                }
+                # Add metric-specific convenience key (e.g., best_sharpe, best_pnl)
+                mm_metric_key = f"best_{req.multi_market_objective.replace('_ratio', '').replace('total_', '')}"
+                mm_result_dict[mm_metric_key] = round(best.value, 4)
+                _set(run_id, status="complete", progress={
+                    "phase": "done", "pct": 100,
+                    "detail": f"Best {req.multi_market_objective}: {best.value:.4f}",
+                }, result=mm_result_dict)
                 return
 
             _set(run_id, progress={
@@ -281,10 +285,7 @@ def run_optimization(req: OptimizeRequest, request: Request):
                 })
 
             best_val = _safe(opt_result.best_value)
-            _set(run_id, status="complete", progress={
-                "phase": "done", "pct": 100,
-                "detail": f"Best {req.metric}: {best_val}",
-            }, result={
+            result_dict = {
                 "best_params": opt_result.best_params,
                 "best_value": best_val,
                 "metric": opt_result.metric,
@@ -293,7 +294,15 @@ def run_optimization(req: OptimizeRequest, request: Request):
                 "strategy_name": strategy_cls.__name__,
                 "market": req.market,
                 "candles": len(candles),
-            })
+            }
+            # Add metric-specific convenience key (e.g., best_sharpe, best_pnl)
+            metric_key = f"best_{req.metric.replace('_ratio', '').replace('total_', '')}"
+            result_dict[metric_key] = best_val
+
+            _set(run_id, status="complete", progress={
+                "phase": "done", "pct": 100,
+                "detail": f"Best {req.metric}: {best_val}",
+            }, result=result_dict)
 
         except Exception as e:
             logger.exception("Optimization %s failed", run_id)
