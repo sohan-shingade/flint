@@ -101,7 +101,7 @@ class PaperTradingEngine:
         """Start a new paper trading session. Returns session_id."""
         session_id = uuid.uuid4().hex[:8]
         broker = PaperBroker(initial_capital=initial_capital)
-        ctx = LiveContext(broker)
+        ctx = LiveContext(broker, store=self.store, resolution_s=resolution_s, session_id=session_id)
 
         session = PaperSession(
             session_id=session_id,
@@ -242,7 +242,7 @@ class PaperTradingEngine:
         broker = PaperBroker(initial_capital=final_cash)
         # RiskGuard.check() reads broker.equity_history for peak tracking
         broker.equity_history = [final_cash]
-        ctx = LiveContext(broker)
+        ctx = LiveContext(broker, store=self.store, resolution_s=resolution_s, session_id=session_id)
 
         session = PaperSession(
             session_id=session_id, strategy=strategy, market=market,
@@ -404,6 +404,30 @@ class PaperTradingEngine:
                                 ss.update_status(session.session_id, "risk_stopped",
                                                  stopped_at=int(time.time()), stop_reason=breach)
                             break
+
+                # Apply funding rates from store
+                if session.broker.positions:
+                    try:
+                        last_funding_ts = getattr(session, '_last_funding_ts', 0)
+                        now_ts = int(time.time())
+                        funding = self.store.query_venue_funding(
+                            session.broker.venue, session.market,
+                            last_funding_ts + 1, now_ts,
+                        )
+                        if funding:
+                            for fr in funding:
+                                mp = fr["mark_price"] if fr.get("mark_price") else (candle.close if candles else 0)
+                                payment = session.broker.apply_funding(session.market, fr["rate_hourly"], mp)
+                                if payment != 0 and ss:
+                                    pos = session.broker.positions.get(session.market)
+                                    ss.save_funding_payment(
+                                        session.session_id, fr["ts"], session.market,
+                                        fr["rate_hourly"], payment,
+                                        pos["size"] if pos else 0, mp,
+                                    )
+                            session._last_funding_ts = funding[-1]["ts"]
+                    except Exception as e:
+                        logger.debug("Funding application error for %s: %s", session.session_id, e)
 
                 if ss and len(equity_buffer) >= 10:
                     ss.save_equity_snapshots(session.session_id, equity_buffer)

@@ -210,6 +210,18 @@ CREATE TABLE IF NOT EXISTS paper_positions (
 );
 """
 
+_CREATE_PAPER_FUNDING_PAYMENTS = """
+CREATE TABLE IF NOT EXISTS paper_funding_payments (
+    session_id    VARCHAR NOT NULL,
+    ts            BIGINT NOT NULL,
+    market        VARCHAR NOT NULL,
+    rate          DOUBLE NOT NULL,
+    payment       DOUBLE NOT NULL,
+    position_size DOUBLE NOT NULL,
+    mark_price    DOUBLE NOT NULL
+);
+"""
+
 
 class FlintStore:
     """Thread-safe DuckDB store.
@@ -294,6 +306,7 @@ class FlintStore:
         self._conn.execute(_CREATE_PAPER_EQUITY_HISTORY)
         self._conn.execute(_CREATE_PAPER_TRADES)
         self._conn.execute(_CREATE_PAPER_POSITIONS)
+        self._conn.execute(_CREATE_PAPER_FUNDING_PAYMENTS)
 
     # -- candles ---------------------------------------------------------------
 

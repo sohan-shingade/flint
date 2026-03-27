@@ -171,6 +171,27 @@ class PaperSessionStore:
                  "initial_capital": r[3], "status": r[4], "started_at": r[5]}
                 for r in rows]
 
+    def save_funding_payment(self, session_id: str, ts: int, market: str,
+                             rate: float, payment: float, position_size: float,
+                             mark_price: float) -> None:
+        with self._store._lock:
+            self._store._conn.execute(
+                "INSERT INTO paper_funding_payments "
+                "(session_id, ts, market, rate, payment, position_size, mark_price) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [session_id, ts, market, rate, payment, position_size, mark_price],
+            )
+
+    def get_funding_payments(self, session_id: str) -> list:
+        with self._store._lock:
+            rows = self._store._conn.execute(
+                "SELECT ts, market, rate, payment, position_size, mark_price "
+                "FROM paper_funding_payments WHERE session_id = ? ORDER BY ts",
+                [session_id],
+            ).fetchall()
+        return [{"ts": r[0], "market": r[1], "rate": r[2], "payment": r[3],
+                 "position_size": r[4], "mark_price": r[5]} for r in rows]
+
     def list_all_sessions(self) -> List[dict]:
         with self._store._lock:
             rows = self._store._conn.execute(

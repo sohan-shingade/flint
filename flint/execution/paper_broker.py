@@ -115,6 +115,46 @@ class PaperBroker:
         else:
             return entry + (collateral - mmr * notional) / size if size > 0 else 0
 
+    def apply_funding(self, market: str, rate: float, mark_price: float) -> float:
+        """Apply funding rate to an open position.
+
+        Positive rate = longs pay shorts.
+        Negative rate = shorts pay longs.
+        Returns the payment amount (positive = paid, negative = received).
+        """
+        pos = self.positions.get(market)
+        if pos is None:
+            return 0.0
+
+        notional = pos["size"] * mark_price
+        payment = notional * rate
+
+        if pos["side"] == "long":
+            self.cash -= payment
+            self.total_funding += payment
+        else:
+            self.cash += payment
+            self.total_funding -= payment
+            payment = -payment
+
+        return payment
+
+    def close_all_positions(self, mark_prices: dict) -> None:
+        """Force-close all positions at mark prices. Used by liquidation."""
+        import time as _time
+        for market in list(self.positions.keys()):
+            pos = self.positions[market]
+            mark = mark_prices.get(market, pos["entry_price"])
+            if pos["side"] == "long":
+                pnl = (mark - pos["entry_price"]) * pos["size"]
+            else:
+                pnl = (pos["entry_price"] - mark) * pos["size"]
+            self.cash += pnl
+            self.closed_trades.append({
+                **pos, "exit_price": mark, "exit_ts": int(_time.time()), "pnl": pnl,
+            })
+        self.positions.clear()
+
     def submit_order(self, order: Order) -> str:
         """Accept an order for processing."""
         # Margin check: warn if insufficient margin for new positions
