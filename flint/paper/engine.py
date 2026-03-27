@@ -272,6 +272,7 @@ class PaperTradingEngine:
         initial_capital: float = 10_000.0,
         replay_start_ts: int = 0,
         risk_config: Optional[dict] = None,
+        capital_allocation: Optional[dict] = None,
     ) -> str:
         """Deploy a strategy with replay-forward execution."""
         session_id = uuid.uuid4().hex[:8]
@@ -335,7 +336,7 @@ class PaperTradingEngine:
                 ss.save_trades(session_id, replay_trades)
 
         # Set up live session
-        broker = PaperBroker(initial_capital=final_cash)
+        broker = PaperBroker(initial_capital=final_cash, capital_allocation=capital_allocation)
         # RiskGuard.check() reads broker.equity_history for peak tracking
         broker.equity_history = [final_cash]
         ctx = LiveContext(broker, store=self.store, resolution_s=resolution_s, session_id=session_id)
@@ -549,6 +550,12 @@ class PaperTradingEngine:
                 if ss and equity_buffer:
                     ss.save_equity_snapshots(session.session_id, equity_buffer)
                     equity_buffer.clear()
+
+                # Process pending venue transfers
+                if hasattr(session.broker, '_allocator') and session.broker._allocator:
+                    import time as _time
+                    session.broker._allocator.process_arrivals(int(_time.time()))
+                    session.broker.cash = session.broker._allocator.total_cash
 
                 # Update mark prices from ticker (between candles)
                 ticker = getattr(self, 'price_ticker', None)

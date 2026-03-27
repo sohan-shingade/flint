@@ -237,6 +237,7 @@ def deploy_strategy(body: dict, request: Request):
     replay_start_ts = body.get("replay_start_ts", 0)
     risk_config = body.get("risk_config", {})
     resolution_s = body.get("resolution_s", 3600)
+    capital_allocation = body.get("capital_allocation")
 
     from ...strategy.loader import load_user_strategy, StrategyLoadError
     try:
@@ -254,6 +255,7 @@ def deploy_strategy(body: dict, request: Request):
             initial_capital=initial_capital,
             replay_start_ts=replay_start_ts,
             risk_config=risk_config,
+            capital_allocation=capital_allocation,
         )
     except Exception as e:
         raise HTTPException(500, f"Deploy failed: {e}")

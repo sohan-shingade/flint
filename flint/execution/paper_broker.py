@@ -28,6 +28,7 @@ class PaperBroker:
         fee_model: Optional[FeeModel] = None,
         venue: str = "drift",
         latency_enabled: bool = False,
+        capital_allocation: Optional[dict] = None,
     ):
         self.initial_capital = initial_capital
         self.cash = initial_capital
@@ -51,6 +52,13 @@ class PaperBroker:
             self._venue_config = get_venue_config(venue)
         except Exception:
             pass
+
+        # Multi-venue capital allocation
+        self._allocator = None
+        if capital_allocation:
+            from .capital import VenueAllocator
+            self._allocator = VenueAllocator(capital_allocation)
+            self.cash = self._allocator.total_cash
 
         # Fill model selection
         if fill_model:
@@ -115,6 +123,18 @@ class PaperBroker:
             return True  # no margin enforcement without config
         required = size * price * self._venue_config.initial_margin
         return self.free_margin >= required
+
+    def venue_balance(self, venue: str) -> float:
+        """Get available cash on a specific venue."""
+        if self._allocator:
+            return self._allocator.available(venue)
+        return self.cash
+
+    def venue_balances(self) -> dict:
+        """Get all venue balances."""
+        if self._allocator:
+            return dict(self._allocator._balances)
+        return {self.venue: self.cash}
 
     def get_liquidation_price(self, market: str) -> float:
         """Compute liquidation price for a position."""
@@ -277,6 +297,7 @@ class PaperBroker:
         if pos is None:
             self.positions[market] = {
                 "market": market,
+                "venue": fill.venue if fill.venue != "default" else self.venue,
                 "side": fill.side.value,
                 "size": fill.size,
                 "entry_price": fill.price,

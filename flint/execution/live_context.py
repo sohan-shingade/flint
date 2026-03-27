@@ -173,6 +173,43 @@ class LiveContext(ExecutionContext):
         except Exception:
             return []
 
+    def venue_balance(self, venue: str) -> float:
+        """Get available cash on a specific venue."""
+        if hasattr(self._broker, '_allocator') and self._broker._allocator:
+            return self._broker._allocator.available(venue)
+        return self._broker.cash
+
+    def venue_balances(self) -> dict:
+        """Get all venue balances."""
+        if hasattr(self._broker, '_allocator') and self._broker._allocator:
+            return dict(self._broker._allocator._balances)
+        return {"default": self._broker.cash}
+
+    def transfer(self, from_venue: str, to_venue: str, amount: float) -> bool:
+        """Initiate a capital transfer between venues. Returns True if successful."""
+        if not hasattr(self._broker, '_allocator') or not self._broker._allocator:
+            return False
+        import time as _time
+        t = self._broker._allocator.transfer(from_venue, to_venue, amount, int(_time.time()))
+        if t:
+            self._broker.cash = self._broker._allocator.total_cash
+        return t is not None
+
+    def venue_positions(self, venue: str) -> list:
+        """Get positions for a specific venue."""
+        return [
+            PositionInfo(
+                market=p["market"],
+                side=Side.LONG if p["side"] == "long" else Side.SHORT,
+                size=p["size"],
+                entry_price=p["entry_price"],
+                unrealized_pnl=p.get("unrealized_pnl", 0),
+                entry_ts=p.get("entry_ts", 0),
+            )
+            for p in self._broker.positions.values()
+            if p.get("venue", self._broker.venue) == venue
+        ]
+
     def log(self, message):
         """Log a message from the strategy."""
         _logger.info("[%s] %s", self._session_id, message)
