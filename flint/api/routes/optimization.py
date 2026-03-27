@@ -10,6 +10,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ...backtest.engine import BacktestEngine
 from ...optimization.optimizer import StrategyOptimizer
 from ...store import FlintStore
 from ...strategy.loader import load_user_strategy
@@ -59,6 +60,22 @@ class OptimizeRequest(BaseModel):
     impact_coefficient: Optional[float] = Field(default=None, ge=0, le=1.0)
     margin_tracking: bool = False
     capital_allocation: Optional[Dict[str, float]] = None
+    markets: Optional[list] = None  # Additional markets for cross-market optimization
+    multi_market_objective: str = "min_sharpe"  # "min_sharpe" or "avg_sharpe"
+
+
+class WalkForwardRequest(BaseModel):
+    code: str
+    market: str = "SOL-PERP"
+    resolution_s: int = 3600
+    start_ts: int
+    end_ts: int
+    initial_capital: float = Field(default=10_000.0, gt=0, le=1e12)
+    fee_rate: float = Field(default=0.0005, ge=0, le=0.5)
+    metric: str = "sharpe_ratio"
+    n_windows: int = Field(default=5, ge=2, le=20)
+    train_pct: float = Field(default=0.7, ge=0.3, le=0.9)
+    trials_per_window: int = Field(default=30, ge=5, le=200)
 
 
 @router.post("/run")
@@ -216,6 +233,88 @@ def run_optimization(req: OptimizeRequest, request: Request):
 
         except Exception as e:
             logger.exception("Optimization %s failed", run_id)
+            _set(run_id, status="failed", result={"error": f"{type(e).__name__}: {e}"})
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return {"id": run_id, "status": "running"}
+
+
+@router.post("/walk-forward")
+def run_walk_forward_analysis(req: WalkForwardRequest, request: Request):
+    """Run walk-forward analysis to detect overfitting."""
+    store = request.app.state.store if hasattr(request.app.state, "store") else None
+
+    run_id = str(uuid.uuid4())[:8]
+    _set(run_id, status="running", progress={"phase": "init", "pct": 0,
+         "detail": "Loading strategy...", "started_at": time.time()})
+
+    def _run():
+        try:
+            strategy_cls_ref = load_user_strategy(req.code)
+            strategy_cls = type(strategy_cls_ref)
+
+            _set(run_id, progress={"phase": "data", "pct": 10, "detail": "Loading candles..."})
+
+            candles = []
+            if store is not None:
+                candles = store.query_candles(req.market, req.resolution_s, req.start_ts, req.end_ts)
+
+            if not candles or len(candles) < 50:
+                _set(run_id, status="failed",
+                     result={"error": f"Not enough data: {len(candles)} candles (need 50+)"})
+                return
+
+            _set(run_id, progress={"phase": "walk_forward", "pct": 20,
+                 "detail": f"Running {req.n_windows}-window walk-forward on {len(candles)} candles..."})
+
+            from ...optimization.walk_forward import run_walk_forward as _run_wf
+            wf_result = _run_wf(
+                strategy_cls=strategy_cls,
+                candles=candles,
+                n_windows=req.n_windows,
+                train_pct=req.train_pct,
+                metric=req.metric,
+                trials_per_window=req.trials_per_window,
+                initial_capital=req.initial_capital,
+                fee_rate=req.fee_rate,
+            )
+
+            windows_out = []
+            for w in wf_result.windows:
+                windows_out.append({
+                    "window_idx": w.window_idx,
+                    "train_start_ts": w.train_start_ts,
+                    "train_end_ts": w.train_end_ts,
+                    "test_start_ts": w.test_start_ts,
+                    "test_end_ts": w.test_end_ts,
+                    "best_params": w.best_params,
+                    "in_sample_sharpe": round(w.in_sample_sharpe, 4),
+                    "in_sample_pnl": round(w.in_sample_pnl, 2),
+                    "out_of_sample_sharpe": round(w.out_of_sample_sharpe, 4),
+                    "out_of_sample_pnl": round(w.out_of_sample_pnl, 2),
+                    "out_of_sample_trades": w.out_of_sample_trades,
+                })
+
+            _set(run_id, status="complete", progress={"phase": "done", "pct": 100,
+                 "detail": f"OOS Sharpe: {wf_result.avg_oos_sharpe:.2f}, Overfit ratio: {wf_result.overfitting_ratio:.2f}"
+            }, result={
+                "strategy_name": wf_result.strategy_name,
+                "metric": wf_result.metric,
+                "n_windows": wf_result.n_windows,
+                "windows": windows_out,
+                "avg_is_sharpe": round(wf_result.avg_is_sharpe, 4),
+                "avg_oos_sharpe": round(wf_result.avg_oos_sharpe, 4),
+                "avg_is_pnl": round(wf_result.avg_is_pnl, 2),
+                "avg_oos_pnl": round(wf_result.avg_oos_pnl, 2),
+                "overfitting_ratio": round(wf_result.overfitting_ratio, 4),
+                "parameter_stability": wf_result.parameter_stability,
+                "market": req.market,
+                "candles": len(candles),
+            })
+
+        except Exception as e:
+            logger.exception("Walk-forward %s failed", run_id)
             _set(run_id, status="failed", result={"error": f"{type(e).__name__}: {e}"})
 
     thread = threading.Thread(target=_run, daemon=True)
