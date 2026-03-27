@@ -155,3 +155,86 @@ def test_collector_config():
     resp = client.get("/api/v1/collector/config")
     assert resp.status_code == 200
     assert "markets" in resp.json()
+
+
+def test_custom_code_no_default_params():
+    """Bug fix: custom code strategies should NOT receive default params from built-in strategy names."""
+    code = '''
+from flint.strategy import Strategy
+from flint.models import Candle, Signal
+from typing import List, Optional, Dict
+
+class SimpleStrategy(Strategy):
+    def __init__(self):
+        self._count = 0
+
+    @property
+    def name(self) -> str:
+        return "Simple"
+
+    def reset(self) -> None:
+        self._count = 0
+
+    def on_candle(self, candle, history, ctx=None):
+        return Signal.HOLD
+'''
+    r = client.post("/api/v1/backtest/run", json={
+        "code": code,
+        "market": "SOL-PERP",
+        "start_ts": 1709251200,
+        "end_ts": 1709337600,
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "running"
+
+    import time
+    result = {}
+    for _ in range(10):
+        time.sleep(1)
+        r2 = client.get(f"/api/v1/backtest/{data['id']}/results")
+        if r2.status_code == 200:
+            result = r2.json()
+            if result["status"] in ("complete", "failed"):
+                break
+
+    if result.get("status") == "failed":
+        error = result.get("results", {}).get("error", "")
+        assert "unexpected keyword argument" not in error, \
+            f"Default params leaked into custom code strategy: {error}"
+
+
+def test_results_unknown_id_returns_404():
+    """Results endpoint should return 404 for unknown IDs, not 500."""
+    r = client.get("/api/v1/backtest/nonexistent-id/results")
+    assert r.status_code == 404
+
+
+def test_results_always_returns_json():
+    """Results endpoint must always return valid JSON, never empty body or 500."""
+    code = '''
+from flint.strategy import Strategy
+from flint.models import Candle, Signal
+
+class HoldStrategy(Strategy):
+    @property
+    def name(self): return "Hold"
+    def reset(self): pass
+    def on_candle(self, candle, history, ctx=None): return Signal.HOLD
+'''
+    r = client.post("/api/v1/backtest/run", json={
+        "code": code,
+        "strategy": "custom",
+        "market": "SOL-PERP",
+        "start_ts": 1709251200,
+        "end_ts": 1709337600,
+    })
+    assert r.status_code == 200
+    run_id = r.json()["id"]
+
+    r2 = client.get(f"/api/v1/backtest/{run_id}/results")
+    assert r2.status_code == 200
+    data = r2.json()
+    assert "status" in data
+    assert data["status"] in ("running", "complete", "failed")
+    assert "progress" in data

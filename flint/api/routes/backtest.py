@@ -259,7 +259,7 @@ def run_backtest(req: BacktestRequest, request: Request):
 
             extra_candles: Dict[str, List[Candle]] = {}
 
-            params = req.params or _DEFAULTS.get(req.strategy, {})
+            params = req.params or ({} if req.code else _DEFAULTS.get(req.strategy, {}))
             strategy = _build_strategy(req.strategy, params, req.code)
             if strategy is None:
                 _set_status(run_id, "failed")
@@ -598,20 +598,37 @@ def get_results(run_id: str):
             raise HTTPException(404, "Backtest not found")
         status = _status[run_id]
         progress = dict(_progress.get(run_id, {}))
-        result = _results.get(run_id)
+        # Deep-copy result inside the lock to avoid race conditions
+        raw_result = _results.get(run_id)
+        result = dict(raw_result) if isinstance(raw_result, dict) else raw_result
 
-    elapsed = time.time() - progress.get("started_at", time.time())
-    progress_out = {
-        "phase": progress.get("phase", "init"),
-        "pct": progress.get("pct", 0),
-        "detail": progress.get("detail", ""),
-        "elapsed_s": round(elapsed, 1),
-        "candles": progress.get("candles", 0),
-    }
+    try:
+        elapsed = time.time() - progress.get("started_at", time.time())
+        progress_out = {
+            "phase": progress.get("phase", "init"),
+            "pct": progress.get("pct", 0),
+            "detail": progress.get("detail", ""),
+            "elapsed_s": round(elapsed, 1),
+            "candles": progress.get("candles", 0),
+        }
 
-    if status == "running":
-        return {"id": run_id, "status": "running", "results": None, "progress": progress_out}
-    return {"id": run_id, "status": status, "results": result, "progress": progress_out}
+        # Detect hung backtests (stuck in "running" beyond timeout + buffer)
+        if status == "running" and elapsed > _MAX_BACKTEST_SECONDS + 60:
+            _set_status(run_id, "failed")
+            _set_result(run_id, {"error": "Backtest exceeded maximum runtime"})
+            return {"id": run_id, "status": "failed",
+                    "results": {"error": "Backtest exceeded maximum runtime"},
+                    "progress": progress_out}
+
+        if status == "running":
+            return {"id": run_id, "status": "running", "results": None, "progress": progress_out}
+        return {"id": run_id, "status": status, "results": result, "progress": progress_out}
+    except Exception as e:
+        import logging
+        logging.getLogger("flint.backtest").exception("Error serializing results for %s", run_id)
+        return {"id": run_id, "status": "error",
+                "results": {"error": f"Serialization failed: {type(e).__name__}: {e}"},
+                "progress": {}}
 
 
 @router.get("/compare")
