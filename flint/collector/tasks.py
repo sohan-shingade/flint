@@ -50,7 +50,7 @@ SPOT_WITH_CANDLES = {
 class CollectorConfig:
     markets: List[str] = field(default_factory=lambda: ["SOL-PERP", "BTC-PERP", "ETH-PERP"])
     candle_backfill_days: int = 90
-    candle_interval_s: int = 3600
+    candle_interval_s: int = 300  # 5 min — check for new hourly candles frequently
     funding_interval_s: int = 3600
     orderbook_interval_s: int = 300
     oracle_interval_s: int = 60

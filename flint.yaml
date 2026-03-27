@@ -19,7 +19,7 @@ collector:
   oracle_interval_s: 60
   funding_interval_s: 3600
   orderbook_interval_s: 300
-  candle_interval_s: 3600
+  candle_interval_s: 300
 
 risk:
   max_drawdown_pct: 0.20
