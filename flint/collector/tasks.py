@@ -102,6 +102,26 @@ def collect_orderbook(store: FlintStore, market: str) -> int:
         provider.close()
 
 
+def collect_candles_latest(store: FlintStore, market: str) -> int:
+    """Fetch the latest few hours of candles to keep the DB current.
+
+    Called periodically by the collector to ensure paper trading
+    has fresh candle data to process.
+    """
+    from ..providers.drift_candles import DriftCandleProvider
+    end_ts = int(time.time())
+    start_ts = end_ts - 3 * 3600  # last 3 hours (overlap is fine, upsert deduplicates)
+    try:
+        provider = DriftCandleProvider()
+        candles = provider.fetch_candles(market, 3600, start_ts, end_ts)
+        provider.close()
+        if candles:
+            return store.upsert_candles(candles)
+        return 0
+    except Exception:
+        return 0
+
+
 def collect_candles_backfill(store: FlintStore, market: str, days: int = 90) -> int:
     end_ts = int(time.time())
     start_ts = end_ts - (days * 86400)

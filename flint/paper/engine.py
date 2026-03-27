@@ -67,6 +67,29 @@ class PaperTradingEngine:
         self.store = store
         self.sessions: Dict[str, PaperSession] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
+        self._loop: Optional[asyncio.AbstractEventLoop] = None  # set by lifespan
+
+    def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Store reference to the main event loop for scheduling tasks from sync threads."""
+        self._loop = loop
+
+    def _schedule_async_task(self, coro) -> Optional[asyncio.Task]:
+        """Schedule an async task on the event loop, works from both sync and async contexts."""
+        # Try 1: We're in the event loop thread
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(coro)
+            logger.info("Scheduled async task via create_task (in event loop thread)")
+            return task
+        except RuntimeError:
+            pass
+        # Try 2: We're in a threadpool thread, use the stored loop reference
+        if self._loop is not None and self._loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            logger.info("Scheduled async task via run_coroutine_threadsafe (from threadpool)")
+            return future  # type: ignore
+        logger.warning("No event loop available (self._loop=%s) — async task not scheduled", self._loop)
+        return None
 
     def start_session(
         self,
@@ -91,14 +114,10 @@ class PaperTradingEngine:
         strategy.reset()
         self.sessions[session_id] = session
 
-        # Launch the async loop if there's a running event loop
-        try:
-            loop = asyncio.get_running_loop()
-            task = loop.create_task(self._run_session(session))
+        # Launch the async loop
+        task = self._schedule_async_task(self._run_session(session))
+        if task is not None:
             self._tasks[session_id] = task
-        except RuntimeError:
-            # No running event loop (e.g., in tests) — session created but not running
-            pass
         logger.info("Paper session %s started: %s on %s", session_id, strategy.name, market)
         return session_id
 
@@ -246,13 +265,10 @@ class PaperTradingEngine:
         self.sessions[session_id] = session
         ss.update_status(session_id, "live", live_start_ts=int(time.time()))
 
-        # Launch async loop
-        try:
-            loop = asyncio.get_running_loop()
-            task = loop.create_task(self._run_live_session(session))
+        # Launch async live loop
+        task = self._schedule_async_task(self._run_live_session(session))
+        if task is not None:
             self._tasks[session_id] = task
-        except RuntimeError:
-            pass
 
         logger.info("Deployed session %s: %s on %s (replayed %d candles)",
                      session_id, strategy.name, market, len(candles))
@@ -322,10 +338,13 @@ class PaperTradingEngine:
 
     async def _run_live_session(self, session: PaperSession) -> None:
         """Live loop with risk guard checks and persistence."""
+        logger.info("Live loop STARTED for session %s (%s), last_candle_ts=%d",
+                     session.session_id, session.market, session.last_candle_ts)
         history: List[Candle] = []
 
         try:
             warm_up = self.store.query_candles(session.market, session.resolution_s)
+            logger.info("Warm-up loaded %d candles for %s", len(warm_up) if warm_up else 0, session.market)
             if warm_up:
                 history = warm_up[-200:]
         except Exception as e:

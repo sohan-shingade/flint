@@ -13,6 +13,7 @@ from .tasks import (
     collect_oracle_prices,
     collect_orderbook,
     collect_candles_backfill,
+    collect_candles_latest,
 )
 
 logger = logging.getLogger("flint.collector")
@@ -132,6 +133,7 @@ class CollectorService:
 
         last_oracle = 0.0
         last_orderbook = 0.0
+        last_candles = 0.0
 
         while self._running:
             now = time.time()
@@ -146,6 +148,11 @@ class CollectorService:
                         market, "orderbook",
                         lambda m=market: collect_orderbook(self.store, m),
                     )
+                if now - last_candles >= self.config.candle_interval_s:
+                    await self._run_task(
+                        market, "candles",
+                        lambda m=market: collect_candles_latest(self.store, m),
+                    )
                 # Funding rates are fetched when market data is downloaded
                 # via _download_funding_all_venues(), not by the collector.
 
@@ -153,6 +160,8 @@ class CollectorService:
                 last_oracle = now
             if now - last_orderbook >= self.config.orderbook_interval_s:
                 last_orderbook = now
+            if now - last_candles >= self.config.candle_interval_s:
+                last_candles = now
             await asyncio.sleep(10)
 
     def stop(self) -> None:
