@@ -156,6 +156,24 @@ async def paper_status(session_id: str, request: Request):
     status = engine.get_status(session_id)
     if status is None:
         raise HTTPException(404, "Session not found")
+
+    session = engine.sessions.get(session_id)
+    if session and status:
+        status["margin"] = {
+            "leverage": round(session.broker.leverage, 2),
+            "margin_used": round(session.broker.margin_used, 2),
+            "free_margin": round(session.broker.free_margin, 2),
+            "margin_ratio": round(session.broker.margin_ratio, 4),
+            "liquidation_prices": {
+                m: round(session.broker.get_liquidation_price(m), 2)
+                for m in session.broker.positions
+            },
+        }
+        status["funding_total"] = round(session.broker.total_funding, 4)
+
+        # Include equity curve from session's in-memory history
+        status["equity_curve"] = session.equity_history[-200:]  # last 200 points
+
     return status
 
 
@@ -249,6 +267,18 @@ async def paper_trades(session_id: str, request: Request):
     if engine is None:
         return {"trades": []}
     return {"trades": engine.get_trades(session_id)}
+
+
+@router.get("/{session_id}/equity-history")
+def get_equity_history(session_id: str, request: Request):
+    """Get full equity curve for a session from DuckDB."""
+    store = request.app.state.store if hasattr(request.app.state, "store") else None
+    if store is None:
+        return {"equity_curve": []}
+    from ...paper.session_store import PaperSessionStore
+    ss = PaperSessionStore(store)
+    history = ss.get_equity_history(session_id)
+    return {"equity_curve": history}
 
 
 @router.post("/{session_id}/risk")

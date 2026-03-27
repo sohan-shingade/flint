@@ -353,3 +353,12 @@ def test_paper_portfolio_endpoint():
     data = r.json()
     assert "total_equity" in data
     assert "per_strategy" in data
+
+
+def test_paper_equity_history_endpoint():
+    """Equity history endpoint should return data."""
+    r = client.get("/api/v1/paper/unknown-session/equity-history")
+    assert r.status_code == 200
+    data = r.json()
+    assert "equity_curve" in data
+    assert isinstance(data["equity_curve"], list)
