@@ -346,7 +346,7 @@ class PaperTradingEngine:
             warm_up = self.store.query_candles(session.market, session.resolution_s)
             logger.info("Warm-up loaded %d candles for %s", len(warm_up) if warm_up else 0, session.market)
             if warm_up:
-                history = warm_up[-200:]
+                history = warm_up[-500:]
         except Exception as e:
             logger.warning("Failed to load warm-up candles: %s", e)
 
@@ -362,6 +362,8 @@ class PaperTradingEngine:
 
                 for candle in candles:
                     history.append(candle)
+                    if len(history) > 500:
+                        history = history[-500:]
                     session.last_candle_ts = candle.ts
                     session.ctx.set_candle(candle)
                     session.broker.process_candle(candle)
