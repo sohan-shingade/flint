@@ -130,6 +130,10 @@ class PaperTradingEngine:
         task = self._tasks.get(session_id)
         if task:
             task.cancel()
+        # Persist status to DB so it doesn't resume on restart
+        ss = getattr(session, "session_store", None)
+        if ss:
+            ss.update_status(session_id, "stopped", stopped_at=int(time.time()))
         logger.info("Paper session %s stopped", session_id)
         return True
 
@@ -148,6 +152,10 @@ class PaperTradingEngine:
         task = self._tasks.get(session_id)
         if task:
             task.cancel()
+        # Persist status to DB so it doesn't resume on restart
+        ss = getattr(session, "session_store", None)
+        if ss:
+            ss.update_status(session_id, "killed", stopped_at=int(time.time()))
         logger.info("Paper session %s killed", session_id)
         return True
 
