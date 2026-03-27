@@ -7,6 +7,7 @@ import {
   stopSession,
   killSession,
 } from '../hooks/usePaperTrading'
+import EquityCurve from '../components/EquityCurve'
 
 /* ── helpers ─────────────────────────────────────────────── */
 
@@ -112,6 +113,17 @@ function PortfolioView({ portfolio }: PortfolioViewProps) {
 
   return (
     <div className="space-y-6">
+      {/* total account value hero */}
+      <div className="bg-surface/60 border border-border p-6 text-center">
+        <div className="text-[9px] text-ghost/60 tracking-[0.25em] mb-2">TOTAL ACCOUNT VALUE</div>
+        <div className="text-4xl font-bold text-white/90 tabular-nums">
+          {fmtUsd(portfolio.total_equity)}
+        </div>
+        <div className={`text-lg font-medium tabular-nums mt-1 ${pnlPositive ? 'text-phosphor' : 'text-loss'}`}>
+          {pnlPositive ? '+' : ''}{fmtUsd(portfolio.total_pnl)}
+        </div>
+      </div>
+
       {/* metrics row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-border">
         {[
@@ -155,6 +167,17 @@ function PortfolioView({ portfolio }: PortfolioViewProps) {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* portfolio equity chart */}
+      <div className="border border-border bg-surface/60 p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="w-2 h-2 bg-amber/60" />
+          <span className="text-[10px] text-ghost tracking-[0.2em]">PORTFOLIO.EQUITY</span>
+        </div>
+        <div className="text-[10px] text-ghost/40 tracking-wider text-center py-8">
+          Equity chart updates as strategies trade
+        </div>
       </div>
 
       {/* prompt */}
@@ -218,14 +241,25 @@ function SessionDetail({ sessionId, onStop, onKill }: {
   const pnlPositive = (status.pnl ?? 0) >= 0
   const upnlPositive = (status.unrealized_pnl ?? 0) >= 0
 
-  const metrics = [
-    { label: 'EQUITY', value: fmtUsd(status.equity), accent: undefined as boolean | undefined },
+  const metrics: { label: string; value: string; accent: boolean | undefined }[] = [
+    { label: 'EQUITY', value: fmtUsd(status.equity), accent: undefined },
     { label: 'REALIZED.PNL', value: (pnlPositive ? '+' : '') + fmtUsd(status.pnl), accent: pnlPositive },
     { label: 'UNREALIZED.PNL', value: (upnlPositive ? '+' : '') + fmtUsd(status.unrealized_pnl), accent: upnlPositive },
     { label: 'TOTAL.TRADES', value: String(status.total_trades ?? 0), accent: undefined },
     { label: 'TOTAL.FEES', value: fmtUsd(status.total_fees), accent: undefined },
     { label: 'STATUS', value: statusLabel(status.status ?? status.phase), accent: undefined },
   ]
+
+  // Append margin metrics when available
+  if ((status as any).leverage != null) {
+    metrics.push({ label: 'LEVERAGE', value: `${fmt((status as any).leverage, 1)}x`, accent: undefined })
+  }
+  if ((status as any).free_margin != null) {
+    metrics.push({ label: 'FREE.MARGIN', value: fmtUsd((status as any).free_margin), accent: undefined })
+  }
+  if ((status as any).margin_used != null) {
+    metrics.push({ label: 'MARGIN.USED', value: fmtUsd((status as any).margin_used), accent: undefined })
+  }
 
   async function handleStop() {
     if (confirming !== 'stop') { setConfirming('stop'); return }
@@ -310,6 +344,20 @@ function SessionDetail({ sessionId, onStop, onKill }: {
           </div>
         ))}
       </div>
+
+      {/* equity curve */}
+      {status.equity_curve && status.equity_curve.length > 0 && (
+        <div className="border border-border bg-surface/60 p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-2 h-2 bg-amber/60" />
+            <span className="text-[10px] text-ghost tracking-[0.2em]">EQUITY.CURVE</span>
+          </div>
+          <EquityCurve
+            equity={status.equity_curve.map((e: any) => [e.ts, e.equity] as [number, number])}
+            height={250}
+          />
+        </div>
+      )}
 
       {/* positions */}
       {status.positions && status.positions.length > 0 && (
