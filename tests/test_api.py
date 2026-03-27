@@ -262,3 +262,29 @@ class HoldStrategy(Strategy):
     assert "status" in data
     assert data["status"] in ("running", "complete", "failed")
     assert "progress" in data
+
+
+def test_aggregate_backtest_endpoint():
+    """Multi-market aggregate should accept the request and return running status."""
+    code = '''
+from flint.strategy import Strategy
+from flint.models import Candle, Signal
+
+class HoldStrategy(Strategy):
+    @property
+    def name(self): return "Hold"
+    def reset(self): pass
+    def on_candle(self, candle, history, ctx=None): return Signal.HOLD
+'''
+    r = client.post("/api/v1/backtest/run", json={
+        "code": code,
+        "strategy": "custom",
+        "market": "SOL-PERP",
+        "markets": ["BTC-PERP", "ETH-PERP"],
+        "aggregate": True,
+        "start_ts": 1709251200,
+        "end_ts": 1709337600,
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert "id" in data

@@ -104,6 +104,7 @@ class BacktestRequest(BaseModel):
     latency_enabled: bool = True
     latency_seed: Optional[int] = None
     impact_coefficient: Optional[float] = Field(default=None, ge=0, le=1.0)
+    aggregate: bool = False  # Run independently on each market, return per-market + summary
 
 
 def _build_strategy(name: str, params: Dict, code: str = None):
@@ -271,6 +272,52 @@ def run_backtest(req: BacktestRequest, request: Request):
 
             start_ts = req.start_ts
             end_ts = req.end_ts
+
+            # Aggregate mode: run independently on each market
+            if req.aggregate and req.markets:
+                all_markets = [req.market] + [m for m in req.markets if m != req.market]
+                per_market = {}
+                sharpes = []
+
+                for idx, mkt in enumerate(all_markets):
+                    pct = 15 + int(70 * idx / len(all_markets))
+                    _set_progress(run_id, phase="backtest", pct=pct,
+                                  detail=f"Running {strategy.name} on {mkt} ({idx+1}/{len(all_markets)})...")
+
+                    mkt_candles = store.query_candles(mkt, req.resolution_s, start_ts, end_ts) if store else []
+                    if not mkt_candles:
+                        per_market[mkt] = {"error": "No data available"}
+                        continue
+
+                    strategy.reset()
+                    eng = BacktestEngine(strategy, req.initial_capital, req.fee_rate)
+                    res = eng.run(mkt_candles)
+                    mkt_metrics = {
+                        "total_pnl": round(res.total_pnl, 4),
+                        "total_trades": res.total_trades,
+                        "win_rate": round(res.win_rate, 4),
+                        "sharpe_ratio": round(res.sharpe_ratio, 4),
+                        "max_drawdown": round(res.max_drawdown, 4),
+                    }
+                    per_market[mkt] = mkt_metrics
+                    sharpes.append(res.sharpe_ratio)
+
+                aggregate_out = {}
+                if sharpes:
+                    aggregate_out = {
+                        "min_sharpe": round(min(sharpes), 4),
+                        "max_sharpe": round(max(sharpes), 4),
+                        "avg_sharpe": round(sum(sharpes) / len(sharpes), 4),
+                        "n_markets": len(sharpes),
+                    }
+
+                _set_result(run_id, {
+                    "strategy_name": strategy.name,
+                    "per_market": per_market,
+                    "aggregate": aggregate_out,
+                })
+                _set_status(run_id, "complete")
+                return
 
             # Step 1: Check local DB
             candles = []
