@@ -6,6 +6,7 @@ import BacktestLab from './pages/BacktestLab'
 import DataExplorer from './pages/DataExplorer'
 import Docs from './pages/Docs'
 import MevDashboard from './pages/MevDashboard'
+import PaperTrading from './pages/PaperTrading'
 
 const navItems = [
   { to: '/', label: 'HOME', key: '1' },
@@ -13,6 +14,7 @@ const navItems = [
   { to: '/data', label: 'DATA', key: '3' },
   { to: '/docs', label: 'DOCS', key: '4' },
   { to: '/mev', label: 'MEV', key: '5' },
+  { to: '/paper', label: 'PAPER', key: '6' },
 ]
 
 export default function App() {
@@ -90,6 +92,7 @@ export default function App() {
           <Route path="/data" element={<DataExplorer />} />
           <Route path="/docs" element={<Docs />} />
           <Route path="/mev" element={<MevDashboard />} />
+          <Route path="/paper" element={<PaperTrading />} />
         </Routes>
       </main>
 
