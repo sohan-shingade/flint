@@ -27,10 +27,10 @@ class PaperBroker:
         fill_model: Optional[FillModel] = None,
         fee_model: Optional[FeeModel] = None,
         venue: str = "drift",
+        latency_enabled: bool = False,
     ):
         self.initial_capital = initial_capital
         self.cash = initial_capital
-        self.fill_model = fill_model or SlippageFill(slippage_bps=5.0)
         self.fee_model = fee_model or DriftFeeModel()
         self.venue = venue
 
@@ -51,6 +51,19 @@ class PaperBroker:
             self._venue_config = get_venue_config(venue)
         except Exception:
             pass
+
+        # Fill model selection
+        if fill_model:
+            self.fill_model = fill_model
+        elif latency_enabled and self._venue_config:
+            from .fill_models import FillPipeline
+            self.fill_model = FillPipeline(
+                fallback_bps=5.0,
+                base_latency_s=self._venue_config.base_latency_s,
+                latency_jitter_s=self._venue_config.latency_jitter_s,
+            )
+        else:
+            self.fill_model = SlippageFill(slippage_bps=5.0)
 
     @property
     def equity(self) -> float:
