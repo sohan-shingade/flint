@@ -122,6 +122,15 @@ def run_optimization(req: OptimizeRequest, request: Request):
                 _set(run_id, status="failed", result={"error": "No candle data available"})
                 return
 
+            # Load extra market candles if multi-market optimization requested
+            extra_market_candles = {}
+            if req.markets and store is not None:
+                for mkt in req.markets:
+                    if mkt != req.market:
+                        extra = store.query_candles(mkt, req.resolution_s, req.start_ts, req.end_ts)
+                        if extra:
+                            extra_market_candles[mkt] = extra
+
             # Load market data (same as backtest route for parity)
             funding_rates = []
             orderbook_snapshots = []
@@ -175,6 +184,61 @@ def run_optimization(req: OptimizeRequest, request: Request):
             if req.capital_allocation:
                 from ...execution.capital import VenueAllocator
                 cap_alloc = VenueAllocator(req.capital_allocation)
+
+            if extra_market_candles:
+                # Multi-market: optimize for min/avg sharpe across markets
+                import optuna
+                all_market_candles = {req.market: candles}
+                all_market_candles.update(extra_market_candles)
+
+                param_space = strategy_cls.parameters()
+                if not param_space:
+                    _set(run_id, status="failed",
+                         result={"error": "Strategy has no parameters() for optimization"})
+                    return
+
+                def multi_objective(trial):
+                    params = {}
+                    for name, spec in param_space.items():
+                        if spec["type"] == "int":
+                            params[name] = trial.suggest_int(name, spec["low"], spec["high"])
+                        else:
+                            params[name] = trial.suggest_float(name, spec["low"], spec["high"])
+
+                    sharpes = []
+                    for mkt, mkt_candles in all_market_candles.items():
+                        try:
+                            strat = strategy_cls(**params)
+                        except (TypeError, ValueError):
+                            return float("-inf")
+                        eng = BacktestEngine(strat, req.initial_capital, req.fee_rate)
+                        res = eng.run(mkt_candles)
+                        sharpes.append(res.sharpe_ratio)
+
+                    if req.multi_market_objective == "avg_sharpe":
+                        return sum(sharpes) / len(sharpes)
+                    return min(sharpes)  # default: maximize the worst market
+
+                study = optuna.create_study(direction="maximize")
+                optuna.logging.set_verbosity(optuna.logging.WARNING)
+                study.optimize(multi_objective, n_trials=req.trials)
+
+                best = study.best_trial
+                _set(run_id, status="complete", progress={
+                    "phase": "done", "pct": 100,
+                    "detail": f"Best {req.multi_market_objective}: {best.value:.4f}",
+                }, result={
+                    "best_params": best.params,
+                    "best_value": round(best.value, 4),
+                    "metric": req.multi_market_objective,
+                    "n_trials": len(study.trials),
+                    "trials": [],
+                    "strategy_name": strategy_cls.__name__,
+                    "market": req.market,
+                    "markets": req.markets,
+                    "candles": len(candles),
+                })
+                return
 
             _set(run_id, progress={
                 "phase": "optimize", "pct": 15,
