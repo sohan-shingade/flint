@@ -433,6 +433,19 @@ class PaperTradingEngine:
                     ss.save_equity_snapshots(session.session_id, equity_buffer)
                     equity_buffer.clear()
 
+                # Update mark prices from ticker (between candles)
+                ticker = getattr(self, 'price_ticker', None)
+                if ticker and session.broker.positions:
+                    mark = ticker.get_price(session.market)
+                    if mark is not None:
+                        for market, pos in session.broker.positions.items():
+                            if market == session.market:
+                                pos["mark_price"] = mark
+                                if pos["side"] == "long":
+                                    pos["unrealized_pnl"] = (mark - pos["entry_price"]) * pos["size"]
+                                else:
+                                    pos["unrealized_pnl"] = (pos["entry_price"] - mark) * pos["size"]
+
                 await asyncio.sleep(10)
 
             except asyncio.CancelledError:
