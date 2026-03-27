@@ -2,9 +2,9 @@
 
 ## Problem Statement
 
-The paper trading engine is substantially less realistic than the backtest engine. Strategies that perform well in backtesting behave differently in paper trading because: fills are priced at candle close with no slippage, funding rates are never applied, position state is lost on restart, LiveContext doesn't expose funding/orderbook/OI data that strategies depend on, and candle history goes stale after startup.
+The paper trading engine is substantially less realistic than the backtest engine. Strategies that perform well in backtesting behave differently in paper trading because: fills are priced at candle close with no slippage, funding rates are never applied, position state is lost on restart, LiveContext doesn't expose funding/orderbook/OI data that strategies depend on, candle history goes stale after startup, and multi-venue strategies cannot run at all.
 
-This spec closes every realism gap between backtesting and paper trading. After implementation, paper trading should produce results within 5% of what a real Drift account would see.
+This spec closes every realism gap between backtesting and paper trading. After implementation, paper trading should produce results within 5% of what a real Drift account would see, and multi-venue strategies should work identically to backtesting.
 
 ## Goals
 
@@ -17,12 +17,12 @@ This spec closes every realism gap between backtesting and paper trading. After 
 7. Update position PnL between candles using the price ticker
 8. Add limit order timeouts
 9. Expose margin metrics (leverage, free margin, liquidation prices) through the API
+10. Support multi-venue paper trading with per-venue capital, positions, and transfers
 
 ## Non-Goals
 
-- Multi-venue paper trading (single venue per session is sufficient)
 - WebSocket streaming to the UI (polling is fine for now)
-- Cross-margin simulation (documented limitation, same as Freqtrade)
+- Cross-margin simulation across venues (documented limitation, same as Freqtrade)
 - Real on-chain order execution (that's the live trading feature)
 
 ---
@@ -390,19 +390,177 @@ status_dict["funding"] = {
 
 ---
 
+## 10. Multi-Venue Paper Trading
+
+### What
+
+Support strategies that trade across multiple venues (Drift, Hyperliquid, Binance, etc.) with independent capital pools, per-venue fee/margin configs, and transfer mechanics. The backtest engine already supports this via `(venue, market)` position keys and `VenueAllocator` — paper trading needs to match.
+
+### Current State
+
+PaperBroker positions are keyed by market string only (`Dict[str, dict]`). There is a single `self.cash` balance. The `venue` parameter on order methods is accepted but ignored — all orders route to the same position pool.
+
+BacktestContext uses `(venue, market)` tuple keys, `VenueAllocator` for per-venue balances, and the full transfer system with delays and costs. Multi-venue strategies like `MultiVenueFundingStrategy` use `ctx.get_funding_by_venue()` for cross-venue analysis.
+
+### How
+
+**1. Change PaperBroker position keying from `Dict[str, dict]` to `Dict[tuple, dict]`:**
+
+```python
+# Current:
+self.positions: Dict[str, dict] = {}  # "SOL-PERP" -> position
+
+# New:
+self.positions: Dict[tuple, dict] = {}  # ("drift", "SOL-PERP") -> position
+```
+
+Every method that accesses positions must be updated to use `(venue, market)` keys: `_apply_fill()`, `process_candle()`, `cancel_all()`, equity computation, etc.
+
+Add a `venue` field to each position dict:
+```python
+self.positions[("drift", "SOL-PERP")] = {
+    "market": "SOL-PERP",
+    "venue": "drift",
+    "side": "long",
+    "size": 10.0,
+    "entry_price": 128.50,
+    ...
+}
+```
+
+For backward compatibility, methods that take `market` without `venue` default to `venue="default"`.
+
+**2. Integrate VenueAllocator for per-venue capital:**
+
+When `capital_allocation` is provided in the deploy request (e.g., `{"drift": 5000, "hyperliquid": 3000}`), create a `VenueAllocator` and route all cash operations through it:
+
+```python
+if capital_allocation:
+    from ..execution.capital import VenueAllocator
+    self._allocator = VenueAllocator(capital_allocation)
+    self.cash = self._allocator.total_cash
+else:
+    self._allocator = None
+    self.cash = initial_capital
+```
+
+Cash debits (fills, fees) route to the order's venue. Cash credits (PnL, position closes) route to the position's venue.
+
+**3. Implement venue methods on LiveContext:**
+
+LiveContext already inherits the venue method signatures from the base `ExecutionContext` ABC (`venue_balance`, `venue_balances`, `venue_positions`, `transfer`). Implement them by delegating to PaperBroker's allocator:
+
+```python
+def venue_balance(self, venue: str) -> float:
+    if self._broker._allocator:
+        return self._broker._allocator.available(venue)
+    return self._broker.cash
+
+def venue_balances(self) -> dict:
+    if self._broker._allocator:
+        return dict(self._broker._allocator._balances)
+    return {"default": self._broker.cash}
+
+def transfer(self, from_venue: str, to_venue: str, amount: float) -> bool:
+    if not self._broker._allocator:
+        return False
+    t = self._broker._allocator.transfer(from_venue, to_venue, amount, int(time.time()))
+    return t is not None
+
+def venue_positions(self, venue: str) -> list:
+    return [p for key, p in self._broker.positions.items() if key[0] == venue]
+```
+
+**4. Process transfers in the live loop:**
+
+In `_run_live_session`, after processing candles, process arrived transfers:
+
+```python
+if hasattr(session.broker, '_allocator') and session.broker._allocator:
+    session.broker._allocator.process_arrivals(int(time.time()))
+    session.broker.cash = session.broker._allocator.total_cash
+```
+
+**5. Per-venue funding rate application:**
+
+When applying funding rates, apply them to positions on the specific venue:
+
+```python
+for (venue, market), pos in broker.positions.items():
+    # Get funding rate for this venue+market combination
+    rates = store.query_venue_funding(market, start_ts, end_ts)
+    for rate in rates:
+        if rate.source == venue:  # Apply venue-specific rate
+            payment = pos["size"] * rate.mark_price * rate.rate
+            # Debit/credit the correct venue's balance
+```
+
+**6. Per-venue margin and liquidation:**
+
+Each venue has different margin requirements (from `venue_config.py`). The risk guard should check margin per-venue:
+
+```python
+for (venue, market), pos in broker.positions.items():
+    venue_config = get_venue_config(venue)
+    notional = pos["size"] * mark_prices.get(market, pos["entry_price"])
+    margin_required = notional * venue_config.maintenance_margin
+    venue_equity = allocator.available(venue) + unrealized_pnl_on_venue
+    if venue_equity <= margin_required:
+        # Liquidate positions on this venue only
+```
+
+**7. Deploy request changes:**
+
+Add `capital_allocation` to the deploy request (already exists in BacktestRequest):
+
+```json
+{
+  "strategy_code": "...",
+  "market": "SOL-PERP",
+  "initial_capital": 10000,
+  "capital_allocation": {
+    "drift": 5000,
+    "hyperliquid": 3000,
+    "dydx": 2000
+  }
+}
+```
+
+When `capital_allocation` is provided, `initial_capital` is ignored (the sum of allocations is the total capital).
+
+**8. Persistence changes:**
+
+The `paper_positions` table already has a `market` column. Add a `venue` column:
+
+```sql
+ALTER TABLE paper_positions ADD COLUMN venue VARCHAR NOT NULL DEFAULT 'default';
+```
+
+Update position save/load to include venue. The `paper_sessions` table gets a `capital_allocation` column (JSON, nullable — NULL means single-venue).
+
+### Impact
+- Multi-venue strategies (funding arbitrage, cross-venue hedging) work in paper trading
+- Per-venue P&L tracking shows which venues contribute/drag performance
+- Transfer delays simulate real cross-venue capital movement (30min Drift→Hyperliquid)
+- Each venue applies its own fee schedule and margin requirements
+- Risk guard checks liquidation per-venue (isolated margin by default)
+
+---
+
 ## Implementation Scope
 
 ### Files to Modify
 
 | File | Changes |
 |------|---------|
-| `flint/execution/paper_broker.py` | Add `apply_funding()`, change default fill model to `SlippageFill`, add limit order timeouts, add `close_all_positions()` |
-| `flint/execution/live_context.py` | Add store reference, implement `get_funding_rates()`, `get_orderbook()`, `get_candles()`, `get_open_interest()`, `log()` |
-| `flint/paper/engine.py` | Add funding application loop, inter-candle PnL updates, rolling history trim, session resumption, persist every candle |
-| `flint/paper/session_store.py` | Add `paper_funding_payments` table operations, add method to get latest equity for recovery |
-| `flint/api/routes/paper.py` | Extend status response with margin/funding, add equity-history endpoint |
+| `flint/execution/paper_broker.py` | Multi-venue position keying `(venue, market)`, integrate `VenueAllocator`, add `apply_funding()`, change default fill model to `SlippageFill`, add limit order timeouts, add `close_all_positions()`, per-venue fee models |
+| `flint/execution/live_context.py` | Add store reference, implement `get_funding_rates()`, `get_funding_by_venue()`, `get_orderbook()`, `get_candles()`, `get_open_interest()`, `log()`, `venue_balance()`, `venue_balances()`, `venue_positions()`, `transfer()` |
+| `flint/paper/engine.py` | Add funding application loop, inter-candle PnL updates, rolling history trim, session resumption, persist every candle, process venue transfers, multi-venue deploy |
+| `flint/paper/session_store.py` | Add `paper_funding_payments` table operations, add venue column to positions, add method to get latest equity for recovery |
+| `flint/paper/risk_guard.py` | Per-venue margin/liquidation checks instead of global |
+| `flint/api/routes/paper.py` | Extend status response with margin/funding/venue data, add equity-history endpoint, accept capital_allocation in deploy |
 | `flint/api/main.py` | Call `resume_sessions()` on startup |
-| `flint/store.py` | Add `paper_funding_payments` table DDL |
+| `flint/store.py` | Add `paper_funding_payments` table DDL, add venue column to `paper_positions` |
 
 ### Files to Create
 
@@ -411,16 +569,24 @@ status_dict["funding"] = {
 | `tests/test_paper_funding.py` | Tests for funding rate application |
 | `tests/test_paper_resume.py` | Tests for session resumption |
 | `tests/test_live_context_data.py` | Tests for LiveContext data access methods |
+| `tests/test_paper_multi_venue.py` | Tests for multi-venue positions, capital allocation, transfers |
 
-### Estimated Tasks: 9 (one per gap above)
+### Estimated Tasks: 10 (one per gap/feature)
 
 ### Dependencies
 
-Tasks 1-2 are independent.
-Task 3 (resumption) depends on Task 1 (funding) being persisted.
-Task 4 (LiveContext) is independent.
-Task 5 (rolling history) is a one-liner, independent.
-Task 6 (latency) depends on Task 2 (fill model changes).
-Task 7 (inter-candle PnL) is independent.
-Task 8 (limit timeouts) is independent.
-Task 9 (API) depends on Tasks 1, 2 (margin/funding data to expose).
+```
+Task 1 (funding) ──────────────┐
+Task 2 (fills) ────────────────┤
+Task 10 (multi-venue broker) ──┤──→ Task 3 (resumption) ──→ Task 9 (API)
+Task 4 (LiveContext data) ─────┤
+Task 5 (rolling history) ──────┘
+Task 6 (latency) ── depends on Task 2
+Task 7 (inter-candle PnL) ── independent
+Task 8 (limit timeouts) ── independent
+```
+
+Tasks 1, 2, 4, 5, 7, 8, 10 are independent and can be parallelized.
+Task 6 depends on Task 2 (fill model).
+Task 3 depends on Tasks 1, 2, 10 (need funding + fills + multi-venue persisted before resumption).
+Task 9 depends on all others (API exposes everything).
