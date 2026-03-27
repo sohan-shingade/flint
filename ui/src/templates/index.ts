@@ -19,6 +19,7 @@ import { MULTI_VENUE_FUNDING_TEMPLATE } from './multi-venue-funding'
 import { ORDERBOOK_MOMENTUM_TEMPLATE } from './orderbook-momentum'
 import { CROSS_VENUE_PAIRS_TEMPLATE } from './cross-venue-pairs'
 import { LEVERAGED_GRID_TEMPLATE } from './leveraged-grid'
+import { BETA_HEDGED_TEMPLATE } from './beta-hedged'
 
 export interface TemplateInfo {
   label: string
@@ -69,4 +70,6 @@ export const TEMPLATES: Record<string, TemplateInfo> = {
     hint: 'SOL/BTC pairs on Drift + Hyperliquid. Multi-venue + multi-market. Enable MARGIN TRACKING. Needs both markets.' },
   lev_grid:    { label: 'Leveraged Grid',        code: LEVERAGED_GRID_TEMPLATE,     category: 'advanced',
     hint: 'DCA grid with leverage monitoring. Enable MARGIN TRACKING to see leverage limits + liquidation risk.' },
+  beta_hedged: { label: 'Beta-Hedged MR',      code: BETA_HEDGED_TEMPLATE,        category: 'advanced',
+    hint: 'SOL/BTC residual mean reversion. Needs BTC-PERP data. Uses rolling beta to hedge market risk.' },
 }

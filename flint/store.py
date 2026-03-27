@@ -157,7 +157,12 @@ class FlintStore:
     Safe to share one instance across multiple threads.
     """
 
-    def __init__(self, path: str = ":memory:"):
+    def __init__(self, path: str = ""):
+        if not path:
+            import os
+            data_dir = os.path.expanduser("~/.flint")
+            os.makedirs(data_dir, exist_ok=True)
+            path = os.path.join(data_dir, "data.duckdb")
         self._path = path
         self._lock = threading.Lock()
         self._conn = duckdb.connect(path)
