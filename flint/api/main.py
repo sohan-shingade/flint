@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
 
         paper_engine = PaperTradingEngine(store)
         paper_engine.set_event_loop(asyncio.get_running_loop())
+        paper_engine.resume_sessions()
         app.state.paper_engine = paper_engine
 
         # Start price ticker for live PnL updates

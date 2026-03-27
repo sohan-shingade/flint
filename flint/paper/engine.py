@@ -166,6 +166,102 @@ class PaperTradingEngine:
     def list_sessions(self) -> List[dict]:
         return [s.to_dict() for s in self.sessions.values()]
 
+    def resume_sessions(self) -> int:
+        """Resume all active sessions from DuckDB after server restart.
+
+        Returns count of successfully resumed sessions.
+        """
+        ss = PaperSessionStore(self.store)
+        active = ss.list_active_sessions()
+        resumed = 0
+
+        for session_data in active:
+            sid = session_data["session_id"]
+            try:
+                full = ss.load_session(sid)
+                if not full:
+                    continue
+
+                # Reconstruct strategy
+                from ..strategy.loader import load_user_strategy
+                strategy = load_user_strategy(
+                    full["strategy_code"],
+                    full["strategy_params"] or None,
+                )
+
+                # Get last equity snapshot for cash recovery
+                equity_history = ss.get_equity_history(sid)
+                last_eq = equity_history[-1] if equity_history else None
+                cash = last_eq["equity"] if last_eq else full["initial_capital"]
+                last_ts = last_eq["ts"] if last_eq else 0
+
+                # Reconstruct broker with recovered cash
+                broker = PaperBroker(initial_capital=cash)
+                broker.equity_history = [cash]
+
+                # Restore positions from DB
+                positions = ss.load_positions(sid)
+                for p in positions:
+                    broker.positions[p["market"]] = {
+                        "market": p["market"],
+                        "side": p["side"],
+                        "size": p["size"],
+                        "entry_price": p["entry_price"],
+                        "entry_ts": p.get("entry_ts", 0),
+                        "unrealized_pnl": p.get("unrealized_pnl", 0),
+                    }
+
+                # Restore closed trade count
+                trades = ss.get_trades(sid)
+
+                # Create context and session
+                ctx = LiveContext(broker, store=self.store, resolution_s=3600, session_id=sid)
+                session = PaperSession(
+                    session_id=sid,
+                    strategy=strategy,
+                    market=full["market"],
+                    resolution_s=3600,
+                    broker=broker,
+                    ctx=ctx,
+                )
+                session.last_candle_ts = last_ts
+                session.status = "live"
+                session.session_store = ss
+                session._persisted_trade_count = len(trades)
+
+                # Attach risk guard
+                risk_cfg = full.get("risk_config", {})
+                if isinstance(risk_cfg, str):
+                    import json
+                    risk_cfg = json.loads(risk_cfg)
+                rc = RiskConfig(
+                    max_drawdown_pct=risk_cfg.get("max_drawdown_pct", 0.15),
+                    daily_loss_limit=risk_cfg.get("daily_loss_limit", 500),
+                    max_position_pct=risk_cfg.get("max_position_pct", 0.95),
+                    liquidation_enabled=risk_cfg.get("liquidation_enabled", True),
+                )
+                session.risk_guard = RiskGuard(rc)
+                session.risk_config = risk_cfg
+
+                self.sessions[sid] = session
+
+                # Cancel stale pending orders (they're from before restart)
+                broker.pending_orders.clear()
+
+                # Launch live loop
+                task = self._schedule_async_task(self._run_live_session(session))
+                if task is not None:
+                    self._tasks[sid] = task
+
+                resumed += 1
+                logger.info("Resumed session %s: %s on %s (last_ts=%d, cash=%.2f, positions=%d)",
+                            sid, full["strategy_name"], full["market"], last_ts, cash, len(positions))
+            except Exception as e:
+                logger.error("Failed to resume session %s: %s", sid, e)
+
+        logger.info("Resumed %d/%d active sessions", resumed, len(active))
+        return resumed
+
     def deploy_session(
         self,
         strategy: Strategy,
@@ -379,6 +475,17 @@ class PaperTradingEngine:
 
                     session.broker.process_candle(candle)
 
+                    # Persist new closed trades
+                    if ss:
+                        trade_count = getattr(session, '_persisted_trade_count', 0)
+                        new_trades = session.broker.closed_trades[trade_count:]
+                        if new_trades:
+                            for idx, t in enumerate(new_trades):
+                                t.setdefault("trade_id", f"live-{session.session_id}-{trade_count + idx}")
+                                t.setdefault("is_replay", False)
+                            ss.save_trades(session.session_id, new_trades)
+                            session._persisted_trade_count = len(session.broker.closed_trades)
+
                     # Track equity for risk guard peak calculation
                     if hasattr(session.broker, "equity_history"):
                         session.broker.equity_history.append(session.broker.equity)
@@ -391,6 +498,16 @@ class PaperTradingEngine:
                     }
                     session.equity_history.append(eq_snap)
                     equity_buffer.append(eq_snap)
+
+                    # Persist positions for crash recovery
+                    if ss:
+                        pos_list = [
+                            {"market": m, "side": p["side"], "size": p["size"],
+                             "entry_price": p["entry_price"], "entry_ts": p.get("entry_ts", 0),
+                             "unrealized_pnl": p.get("unrealized_pnl", 0)}
+                            for m, p in session.broker.positions.items()
+                        ]
+                        ss.save_positions(session.session_id, pos_list)
 
                     # Risk guard check
                     guard = getattr(session, "risk_guard", None)
@@ -429,7 +546,7 @@ class PaperTradingEngine:
                     except Exception as e:
                         logger.debug("Funding application error for %s: %s", session.session_id, e)
 
-                if ss and len(equity_buffer) >= 10:
+                if ss and equity_buffer:
                     ss.save_equity_snapshots(session.session_id, equity_buffer)
                     equity_buffer.clear()
 
