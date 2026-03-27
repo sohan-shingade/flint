@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal
+from .routes.backtest import configure_concurrency
 from ..config import FlintConfig, load_config
 from ..store import FlintStore
 from ..collector.service import CollectorService
@@ -37,6 +38,8 @@ async def lifespan(app: FastAPI):
 
         store = FlintStore(config.db_path)
         app.state.store = store
+
+        configure_concurrency(config.max_concurrent_backtests)
 
         if config.collector_enabled:
             collector_svc = CollectorService(store, config=config)

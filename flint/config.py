@@ -84,6 +84,7 @@ class FlintConfig(BaseSettings):
     # --- API ---
     api_host: str = "127.0.0.1"
     api_port: int = 8000
+    max_concurrent_backtests: int = 5
     cors_origins: List[str] = Field(default=[
         "http://localhost:5173",
         "http://localhost:8000",
