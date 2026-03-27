@@ -149,6 +149,67 @@ CREATE TABLE IF NOT EXISTS sync_metadata (
 );
 """
 
+_CREATE_PAPER_SESSIONS = """
+CREATE TABLE IF NOT EXISTS paper_sessions (
+    session_id      VARCHAR PRIMARY KEY,
+    strategy_name   VARCHAR NOT NULL,
+    strategy_code   TEXT NOT NULL,
+    strategy_params VARCHAR NOT NULL DEFAULT '{}',
+    market          VARCHAR NOT NULL,
+    initial_capital DOUBLE NOT NULL,
+    replay_start_ts BIGINT NOT NULL,
+    live_start_ts   BIGINT NOT NULL DEFAULT 0,
+    started_at      BIGINT NOT NULL,
+    stopped_at      BIGINT,
+    status          VARCHAR NOT NULL DEFAULT 'replaying',
+    stop_reason     VARCHAR NOT NULL DEFAULT '',
+    risk_config     VARCHAR NOT NULL DEFAULT '{}'
+);
+"""
+
+_CREATE_PAPER_EQUITY_HISTORY = """
+CREATE TABLE IF NOT EXISTS paper_equity_history (
+    session_id     VARCHAR NOT NULL,
+    ts             BIGINT NOT NULL,
+    equity         DOUBLE NOT NULL,
+    cash           DOUBLE NOT NULL,
+    unrealized_pnl DOUBLE NOT NULL DEFAULT 0,
+    is_replay      BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (session_id, ts)
+);
+"""
+
+_CREATE_PAPER_TRADES = """
+CREATE TABLE IF NOT EXISTS paper_trades (
+    session_id  VARCHAR NOT NULL,
+    trade_id    VARCHAR NOT NULL,
+    market      VARCHAR NOT NULL,
+    side        VARCHAR NOT NULL,
+    size        DOUBLE NOT NULL,
+    entry_price DOUBLE NOT NULL,
+    exit_price  DOUBLE NOT NULL,
+    entry_ts    BIGINT NOT NULL,
+    exit_ts     BIGINT NOT NULL,
+    pnl         DOUBLE NOT NULL,
+    fees        DOUBLE NOT NULL DEFAULT 0,
+    is_replay   BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (session_id, trade_id)
+);
+"""
+
+_CREATE_PAPER_POSITIONS = """
+CREATE TABLE IF NOT EXISTS paper_positions (
+    session_id     VARCHAR NOT NULL,
+    market         VARCHAR NOT NULL,
+    side           VARCHAR NOT NULL,
+    size           DOUBLE NOT NULL,
+    entry_price    DOUBLE NOT NULL,
+    entry_ts       BIGINT NOT NULL,
+    unrealized_pnl DOUBLE NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, market)
+);
+"""
+
 
 class FlintStore:
     """Thread-safe DuckDB store.
@@ -228,6 +289,11 @@ class FlintStore:
         self._conn.execute(_CREATE_DEX_VOLUME)
         self._conn.execute(_CREATE_TOKEN_UNLOCKS)
         self._conn.execute(_CREATE_SYNC_METADATA)
+        # Paper trading persistence
+        self._conn.execute(_CREATE_PAPER_SESSIONS)
+        self._conn.execute(_CREATE_PAPER_EQUITY_HISTORY)
+        self._conn.execute(_CREATE_PAPER_TRADES)
+        self._conn.execute(_CREATE_PAPER_POSITIONS)
 
     # -- candles ---------------------------------------------------------------
 

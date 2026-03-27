@@ -42,3 +42,23 @@ def test_upsert_empty(store: FlintStore):
 
 def test_query_no_results(store: FlintStore):
     assert store.query_candles("NOPE", 60) == []
+
+
+def test_paper_session_tables_exist():
+    """Paper trading tables should be created on store init."""
+    import tempfile, os
+    db = os.path.join(tempfile.gettempdir(), "test_paper_tables.duckdb")
+    try:
+        store = FlintStore(db)
+        with store._lock:
+            tables = [r[0] for r in store._conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+            ).fetchall()]
+        assert "paper_sessions" in tables
+        assert "paper_equity_history" in tables
+        assert "paper_trades" in tables
+        assert "paper_positions" in tables
+        store.close()
+    finally:
+        if os.path.exists(db):
+            os.unlink(db)
