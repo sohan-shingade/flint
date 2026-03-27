@@ -167,9 +167,113 @@ async def list_sessions(request: Request):
     return {"sessions": engine.list_sessions()}
 
 
+@router.get("/portfolio")
+def get_portfolio(request: Request):
+    """Aggregate portfolio view across all paper sessions."""
+    engine = getattr(request.app.state, "paper_engine", None)
+    if engine is None:
+        return {"total_equity": 0, "total_pnl": 0, "per_strategy": [],
+                "active_sessions": 0, "total_sessions": 0}
+
+    sessions = engine.list_sessions()
+    total_equity = 0.0
+    total_initial = 0.0
+    per_strategy = []
+
+    for s in sessions:
+        equity = s.get("equity", 0)
+        pnl = s.get("pnl", 0)
+        total_equity += equity
+        per_strategy.append({
+            "session_id": s["session_id"],
+            "strategy_name": s.get("strategy", ""),
+            "market": s.get("market", ""),
+            "equity": round(equity, 2),
+            "pnl": round(pnl, 2),
+            "status": s.get("status", ""),
+        })
+
+    active = sum(1 for s in sessions if s.get("status") in ("running", "live"))
+
+    return {
+        "total_equity": round(total_equity, 2),
+        "total_pnl": round(total_equity - total_initial, 2),
+        "total_initial_capital": round(total_initial, 2),
+        "active_sessions": active,
+        "total_sessions": len(sessions),
+        "per_strategy": per_strategy,
+    }
+
+
+@router.post("/deploy")
+def deploy_strategy(body: dict, request: Request):
+    """Deploy a strategy from BacktestLab with replay-forward execution."""
+    engine = getattr(request.app.state, "paper_engine", None)
+    if engine is None:
+        raise HTTPException(500, "Paper trading engine not available")
+
+    strategy_code = body.get("strategy_code", "")
+    strategy_params = body.get("strategy_params", {})
+    market = body.get("market", "SOL-PERP")
+    initial_capital = body.get("initial_capital", 10000.0)
+    replay_start_ts = body.get("replay_start_ts", 0)
+    risk_config = body.get("risk_config", {})
+    resolution_s = body.get("resolution_s", 3600)
+
+    from ...strategy.loader import load_user_strategy, StrategyLoadError
+    try:
+        strategy = load_user_strategy(strategy_code, strategy_params or None)
+    except StrategyLoadError as e:
+        raise HTTPException(400, f"Strategy load error: {e}")
+
+    try:
+        session_id = engine.deploy_session(
+            strategy=strategy,
+            strategy_code=strategy_code,
+            strategy_params=strategy_params,
+            market=market,
+            resolution_s=resolution_s,
+            initial_capital=initial_capital,
+            replay_start_ts=replay_start_ts,
+            risk_config=risk_config,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Deploy failed: {e}")
+
+    return {"session_id": session_id, "status": "deployed"}
+
+
 @router.get("/trades/{session_id}")
 async def paper_trades(session_id: str, request: Request):
     engine = getattr(request.app.state, "paper_engine", None)
     if engine is None:
         return {"trades": []}
     return {"trades": engine.get_trades(session_id)}
+
+
+@router.post("/{session_id}/risk")
+def update_risk_config(session_id: str, body: dict, request: Request):
+    """Update risk configuration for a running session."""
+    engine = getattr(request.app.state, "paper_engine", None)
+    if engine is None:
+        raise HTTPException(500, "Paper trading engine not available")
+
+    session = engine.sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "Session not found")
+
+    from ...paper.risk_guard import RiskConfig, RiskGuard
+    rc = RiskConfig(
+        max_drawdown_pct=body.get("max_drawdown_pct", 0.15),
+        daily_loss_limit=body.get("daily_loss_limit", 500),
+        max_position_pct=body.get("max_position_pct", 0.95),
+        liquidation_enabled=body.get("liquidation_enabled", True),
+    )
+    session.risk_guard = RiskGuard(rc)
+    session.risk_config = body
+
+    ss = getattr(session, "session_store", None)
+    if ss:
+        ss.update_risk_config(session_id, body)
+
+    return {"session_id": session_id, "risk_config": body}

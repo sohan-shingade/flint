@@ -303,3 +303,53 @@ def test_cancel_nonexistent_backtest():
     """Cancelling a non-existent backtest should return 404."""
     r = client.post("/api/v1/backtest/nonexistent/cancel")
     assert r.status_code == 404
+
+
+def test_paper_deploy_endpoint():
+    """Deploy endpoint should accept strategy code and return session_id."""
+    from unittest.mock import MagicMock
+
+    code = '''
+from flint.strategy import Strategy
+from flint.models import Candle, Signal
+
+class HoldStrategy(Strategy):
+    @property
+    def name(self): return "Hold"
+    def reset(self): pass
+    def on_candle(self, candle, history, ctx=None): return Signal.HOLD
+'''
+    mock_engine = MagicMock()
+    mock_engine.deploy_session.return_value = "abc12345"
+    original = getattr(client.app.state, "paper_engine", None)
+    client.app.state.paper_engine = mock_engine
+
+    try:
+        r = client.post("/api/v1/paper/deploy", json={
+            "strategy_code": code,
+            "strategy_name": "Hold",
+            "strategy_params": {},
+            "market": "SOL-PERP",
+            "initial_capital": 10000,
+            "replay_start_ts": 1709251200,
+            "risk_config": {"max_drawdown_pct": 0.15},
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert "session_id" in data
+        assert data["session_id"] == "abc12345"
+        assert data["status"] == "deployed"
+    finally:
+        if original is None:
+            del client.app.state.paper_engine
+        else:
+            client.app.state.paper_engine = original
+
+
+def test_paper_portfolio_endpoint():
+    """Portfolio endpoint should return aggregate data."""
+    r = client.get("/api/v1/paper/portfolio")
+    assert r.status_code == 200
+    data = r.json()
+    assert "total_equity" in data
+    assert "per_strategy" in data
