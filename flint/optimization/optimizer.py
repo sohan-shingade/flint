@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Union
 
 import optuna
 
@@ -44,7 +44,7 @@ class StrategyOptimizer:
     def __init__(
         self,
         strategy_cls: Type[Strategy],
-        candles: List[Candle],
+        candles: Union[List[Candle], Dict[str, List[Candle]]],
         metric: str = "sharpe_ratio",
         n_trials: int = 50,
         initial_capital: float = 10_000.0,
@@ -108,8 +108,15 @@ class StrategyOptimizer:
 
     def optimize(self) -> OptimizationResult:
         """Run optimization. Returns best params and all trial results."""
-        split = int(len(self.candles) * self.train_ratio)
-        train_candles = self.candles[:split]
+        # Handle multi-market dict
+        if isinstance(self.candles, dict):
+            primary = max(self.candles.keys(), key=lambda k: len(self.candles[k]))
+            primary_candles = self.candles[primary]
+            split = int(len(primary_candles) * self.train_ratio)
+            train_candles = {k: v[:split] for k, v in self.candles.items()}
+        else:
+            split = int(len(self.candles) * self.train_ratio)
+            train_candles = self.candles[:split]
 
         trials: List[TrialResult] = []
 
@@ -122,8 +129,14 @@ class StrategyOptimizer:
                 return float("-inf")
 
             # Filter market data to training window
-            train_start = train_candles[0].ts if train_candles else 0
-            train_end = train_candles[-1].ts if train_candles else 0
+            if isinstance(train_candles, dict):
+                _primary = max(train_candles.keys(), key=lambda k: len(train_candles[k]))
+                _primary_list = train_candles[_primary]
+                train_start = _primary_list[0].ts if _primary_list else 0
+                train_end = _primary_list[-1].ts if _primary_list else 0
+            else:
+                train_start = train_candles[0].ts if train_candles else 0
+                train_end = train_candles[-1].ts if train_candles else 0
             funding = [f for f in self._funding_rates if train_start <= f.ts <= train_end]
             orderbooks = [o for o in self._orderbook_snapshots if train_start <= o.ts <= train_end]
             oi = [o for o in self._open_interest if train_start <= o.ts <= train_end]
@@ -178,7 +191,11 @@ class StrategyOptimizer:
 
         Returns in-sample and out-of-sample results per window.
         """
-        total = len(self.candles)
+        if isinstance(self.candles, dict):
+            primary = max(self.candles.keys(), key=lambda k: len(self.candles[k]))
+            total = len(self.candles[primary])
+        else:
+            total = len(self.candles)
         window_size = total // n_splits
         results = []
 
@@ -188,13 +205,21 @@ class StrategyOptimizer:
             if end - start < 20:
                 continue
 
-            window = self.candles[start:end]
-            split_idx = int(len(window) * train_pct)
-            train = window[:split_idx]
-            test = window[split_idx:]
-
-            if len(train) < 10 or len(test) < 5:
-                continue
+            if isinstance(self.candles, dict):
+                window = {k: v[start:end] for k, v in self.candles.items()}
+                primary = max(window.keys(), key=lambda k: len(window[k]))
+                split_idx = int(len(window[primary]) * train_pct)
+                train = {k: v[:split_idx] for k, v in window.items()}
+                test = {k: v[split_idx:] for k, v in window.items()}
+                if len(train[primary]) < 10 or len(test[primary]) < 5:
+                    continue
+            else:
+                window = self.candles[start:end]
+                split_idx = int(len(window) * train_pct)
+                train = window[:split_idx]
+                test = window[split_idx:]
+                if len(train) < 10 or len(test) < 5:
+                    continue
 
             # Optimize on train
             opt = StrategyOptimizer(
@@ -218,8 +243,14 @@ class StrategyOptimizer:
             except (TypeError, ValueError):
                 continue
 
-            test_start = test[0].ts if test else 0
-            test_end = test[-1].ts if test else 0
+            if isinstance(test, dict):
+                _primary = max(test.keys(), key=lambda k: len(test[k]))
+                _primary_test = test[_primary]
+                test_start = _primary_test[0].ts if _primary_test else 0
+                test_end = _primary_test[-1].ts if _primary_test else 0
+            else:
+                test_start = test[0].ts if test else 0
+                test_end = test[-1].ts if test else 0
             test_funding = [f for f in self._funding_rates if test_start <= f.ts <= test_end]
             test_ob = [o for o in self._orderbook_snapshots if test_start <= o.ts <= test_end]
             test_oi = [o for o in self._open_interest if test_start <= o.ts <= test_end]
@@ -235,10 +266,17 @@ class StrategyOptimizer:
             )
             test_result = engine.run(test)
 
+            if isinstance(train, dict):
+                _primary = max(train.keys(), key=lambda k: len(train[k]))
+                _train_size = len(train[_primary])
+                _test_size = len(test[_primary])
+            else:
+                _train_size = len(train)
+                _test_size = len(test)
             results.append({
                 "window": i,
-                "train_size": len(train),
-                "test_size": len(test),
+                "train_size": _train_size,
+                "test_size": _test_size,
                 "best_params": opt_result.best_params,
                 "in_sample": {
                     "sharpe": opt_result.best_value if self.metric == "sharpe_ratio" else 0,

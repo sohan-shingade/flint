@@ -156,6 +156,10 @@ def check_data(
 
         total_in_db = store.count_candles(market, resolution_s)
 
+        # Expected candle count for coverage calculation
+        expected_count = max(1, (end_ts - start_ts) // resolution_s)
+        coverage_pct = round(len(candles) / expected_count * 100, 1) if expected_count else 0
+
         # Check if local data covers the full requested range
         covers_range = False
         if candles:
@@ -163,22 +167,72 @@ def check_data(
 
         will_download = not covers_range
 
+        # --- Funding rates ---
+        funding_info = {"available": False, "count": 0}
+        try:
+            with store._lock:
+                fr_row = store._conn.execute(
+                    "SELECT COUNT(*) FROM venue_funding_rates "
+                    "WHERE market = ? AND ts >= ? AND ts <= ?",
+                    [market, start_ts, end_ts],
+                ).fetchone()
+            fr_count = fr_row[0] if fr_row else 0
+            funding_info = {"available": fr_count > 0, "count": fr_count}
+        except Exception:
+            pass
+
+        # --- Orderbook snapshots ---
+        orderbook_info = {"available": False, "count": 0}
+        try:
+            with store._lock:
+                ob_row = store._conn.execute(
+                    "SELECT COUNT(*) FROM orderbook_snapshots "
+                    "WHERE market = ? AND ts >= ? AND ts <= ?",
+                    [market, start_ts, end_ts],
+                ).fetchone()
+            ob_count = ob_row[0] if ob_row else 0
+            orderbook_info = {"available": ob_count > 0, "count": ob_count}
+        except Exception:
+            pass
+
+        # --- Open interest ---
+        oi_info = {"available": False, "count": 0}
+        try:
+            with store._lock:
+                oi_row = store._conn.execute(
+                    "SELECT COUNT(*) FROM open_interest "
+                    "WHERE market = ? AND ts >= ? AND ts <= ?",
+                    [market, start_ts, end_ts],
+                ).fetchone()
+            oi_count = oi_row[0] if oi_row else 0
+            oi_info = {"available": oi_count > 0, "count": oi_count}
+        except Exception:
+            pass
+
         return {
             "market": market, "resolution_s": resolution_s,
             "has_data": has_data,
             "covers_range": covers_range,
             "will_download": will_download,
             "candle_count": len(candles),
+            "coverage_pct": coverage_pct,
             "total_in_db": total_in_db,
             "first_ts": candles[0].ts if candles else None,
             "last_ts": candles[-1].ts if candles else None,
+            "funding_rates": funding_info,
+            "orderbook_snapshots": orderbook_info,
+            "open_interest": oi_info,
         }
     except Exception as e:
         return {
             "market": market, "resolution_s": resolution_s,
             "has_data": False, "candle_count": 0, "expected_count": 0,
             "coverage_pct": 0, "total_in_db": 0, "will_backfill": True,
-            "first_ts": None, "last_ts": None, "error": str(e),
+            "first_ts": None, "last_ts": None,
+            "funding_rates": {"available": False, "count": 0},
+            "orderbook_snapshots": {"available": False, "count": 0},
+            "open_interest": {"available": False, "count": 0},
+            "error": str(e),
         }
 
 

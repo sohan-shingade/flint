@@ -50,6 +50,10 @@ class Tearsheet:
     markets_used: List[str] = field(default_factory=list)
     # per-instrument exposure timeline: {market: [{ts, exposure, notional}, ...]}
     instrument_exposure: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    # rolling 30-day Sharpe ratio: [{ts, sharpe}, ...]
+    rolling_sharpe: List[Dict[str, Any]] = field(default_factory=list)
+    # individual trade breakdown with entry/exit details
+    trade_breakdown: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -131,6 +135,12 @@ def generate_tearsheet(
     # --- Per-instrument exposure timeline ---
     instrument_exposure = _compute_instrument_exposure(result, timestamps)
 
+    # --- Rolling Sharpe ratio (30-day window) ---
+    rolling_sharpe = _compute_rolling_sharpe(timestamps, eq, resolution_s)
+
+    # --- Trade breakdown from closed positions ---
+    trade_breakdown = _compute_trade_breakdown(result)
+
     return Tearsheet(
         strategy_name=strategy_name,
         market=market,
@@ -148,6 +158,8 @@ def generate_tearsheet(
         benchmark_label=bh_label,
         markets_used=markets_used,
         instrument_exposure=instrument_exposure,
+        rolling_sharpe=rolling_sharpe,
+        trade_breakdown=trade_breakdown,
     )
 
 
@@ -303,3 +315,82 @@ def _compute_instrument_exposure(
             exposure[mkt] = events
 
     return exposure
+
+
+def _compute_rolling_sharpe(
+    timestamps: List[int], equity: List[float], resolution_s: int
+) -> List[Dict[str, Any]]:
+    """Compute rolling 30-day Sharpe ratio from the equity curve.
+
+    Window size adapts to resolution: 30 days * 24 hours * 3600 / resolution_s bars.
+    Uses bar-to-bar returns and annualises assuming 365 * 24 * 3600 / resolution_s bars/year.
+    """
+    if len(equity) < 2 or len(timestamps) < 2:
+        return []
+
+    window = max(2, int(30 * 24 * 3600 / resolution_s))
+    bars_per_year = 365 * 24 * 3600 / resolution_s
+
+    eq_arr = np.array(equity[: len(timestamps)])
+    returns = np.diff(eq_arr) / np.where(eq_arr[:-1] == 0, 1, eq_arr[:-1])
+
+    result = []
+    for i in range(window, len(returns) + 1):
+        w = returns[i - window : i]
+        std = float(np.std(w, ddof=1)) if len(w) > 1 else 0.0
+        if std > 1e-12:
+            sharpe = float(np.mean(w)) / std * np.sqrt(bars_per_year)
+        else:
+            sharpe = 0.0
+        # timestamp corresponds to the last bar in the window
+        ts_idx = i  # returns[i-1] corresponds to timestamps[i]
+        if ts_idx < len(timestamps):
+            result.append({"ts": timestamps[ts_idx], "sharpe": round(sharpe, 3)})
+
+    return result
+
+
+def _compute_trade_breakdown(result: "BacktestResult") -> List[Dict[str, Any]]:
+    """Format closed positions into a trade breakdown list.
+
+    Each entry contains entry/exit timestamps, prices, side, size, PnL,
+    duration in hours, and total funding paid during the trade's lifetime.
+    """
+    if not result.positions:
+        return []
+
+    # Pre-compute per-trade funding paid by distributing total funding
+    # proportionally across trades by duration (best approximation when
+    # per-trade funding is not tracked separately).
+    total_funding = result.funding_paid
+    total_duration = sum(
+        max(1, p.exit_ts - p.entry_ts)
+        for p in result.positions
+        if p.closed
+    )
+
+    breakdown = []
+    for p in result.positions:
+        if not p.closed:
+            continue
+        duration_s = max(1, p.exit_ts - p.entry_ts)
+        duration_h = round(duration_s / 3600.0, 2)
+
+        # Proportional funding estimate
+        funding_paid = 0.0
+        if total_duration > 0 and total_funding != 0:
+            funding_paid = round(total_funding * duration_s / total_duration, 4)
+
+        breakdown.append({
+            "entry_ts": p.entry_ts,
+            "exit_ts": p.exit_ts,
+            "side": "long" if p.size > 0 else "short",
+            "size": abs(p.size),
+            "entry_price": p.entry_price,
+            "exit_price": p.exit_price,
+            "pnl": round(p.pnl, 4),
+            "duration_h": duration_h,
+            "funding_paid": funding_paid,
+        })
+
+    return breakdown
