@@ -56,6 +56,12 @@ _MAX_BACKTEST_SECONDS = 300
 _concurrency: Dict[str, int] = {"active": 0}
 
 
+def configure_concurrency(max_concurrent: int):
+    """Called at startup to set concurrency from config."""
+    global _MAX_CONCURRENT
+    _MAX_CONCURRENT = max_concurrent
+
+
 def _evict_old():
     """Remove oldest entries if over cap. Called inside _state_lock."""
     if len(_status) > _MAX_ENTRIES:
@@ -630,6 +636,22 @@ def run_backtest(req: BacktestRequest, request: Request):
     return {"id": run_id, "status": "running", "data": data_info}
 
 
+@router.get("/list")
+def list_backtests():
+    """List all tracked backtest runs with their statuses."""
+    with _state_lock:
+        runs = []
+        for run_id, status in _status.items():
+            progress = _progress.get(run_id, {})
+            runs.append({
+                "id": run_id,
+                "status": status,
+                "phase": progress.get("phase", ""),
+                "detail": progress.get("detail", ""),
+            })
+    return {"runs": runs}
+
+
 @router.get("/{run_id}/status")
 def get_status(run_id: str):
     with _state_lock:
@@ -676,6 +698,19 @@ def get_results(run_id: str):
         return {"id": run_id, "status": "error",
                 "results": {"error": f"Serialization failed: {type(e).__name__}: {e}"},
                 "progress": {}}
+
+
+@router.post("/{run_id}/cancel")
+def cancel_backtest(run_id: str):
+    """Mark a backtest as cancelled. The thread will continue but results are discarded."""
+    with _state_lock:
+        if run_id not in _status:
+            raise HTTPException(404, "Backtest not found")
+        if _status[run_id] != "running":
+            return {"id": run_id, "status": _status[run_id], "message": "Not running"}
+        _status[run_id] = "cancelled"
+    _set_progress(run_id, phase="cancelled", detail="Cancelled by user")
+    return {"id": run_id, "status": "cancelled"}
 
 
 @router.get("/compare")

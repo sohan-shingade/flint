@@ -288,3 +288,18 @@ class HoldStrategy(Strategy):
     assert r.status_code == 200
     data = r.json()
     assert "id" in data
+
+
+def test_list_backtests():
+    """Should list recent backtest runs with their statuses."""
+    r = client.get("/api/v1/backtest/list")
+    assert r.status_code == 200
+    data = r.json()
+    assert "runs" in data
+    assert isinstance(data["runs"], list)
+
+
+def test_cancel_nonexistent_backtest():
+    """Cancelling a non-existent backtest should return 404."""
+    r = client.post("/api/v1/backtest/nonexistent/cancel")
+    assert r.status_code == 404
