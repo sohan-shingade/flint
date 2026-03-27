@@ -159,11 +159,12 @@ async def paper_status(session_id: str, request: Request):
 
     session = engine.sessions.get(session_id)
     if session and status:
+        mr = session.broker.margin_ratio
         status["margin"] = {
             "leverage": round(session.broker.leverage, 2),
             "margin_used": round(session.broker.margin_used, 2),
             "free_margin": round(session.broker.free_margin, 2),
-            "margin_ratio": round(session.broker.margin_ratio, 4),
+            "margin_ratio": round(mr, 4) if mr != float("inf") else 0,
             "liquidation_prices": {
                 m: round(session.broker.get_liquidation_price(m), 2)
                 for m in session.broker.positions
@@ -172,7 +173,7 @@ async def paper_status(session_id: str, request: Request):
         status["funding_total"] = round(session.broker.total_funding, 4)
 
         # Include equity curve from session's in-memory history
-        status["equity_curve"] = session.equity_history[-200:]  # last 200 points
+        status["equity_curve"] = session.equity_history[-200:]
 
     return status
 
