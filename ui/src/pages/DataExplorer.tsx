@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
 import InteractiveChart from '../components/InteractiveChart'
 
@@ -282,7 +282,23 @@ export default function DataExplorer() {
   const totalRecords = markets.reduce((s, m) => s + m.candle_count, 0)
   const selectedInfo = markets.find(m => m.market === market && m.resolution_s === resolution)
 
-  // Stats computed from raw candles (InteractiveChart handles its own indicator rendering)
+  // Memoize chart props to prevent chart recreation on unrelated re-renders (e.g. clock tick)
+  const chartIndicators = useMemo(() => ({
+    sma: showSMA, smaPeriod,
+    ema: showEMA, emaPeriod,
+    vwap: showVWAP,
+    bb: showBB, bbPeriod,
+    rsi: showRSI, rsiPeriod,
+    volume: showVolume,
+    funding: showFunding,
+  }), [showSMA, smaPeriod, showEMA, emaPeriod, showVWAP, showBB, bbPeriod, showRSI, rsiPeriod, showVolume, showFunding])
+
+  const chartFundingRates = useMemo(() => {
+    if (!showFunding) return []
+    return Object.entries(fundingByVenue).flatMap(([venue, rates]) =>
+      rates.map(r => ({ ts: r.ts, rate: r.rate, source: venue }))
+    )
+  }, [showFunding, fundingByVenue])
 
   const inputClass = 'bg-void border border-border text-terminal text-xs px-2.5 py-2 focus:border-amber/50 focus:outline-none transition-colors'
   const labelClass = 'block text-[10px] text-ghost tracking-[0.15em] mb-1'
@@ -682,18 +698,8 @@ export default function DataExplorer() {
           <InteractiveChart
             candles={candles}
             height={500}
-            indicators={{
-              sma: showSMA, smaPeriod,
-              ema: showEMA, emaPeriod,
-              vwap: showVWAP,
-              bb: showBB, bbPeriod,
-              rsi: showRSI, rsiPeriod,
-              volume: showVolume,
-              funding: showFunding,
-            }}
-            fundingRates={showFunding ? Object.entries(fundingByVenue).flatMap(([venue, rates]) =>
-              rates.map(r => ({ ts: r.ts, rate: r.rate, source: venue }))
-            ) : []}
+            indicators={chartIndicators}
+            fundingRates={chartFundingRates}
           />
 
           {/* stats bar */}

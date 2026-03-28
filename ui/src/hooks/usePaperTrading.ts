@@ -26,10 +26,12 @@ interface SessionStatus {
   equity: number
   cash: number
   unrealized_pnl: number
+  realized_pnl: number
   positions: any[]
   pending_orders: any[]
   total_trades: number
   total_fees: number
+  initial_capital: number
   risk_status: any
   equity_curve: any[]
   metrics: any
