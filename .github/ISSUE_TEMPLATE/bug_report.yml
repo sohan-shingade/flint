@@ -1,0 +1,53 @@
+name: Bug Report
+description: Report a bug in Flint
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this?
+      placeholder: |
+        1. Run `flint serve`
+        2. Navigate to /backtest
+        3. Submit a backtest with...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Flint version
+      description: Output of `pip show flint | grep Version`
+      placeholder: "0.2.0"
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Backtest engine
+        - Paper trading
+        - Data providers
+        - API / server
+        - UI / frontend
+        - CLI
+        - Other
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste any relevant logs or error messages.
+      render: shell
