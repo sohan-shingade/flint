@@ -2,6 +2,7 @@
 import os
 import tempfile
 import pytest
+from unittest.mock import patch
 
 from flint.models import Candle
 from flint.paper.engine import PaperTradingEngine
@@ -171,3 +172,35 @@ def test_deploy_session_has_risk_guard(store_and_engine):
     session = engine.sessions[session_id]
     assert hasattr(session, "risk_guard")
     assert session.risk_guard.config.max_drawdown_pct == 0.10
+
+
+@pytest.fixture
+def sample_candles():
+    return _make_candles(100)
+
+
+def test_redeploy_session_clears_and_reruns(store_and_engine, sample_candles):
+    """Redeploy should clear old data and create a new session from new start date."""
+    store, engine = store_and_engine
+    store.upsert_candles(sample_candles)
+
+    from flint.strategy import MACrossoverStrategy
+    strategy = MACrossoverStrategy()
+    code = "class X: pass"
+
+    old_id = engine.deploy_session(
+        strategy=strategy, strategy_code=code, strategy_params={},
+        market="SOL-PERP", initial_capital=10000,
+        replay_start_ts=sample_candles[0].ts,
+    )
+    assert old_id in engine.sessions
+
+    new_start = sample_candles[len(sample_candles) // 2].ts
+    with patch("flint.paper.engine.backfill_candle_gap", return_value=0), \
+         patch("flint.strategy.loader.load_user_strategy", return_value=MACrossoverStrategy()):
+        new_id = engine.redeploy_session(old_id, new_start)
+
+    assert new_id is not None
+    assert new_id != old_id
+    assert new_id in engine.sessions
+    assert engine.sessions[new_id].status == "live"

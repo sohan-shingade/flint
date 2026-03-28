@@ -436,6 +436,47 @@ class PaperTradingEngine:
                      session_id, strategy.name, market, len(candles))
         return session_id
 
+    def redeploy_session(self, session_id: str, replay_start_ts: int) -> Optional[str]:
+        """Kill an existing session and redeploy it from a new start date.
+        Returns new session_id on success, None on failure.
+        """
+        ss = PaperSessionStore(self.store)
+        old = ss.load_session(session_id)
+        if not old:
+            return None
+
+        # Stop the old session
+        self.kill_session(session_id)
+        if session_id in self.sessions:
+            del self.sessions[session_id]
+
+        # Clear old data
+        ss.clear_session_data(session_id)
+
+        # Backfill candle data for the new range
+        now_ts = int(time.time())
+        backfill_candle_gap(self.store, old["market"], replay_start_ts, now_ts)
+
+        # Rebuild strategy
+        from ..strategy.loader import load_user_strategy
+        strategy = load_user_strategy(old["strategy_code"], old["strategy_params"] or None)
+
+        # Re-deploy
+        new_id = self.deploy_session(
+            strategy=strategy,
+            strategy_code=old["strategy_code"],
+            strategy_params=old["strategy_params"],
+            market=old["market"],
+            initial_capital=old["initial_capital"],
+            replay_start_ts=replay_start_ts,
+            risk_config=old["risk_config"],
+        )
+
+        # Mark old session as replaced
+        ss.update_status(session_id, "replaced", stopped_at=now_ts, stop_reason=f"redeployed as {new_id}")
+
+        return new_id
+
     async def _run_session(self, session: PaperSession) -> None:
         """Main loop: poll store for new candles, run strategy."""
         history: List[Candle] = []

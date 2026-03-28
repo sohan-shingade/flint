@@ -266,6 +266,47 @@ def deploy_strategy(body: dict, request: Request):
     return {"session_id": session_id, "status": "deployed"}
 
 
+@router.post("/redeploy")
+def redeploy_session(body: dict, request: Request):
+    """Redeploy a session from a new start date."""
+    engine = getattr(request.app.state, "paper_engine", None)
+    if engine is None:
+        raise HTTPException(500, "Paper trading engine not available")
+
+    session_id = body.get("session_id")
+    replay_start_ts = body.get("replay_start_ts", 0)
+
+    if not session_id:
+        raise HTTPException(400, "session_id required")
+    if not replay_start_ts:
+        raise HTTPException(400, "replay_start_ts required")
+
+    new_id = engine.redeploy_session(session_id, replay_start_ts)
+    if new_id is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+
+    return {"old_session_id": session_id, "new_session_id": new_id, "status": "redeployed"}
+
+
+@router.post("/redeploy-all")
+def redeploy_all_sessions(body: dict, request: Request):
+    """Redeploy all active sessions from a new start date."""
+    engine = getattr(request.app.state, "paper_engine", None)
+    if engine is None:
+        raise HTTPException(500, "Paper trading engine not available")
+
+    replay_start_ts = body.get("replay_start_ts", 0)
+    if not replay_start_ts:
+        raise HTTPException(400, "replay_start_ts required")
+
+    results = []
+    for sid in list(engine.sessions.keys()):
+        new_id = engine.redeploy_session(sid, replay_start_ts)
+        results.append({"old_session_id": sid, "new_session_id": new_id})
+
+    return {"redeployed": results}
+
+
 @router.get("/trades/{session_id}")
 async def paper_trades(session_id: str, request: Request):
     engine = getattr(request.app.state, "paper_engine", None)

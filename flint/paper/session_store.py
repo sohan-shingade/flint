@@ -192,6 +192,16 @@ class PaperSessionStore:
         return [{"ts": r[0], "market": r[1], "rate": r[2], "payment": r[3],
                  "position_size": r[4], "mark_price": r[5]} for r in rows]
 
+    def clear_session_data(self, session_id: str) -> None:
+        """Wipe all live data for a session (equity, trades, positions, funding)."""
+        with self._store._lock:
+            self._store._conn.execute("BEGIN TRANSACTION")
+            self._store._conn.execute("DELETE FROM paper_equity_history WHERE session_id = ?", [session_id])
+            self._store._conn.execute("DELETE FROM paper_trades WHERE session_id = ?", [session_id])
+            self._store._conn.execute("DELETE FROM paper_positions WHERE session_id = ?", [session_id])
+            self._store._conn.execute("DELETE FROM paper_funding_payments WHERE session_id = ?", [session_id])
+            self._store._conn.execute("COMMIT")
+
     def list_all_sessions(self) -> List[dict]:
         with self._store._lock:
             rows = self._store._conn.execute(
