@@ -145,6 +145,30 @@ def test_mev_liq_scan():
     assert len(r.json()["opportunities"]) == 1
 
 
+def test_data_freshness_returns_data_after_download():
+    """Freshness endpoint should return metadata after sync_metadata is populated."""
+    from flint.store import FlintStore
+    from flint.models import SyncMetadata
+    import tempfile, os
+
+    db_path = os.path.join(tempfile.gettempdir(), "test_freshness.duckdb")
+    try:
+        store = FlintStore(db_path)
+        meta = SyncMetadata(
+            provider="drift_api", market="SOL-PERP", data_type="candles",
+            last_sync_ts=1700000000, record_count=100, status="ok", error_msg="",
+        )
+        store.upsert_sync_metadata(meta)
+        freshness = store.get_data_freshness()
+        assert len(freshness) == 1
+        assert freshness[0]["market"] == "SOL-PERP"
+        assert freshness[0]["record_count"] == 100
+        store.close()
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+
 def test_collector_status():
     resp = client.get("/api/v1/collector/status")
     assert resp.status_code == 200
@@ -155,3 +179,186 @@ def test_collector_config():
     resp = client.get("/api/v1/collector/config")
     assert resp.status_code == 200
     assert "markets" in resp.json()
+
+
+def test_custom_code_no_default_params():
+    """Bug fix: custom code strategies should NOT receive default params from built-in strategy names."""
+    code = '''
+from flint.strategy import Strategy
+from flint.models import Candle, Signal
+from typing import List, Optional, Dict
+
+class SimpleStrategy(Strategy):
+    def __init__(self):
+        self._count = 0
+
+    @property
+    def name(self) -> str:
+        return "Simple"
+
+    def reset(self) -> None:
+        self._count = 0
+
+    def on_candle(self, candle, history, ctx=None):
+        return Signal.HOLD
+'''
+    r = client.post("/api/v1/backtest/run", json={
+        "code": code,
+        "market": "SOL-PERP",
+        "start_ts": 1709251200,
+        "end_ts": 1709337600,
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "running"
+
+    import time
+    result = {}
+    for _ in range(10):
+        time.sleep(1)
+        r2 = client.get(f"/api/v1/backtest/{data['id']}/results")
+        if r2.status_code == 200:
+            result = r2.json()
+            if result["status"] in ("complete", "failed"):
+                break
+
+    if result.get("status") == "failed":
+        error = result.get("results", {}).get("error", "")
+        assert "unexpected keyword argument" not in error, \
+            f"Default params leaked into custom code strategy: {error}"
+
+
+def test_results_unknown_id_returns_404():
+    """Results endpoint should return 404 for unknown IDs, not 500."""
+    r = client.get("/api/v1/backtest/nonexistent-id/results")
+    assert r.status_code == 404
+
+
+def test_results_always_returns_json():
+    """Results endpoint must always return valid JSON, never empty body or 500."""
+    code = '''
+from flint.strategy import Strategy
+from flint.models import Candle, Signal
+
+class HoldStrategy(Strategy):
+    @property
+    def name(self): return "Hold"
+    def reset(self): pass
+    def on_candle(self, candle, history, ctx=None): return Signal.HOLD
+'''
+    r = client.post("/api/v1/backtest/run", json={
+        "code": code,
+        "strategy": "custom",
+        "market": "SOL-PERP",
+        "start_ts": 1709251200,
+        "end_ts": 1709337600,
+    })
+    assert r.status_code == 200
+    run_id = r.json()["id"]
+
+    r2 = client.get(f"/api/v1/backtest/{run_id}/results")
+    assert r2.status_code == 200
+    data = r2.json()
+    assert "status" in data
+    assert data["status"] in ("running", "complete", "failed")
+    assert "progress" in data
+
+
+def test_aggregate_backtest_endpoint():
+    """Multi-market aggregate should accept the request and return running status."""
+    code = '''
+from flint.strategy import Strategy
+from flint.models import Candle, Signal
+
+class HoldStrategy(Strategy):
+    @property
+    def name(self): return "Hold"
+    def reset(self): pass
+    def on_candle(self, candle, history, ctx=None): return Signal.HOLD
+'''
+    r = client.post("/api/v1/backtest/run", json={
+        "code": code,
+        "strategy": "custom",
+        "market": "SOL-PERP",
+        "markets": ["BTC-PERP", "ETH-PERP"],
+        "aggregate": True,
+        "start_ts": 1709251200,
+        "end_ts": 1709337600,
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert "id" in data
+
+
+def test_list_backtests():
+    """Should list recent backtest runs with their statuses."""
+    r = client.get("/api/v1/backtest/list")
+    assert r.status_code == 200
+    data = r.json()
+    assert "runs" in data
+    assert isinstance(data["runs"], list)
+
+
+def test_cancel_nonexistent_backtest():
+    """Cancelling a non-existent backtest should return 404."""
+    r = client.post("/api/v1/backtest/nonexistent/cancel")
+    assert r.status_code == 404
+
+
+def test_paper_deploy_endpoint():
+    """Deploy endpoint should accept strategy code and return session_id."""
+    from unittest.mock import MagicMock
+
+    code = '''
+from flint.strategy import Strategy
+from flint.models import Candle, Signal
+
+class HoldStrategy(Strategy):
+    @property
+    def name(self): return "Hold"
+    def reset(self): pass
+    def on_candle(self, candle, history, ctx=None): return Signal.HOLD
+'''
+    mock_engine = MagicMock()
+    mock_engine.deploy_session.return_value = "abc12345"
+    original = getattr(client.app.state, "paper_engine", None)
+    client.app.state.paper_engine = mock_engine
+
+    try:
+        r = client.post("/api/v1/paper/deploy", json={
+            "strategy_code": code,
+            "strategy_name": "Hold",
+            "strategy_params": {},
+            "market": "SOL-PERP",
+            "initial_capital": 10000,
+            "replay_start_ts": 1709251200,
+            "risk_config": {"max_drawdown_pct": 0.15},
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert "session_id" in data
+        assert data["session_id"] == "abc12345"
+        assert data["status"] == "deployed"
+    finally:
+        if original is None:
+            del client.app.state.paper_engine
+        else:
+            client.app.state.paper_engine = original
+
+
+def test_paper_portfolio_endpoint():
+    """Portfolio endpoint should return aggregate data."""
+    r = client.get("/api/v1/paper/portfolio")
+    assert r.status_code == 200
+    data = r.json()
+    assert "total_equity" in data
+    assert "per_strategy" in data
+
+
+def test_paper_equity_history_endpoint():
+    """Equity history endpoint should return data."""
+    r = client.get("/api/v1/paper/unknown-session/equity-history")
+    assert r.status_code == 200
+    data = r.json()
+    assert "equity_curve" in data
+    assert isinstance(data["equity_curve"], list)

@@ -61,7 +61,9 @@ class TestPaperBroker:
         broker.process_candle(_c(2000, 110.0))
         assert len(broker.positions) == 0
         assert len(broker.closed_trades) == 1
-        assert broker.closed_trades[0]["pnl"] == 100.0  # (110-100)*10
+        # SlippageFill(5bps): entry ~100.05, exit ~109.945 → pnl ~98.95
+        import pytest
+        assert broker.closed_trades[0]["pnl"] == pytest.approx(98.95, rel=1e-3)
 
     def test_stop_loss_triggers(self):
         broker = PaperBroker(10000, fee_model=ZeroFeeModel())
@@ -100,13 +102,15 @@ class TestPaperBroker:
         assert len(broker.pending_orders) == 0
 
     def test_unrealized_pnl_updates(self):
+        import pytest
         broker = PaperBroker(10000, fee_model=ZeroFeeModel())
         broker.submit_order(Order(market="SOL-PERP", side=Side.LONG,
                                   order_type=OrderType.MARKET, size=10, order_id="o1"))
         broker.process_candle(_c(1000, 100.0))
         broker.process_candle(_c(2000, 105.0))
-        assert broker.positions["SOL-PERP"]["unrealized_pnl"] == 50.0  # (105-100)*10
-        assert broker.equity == 10050.0
+        # SlippageFill(5bps): entry ~100.05 → unrealized ~49.5, equity ~10049.5
+        assert broker.positions["SOL-PERP"]["unrealized_pnl"] == pytest.approx(49.5, rel=1e-3)
+        assert broker.equity == pytest.approx(10049.5, rel=1e-3)
 
 
 # --- LiveContext Tests ---

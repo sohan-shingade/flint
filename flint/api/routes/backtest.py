@@ -56,6 +56,12 @@ _MAX_BACKTEST_SECONDS = 300
 _concurrency: Dict[str, int] = {"active": 0}
 
 
+def configure_concurrency(max_concurrent: int):
+    """Called at startup to set concurrency from config."""
+    global _MAX_CONCURRENT
+    _MAX_CONCURRENT = max_concurrent
+
+
 def _evict_old():
     """Remove oldest entries if over cap. Called inside _state_lock."""
     if len(_status) > _MAX_ENTRIES:
@@ -104,6 +110,7 @@ class BacktestRequest(BaseModel):
     latency_enabled: bool = True
     latency_seed: Optional[int] = None
     impact_coefficient: Optional[float] = Field(default=None, ge=0, le=1.0)
+    aggregate: bool = False  # Run independently on each market, return per-market + summary
 
 
 def _build_strategy(name: str, params: Dict, code: str = None):
@@ -259,7 +266,7 @@ def run_backtest(req: BacktestRequest, request: Request):
 
             extra_candles: Dict[str, List[Candle]] = {}
 
-            params = req.params or _DEFAULTS.get(req.strategy, {})
+            params = req.params or ({} if req.code else _DEFAULTS.get(req.strategy, {}))
             strategy = _build_strategy(req.strategy, params, req.code)
             if strategy is None:
                 _set_status(run_id, "failed")
@@ -271,6 +278,52 @@ def run_backtest(req: BacktestRequest, request: Request):
 
             start_ts = req.start_ts
             end_ts = req.end_ts
+
+            # Aggregate mode: run independently on each market
+            if req.aggregate and req.markets:
+                all_markets = [req.market] + [m for m in req.markets if m != req.market]
+                per_market = {}
+                sharpes = []
+
+                for idx, mkt in enumerate(all_markets):
+                    pct = 15 + int(70 * idx / len(all_markets))
+                    _set_progress(run_id, phase="backtest", pct=pct,
+                                  detail=f"Running {strategy.name} on {mkt} ({idx+1}/{len(all_markets)})...")
+
+                    mkt_candles = store.query_candles(mkt, req.resolution_s, start_ts, end_ts) if store else []
+                    if not mkt_candles:
+                        per_market[mkt] = {"error": "No data available"}
+                        continue
+
+                    strategy.reset()
+                    eng = BacktestEngine(strategy, req.initial_capital, req.fee_rate)
+                    res = eng.run(mkt_candles)
+                    mkt_metrics = {
+                        "total_pnl": round(res.total_pnl, 4),
+                        "total_trades": res.total_trades,
+                        "win_rate": round(res.win_rate, 4),
+                        "sharpe_ratio": round(res.sharpe_ratio, 4),
+                        "max_drawdown": round(res.max_drawdown, 4),
+                    }
+                    per_market[mkt] = mkt_metrics
+                    sharpes.append(res.sharpe_ratio)
+
+                aggregate_out = {}
+                if sharpes:
+                    aggregate_out = {
+                        "min_sharpe": round(min(sharpes), 4),
+                        "max_sharpe": round(max(sharpes), 4),
+                        "avg_sharpe": round(sum(sharpes) / len(sharpes), 4),
+                        "n_markets": len(sharpes),
+                    }
+
+                _set_result(run_id, {
+                    "strategy_name": strategy.name,
+                    "per_market": per_market,
+                    "aggregate": aggregate_out,
+                })
+                _set_status(run_id, "complete")
+                return
 
             # Step 1: Check local DB
             candles = []
@@ -583,6 +636,22 @@ def run_backtest(req: BacktestRequest, request: Request):
     return {"id": run_id, "status": "running", "data": data_info}
 
 
+@router.get("/list")
+def list_backtests():
+    """List all tracked backtest runs with their statuses."""
+    with _state_lock:
+        runs = []
+        for run_id, status in _status.items():
+            progress = _progress.get(run_id, {})
+            runs.append({
+                "id": run_id,
+                "status": status,
+                "phase": progress.get("phase", ""),
+                "detail": progress.get("detail", ""),
+            })
+    return {"runs": runs}
+
+
 @router.get("/{run_id}/status")
 def get_status(run_id: str):
     with _state_lock:
@@ -598,20 +667,50 @@ def get_results(run_id: str):
             raise HTTPException(404, "Backtest not found")
         status = _status[run_id]
         progress = dict(_progress.get(run_id, {}))
-        result = _results.get(run_id)
+        # Deep-copy result inside the lock to avoid race conditions
+        raw_result = _results.get(run_id)
+        result = dict(raw_result) if isinstance(raw_result, dict) else raw_result
 
-    elapsed = time.time() - progress.get("started_at", time.time())
-    progress_out = {
-        "phase": progress.get("phase", "init"),
-        "pct": progress.get("pct", 0),
-        "detail": progress.get("detail", ""),
-        "elapsed_s": round(elapsed, 1),
-        "candles": progress.get("candles", 0),
-    }
+    try:
+        elapsed = time.time() - progress.get("started_at", time.time())
+        progress_out = {
+            "phase": progress.get("phase", "init"),
+            "pct": progress.get("pct", 0),
+            "detail": progress.get("detail", ""),
+            "elapsed_s": round(elapsed, 1),
+            "candles": progress.get("candles", 0),
+        }
 
-    if status == "running":
-        return {"id": run_id, "status": "running", "results": None, "progress": progress_out}
-    return {"id": run_id, "status": status, "results": result, "progress": progress_out}
+        # Detect hung backtests (stuck in "running" beyond timeout + buffer)
+        if status == "running" and elapsed > _MAX_BACKTEST_SECONDS + 60:
+            _set_status(run_id, "failed")
+            _set_result(run_id, {"error": "Backtest exceeded maximum runtime"})
+            return {"id": run_id, "status": "failed",
+                    "results": {"error": "Backtest exceeded maximum runtime"},
+                    "progress": progress_out}
+
+        if status == "running":
+            return {"id": run_id, "status": "running", "results": None, "progress": progress_out}
+        return {"id": run_id, "status": status, "results": result, "progress": progress_out}
+    except Exception as e:
+        import logging
+        logging.getLogger("flint.backtest").exception("Error serializing results for %s", run_id)
+        return {"id": run_id, "status": "error",
+                "results": {"error": f"Serialization failed: {type(e).__name__}: {e}"},
+                "progress": {}}
+
+
+@router.post("/{run_id}/cancel")
+def cancel_backtest(run_id: str):
+    """Mark a backtest as cancelled. The thread will continue but results are discarded."""
+    with _state_lock:
+        if run_id not in _status:
+            raise HTTPException(404, "Backtest not found")
+        if _status[run_id] != "running":
+            return {"id": run_id, "status": _status[run_id], "message": "Not running"}
+        _status[run_id] = "cancelled"
+    _set_progress(run_id, phase="cancelled", detail="Cancelled by user")
+    return {"id": run_id, "status": "cancelled"}
 
 
 @router.get("/compare")

@@ -12,10 +12,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal
+from .routes.backtest import configure_concurrency
 from ..config import FlintConfig, load_config
 from ..store import FlintStore
 from ..collector.service import CollectorService
 from ..paper.engine import PaperTradingEngine
+from ..paper.price_ticker import PriceTicker
 from .websocket import ConnectionManager
 
 logger = logging.getLogger("flint.api")
@@ -30,6 +32,8 @@ async def lifespan(app: FastAPI):
     store = None
     collector_svc = None
     task = None
+    ticker = None
+    ticker_task = None
 
     try:
         config = load_config()
@@ -38,13 +42,23 @@ async def lifespan(app: FastAPI):
         store = FlintStore(config.db_path)
         app.state.store = store
 
+        configure_concurrency(config.max_concurrent_backtests)
+
         if config.collector_enabled:
             collector_svc = CollectorService(store, config=config)
             app.state.collector = collector_svc
             task = asyncio.create_task(collector_svc.run())
 
         paper_engine = PaperTradingEngine(store)
+        paper_engine.set_event_loop(asyncio.get_running_loop())
+        paper_engine.resume_sessions()
         app.state.paper_engine = paper_engine
+
+        # Start price ticker for live PnL updates
+        ticker = PriceTicker(config.default_markets, interval_s=5.0)
+        app.state.price_ticker = ticker
+        ticker_task = asyncio.create_task(ticker.run())
+        paper_engine.price_ticker = ticker
 
         ws_manager = ConnectionManager()
         app.state.ws_manager = ws_manager
@@ -61,6 +75,14 @@ async def lifespan(app: FastAPI):
         task.cancel()
         try:
             await task
+        except asyncio.CancelledError:
+            pass
+    if ticker is not None:
+        ticker.stop()
+    if ticker_task is not None:
+        ticker_task.cancel()
+        try:
+            await ticker_task
         except asyncio.CancelledError:
             pass
     if store is not None:

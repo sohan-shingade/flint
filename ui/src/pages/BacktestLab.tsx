@@ -170,6 +170,13 @@ export default function BacktestLab() {
   // Execution features
   const [marginTracking, setMarginTracking] = useState(false)
 
+  // Deploy to paper trading
+  const [showDeploy, setShowDeploy] = useState(false)
+  const [deployCapital, setDeployCapital] = useState(10000)
+  const [deployMaxDD, setDeployMaxDD] = useState(15)
+  const [deployDailyLoss, setDeployDailyLoss] = useState(500)
+  const [deploying, setDeploying] = useState(false)
+
   const codeRef = useRef(code)
   codeRef.current = code
 
@@ -1059,12 +1066,20 @@ export default function BacktestLab() {
               <div className="flex items-baseline gap-3 mb-2">
                 <span className="font-[var(--font-display)] text-base text-white/90 italic">Results</span>
                 <span className="text-[10px] text-amber tracking-wider">{results.strategy_name}</span>
-                <button
-                  onClick={handleExport}
-                  className="ml-auto px-2 py-0.5 text-[9px] tracking-[0.1em] border border-border text-ghost hover:text-amber hover:border-amber/30 transition-all"
-                >
-                  EXPORT
-                </button>
+                <div className="ml-auto flex items-center gap-2">
+                  <button
+                    onClick={() => setShowDeploy(true)}
+                    className="px-2.5 py-1 text-[9px] tracking-[0.1em] border border-purple-500/50 text-purple-400 hover:text-purple-300 hover:border-purple-400/70 transition-all"
+                  >
+                    DEPLOY
+                  </button>
+                  <button
+                    onClick={handleExport}
+                    className="px-2 py-0.5 text-[9px] tracking-[0.1em] border border-border text-ghost hover:text-amber hover:border-amber/30 transition-all"
+                  >
+                    EXPORT
+                  </button>
+                </div>
               </div>
 
               {/* key metrics in compact grid */}
@@ -1440,6 +1455,79 @@ export default function BacktestLab() {
         <div className="mt-4 border border-border bg-surface/60 backdrop-blur p-3" style={{ animation: 'fadeUp 0.3s ease' }}>
           <div className="text-[10px] text-ghost tracking-[0.2em] mb-2">EQUITY.CURVE (no trades)</div>
           <EquityCurve equity={results.equity_curve} buyHold={results.buy_hold_equity} height={200} />
+        </div>
+      )}
+
+      {/* ── Deploy to Paper Trading dialog ────────────── */}
+      {showDeploy && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowDeploy(false)}>
+          <div className="bg-zinc-800 border border-zinc-700 rounded-xl p-6 w-[420px] space-y-4" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-bold text-white">Deploy to Paper Trading</h2>
+            <p className="text-sm text-zinc-400">Strategy will replay historical data then trade live with simulated execution.</p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-zinc-400 block mb-1">Capital ($)</label>
+                <input type="number" value={deployCapital} onChange={e => setDeployCapital(Number(e.target.value))}
+                       className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm" />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400 block mb-1">Max Drawdown (%)</label>
+                <input type="number" value={deployMaxDD} onChange={e => setDeployMaxDD(Number(e.target.value))}
+                       className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm" />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400 block mb-1">Daily Loss Limit ($)</label>
+                <input type="number" value={deployDailyLoss} onChange={e => setDeployDailyLoss(Number(e.target.value))}
+                       className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm" />
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setShowDeploy(false)}
+                      className="flex-1 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg text-sm">
+                Cancel
+              </button>
+              <button
+                disabled={deploying}
+                onClick={async () => {
+                  setDeploying(true)
+                  try {
+                    const startTs = Math.floor(new Date(startDate + 'T00:00:00Z').getTime() / 1000)
+                    const res = await fetch('/api/v1/paper/deploy', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        strategy_code: code,
+                        strategy_name: currentName || results?.strategy_name || 'Custom',
+                        strategy_params: {},
+                        market: market,
+                        initial_capital: deployCapital,
+                        replay_start_ts: startTs,
+                        risk_config: {
+                          max_drawdown_pct: deployMaxDD / 100,
+                          daily_loss_limit: deployDailyLoss,
+                          max_position_pct: 0.95,
+                          liquidation_enabled: true,
+                        },
+                      }),
+                    })
+                    if (res.ok) {
+                      setShowDeploy(false)
+                      window.location.href = '/paper'
+                    }
+                  } catch (e) {
+                    console.error('Deploy failed:', e)
+                  } finally {
+                    setDeploying(false)
+                  }
+                }}
+                className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
+              >
+                {deploying ? 'Deploying...' : 'Deploy'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

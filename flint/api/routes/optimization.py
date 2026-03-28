@@ -10,6 +10,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ...backtest.engine import BacktestEngine
 from ...optimization.optimizer import StrategyOptimizer
 from ...store import FlintStore
 from ...strategy.loader import load_user_strategy
@@ -59,6 +60,22 @@ class OptimizeRequest(BaseModel):
     impact_coefficient: Optional[float] = Field(default=None, ge=0, le=1.0)
     margin_tracking: bool = False
     capital_allocation: Optional[Dict[str, float]] = None
+    markets: Optional[list] = None  # Additional markets for cross-market optimization
+    multi_market_objective: str = "min_sharpe"  # "min_sharpe" or "avg_sharpe"
+
+
+class WalkForwardRequest(BaseModel):
+    code: str
+    market: str = "SOL-PERP"
+    resolution_s: int = 3600
+    start_ts: int
+    end_ts: int
+    initial_capital: float = Field(default=10_000.0, gt=0, le=1e12)
+    fee_rate: float = Field(default=0.0005, ge=0, le=0.5)
+    metric: str = "sharpe_ratio"
+    n_windows: int = Field(default=5, ge=2, le=20)
+    train_pct: float = Field(default=0.7, ge=0.3, le=0.9)
+    trials_per_window: int = Field(default=30, ge=5, le=200)
 
 
 @router.post("/run")
@@ -104,6 +121,15 @@ def run_optimization(req: OptimizeRequest, request: Request):
             if not candles:
                 _set(run_id, status="failed", result={"error": "No candle data available"})
                 return
+
+            # Load extra market candles if multi-market optimization requested
+            extra_market_candles = {}
+            if req.markets and store is not None:
+                for mkt in req.markets:
+                    if mkt != req.market:
+                        extra = store.query_candles(mkt, req.resolution_s, req.start_ts, req.end_ts)
+                        if extra:
+                            extra_market_candles[mkt] = extra
 
             # Load market data (same as backtest route for parity)
             funding_rates = []
@@ -159,6 +185,65 @@ def run_optimization(req: OptimizeRequest, request: Request):
                 from ...execution.capital import VenueAllocator
                 cap_alloc = VenueAllocator(req.capital_allocation)
 
+            if extra_market_candles:
+                # Multi-market: optimize for min/avg sharpe across markets
+                import optuna
+                all_market_candles = {req.market: candles}
+                all_market_candles.update(extra_market_candles)
+
+                param_space = strategy_cls.parameters()
+                if not param_space:
+                    _set(run_id, status="failed",
+                         result={"error": "Strategy has no parameters() for optimization"})
+                    return
+
+                def multi_objective(trial):
+                    params = {}
+                    for name, spec in param_space.items():
+                        if spec["type"] == "int":
+                            params[name] = trial.suggest_int(name, spec["low"], spec["high"])
+                        else:
+                            params[name] = trial.suggest_float(name, spec["low"], spec["high"])
+
+                    sharpes = []
+                    for mkt, mkt_candles in all_market_candles.items():
+                        try:
+                            strat = strategy_cls(**params)
+                        except (TypeError, ValueError):
+                            return float("-inf")
+                        eng = BacktestEngine(strat, req.initial_capital, req.fee_rate)
+                        res = eng.run(mkt_candles)
+                        sharpes.append(res.sharpe_ratio)
+
+                    if req.multi_market_objective == "avg_sharpe":
+                        return sum(sharpes) / len(sharpes)
+                    return min(sharpes)  # default: maximize the worst market
+
+                study = optuna.create_study(direction="maximize")
+                optuna.logging.set_verbosity(optuna.logging.WARNING)
+                study.optimize(multi_objective, n_trials=req.trials)
+
+                best = study.best_trial
+                mm_result_dict = {
+                    "best_params": best.params,
+                    "best_value": round(best.value, 4),
+                    "metric": req.multi_market_objective,
+                    "n_trials": len(study.trials),
+                    "trials": [],
+                    "strategy_name": strategy_cls.__name__,
+                    "market": req.market,
+                    "markets": req.markets,
+                    "candles": len(candles),
+                }
+                # Add metric-specific convenience key (e.g., best_sharpe, best_pnl)
+                mm_metric_key = f"best_{req.multi_market_objective.replace('_ratio', '').replace('total_', '')}"
+                mm_result_dict[mm_metric_key] = round(best.value, 4)
+                _set(run_id, status="complete", progress={
+                    "phase": "done", "pct": 100,
+                    "detail": f"Best {req.multi_market_objective}: {best.value:.4f}",
+                }, result=mm_result_dict)
+                return
+
             _set(run_id, progress={
                 "phase": "optimize", "pct": 15,
                 "detail": f"Optimizing {strategy_cls.__name__} ({req.trials} trials, {len(candles)} candles)...",
@@ -200,10 +285,7 @@ def run_optimization(req: OptimizeRequest, request: Request):
                 })
 
             best_val = _safe(opt_result.best_value)
-            _set(run_id, status="complete", progress={
-                "phase": "done", "pct": 100,
-                "detail": f"Best {req.metric}: {best_val}",
-            }, result={
+            result_dict = {
                 "best_params": opt_result.best_params,
                 "best_value": best_val,
                 "metric": opt_result.metric,
@@ -212,10 +294,100 @@ def run_optimization(req: OptimizeRequest, request: Request):
                 "strategy_name": strategy_cls.__name__,
                 "market": req.market,
                 "candles": len(candles),
-            })
+            }
+            # Add metric-specific convenience key (e.g., best_sharpe, best_pnl)
+            metric_key = f"best_{req.metric.replace('_ratio', '').replace('total_', '')}"
+            result_dict[metric_key] = best_val
+
+            _set(run_id, status="complete", progress={
+                "phase": "done", "pct": 100,
+                "detail": f"Best {req.metric}: {best_val}",
+            }, result=result_dict)
 
         except Exception as e:
             logger.exception("Optimization %s failed", run_id)
+            _set(run_id, status="failed", result={"error": f"{type(e).__name__}: {e}"})
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return {"id": run_id, "status": "running"}
+
+
+@router.post("/walk-forward")
+def run_walk_forward_analysis(req: WalkForwardRequest, request: Request):
+    """Run walk-forward analysis to detect overfitting."""
+    store = request.app.state.store if hasattr(request.app.state, "store") else None
+
+    run_id = str(uuid.uuid4())[:8]
+    _set(run_id, status="running", progress={"phase": "init", "pct": 0,
+         "detail": "Loading strategy...", "started_at": time.time()})
+
+    def _run():
+        try:
+            strategy_cls_ref = load_user_strategy(req.code)
+            strategy_cls = type(strategy_cls_ref)
+
+            _set(run_id, progress={"phase": "data", "pct": 10, "detail": "Loading candles..."})
+
+            candles = []
+            if store is not None:
+                candles = store.query_candles(req.market, req.resolution_s, req.start_ts, req.end_ts)
+
+            if not candles or len(candles) < 50:
+                _set(run_id, status="failed",
+                     result={"error": f"Not enough data: {len(candles)} candles (need 50+)"})
+                return
+
+            _set(run_id, progress={"phase": "walk_forward", "pct": 20,
+                 "detail": f"Running {req.n_windows}-window walk-forward on {len(candles)} candles..."})
+
+            from ...optimization.walk_forward import run_walk_forward as _run_wf
+            wf_result = _run_wf(
+                strategy_cls=strategy_cls,
+                candles=candles,
+                n_windows=req.n_windows,
+                train_pct=req.train_pct,
+                metric=req.metric,
+                trials_per_window=req.trials_per_window,
+                initial_capital=req.initial_capital,
+                fee_rate=req.fee_rate,
+            )
+
+            windows_out = []
+            for w in wf_result.windows:
+                windows_out.append({
+                    "window_idx": w.window_idx,
+                    "train_start_ts": w.train_start_ts,
+                    "train_end_ts": w.train_end_ts,
+                    "test_start_ts": w.test_start_ts,
+                    "test_end_ts": w.test_end_ts,
+                    "best_params": w.best_params,
+                    "in_sample_sharpe": round(w.in_sample_sharpe, 4),
+                    "in_sample_pnl": round(w.in_sample_pnl, 2),
+                    "out_of_sample_sharpe": round(w.out_of_sample_sharpe, 4),
+                    "out_of_sample_pnl": round(w.out_of_sample_pnl, 2),
+                    "out_of_sample_trades": w.out_of_sample_trades,
+                })
+
+            _set(run_id, status="complete", progress={"phase": "done", "pct": 100,
+                 "detail": f"OOS Sharpe: {wf_result.avg_oos_sharpe:.2f}, Overfit ratio: {wf_result.overfitting_ratio:.2f}"
+            }, result={
+                "strategy_name": wf_result.strategy_name,
+                "metric": wf_result.metric,
+                "n_windows": wf_result.n_windows,
+                "windows": windows_out,
+                "avg_is_sharpe": round(wf_result.avg_is_sharpe, 4),
+                "avg_oos_sharpe": round(wf_result.avg_oos_sharpe, 4),
+                "avg_is_pnl": round(wf_result.avg_is_pnl, 2),
+                "avg_oos_pnl": round(wf_result.avg_oos_pnl, 2),
+                "overfitting_ratio": round(wf_result.overfitting_ratio, 4),
+                "parameter_stability": wf_result.parameter_stability,
+                "market": req.market,
+                "candles": len(candles),
+            })
+
+        except Exception as e:
+            logger.exception("Walk-forward %s failed", run_id)
             _set(run_id, status="failed", result={"error": f"{type(e).__name__}: {e}"})
 
     thread = threading.Thread(target=_run, daemon=True)
