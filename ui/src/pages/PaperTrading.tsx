@@ -289,15 +289,36 @@ function SessionDetail({ sessionId, onStop, onKill }: {
           <EquityCurve
             equity={equityCurve.map((e: any) => [e.ts, e.equity] as [number, number])}
             buyHold={buyHoldData.length > 0 ? buyHoldData : undefined}
+            trades={trades.flatMap((t: any) => {
+              const side: 'long' | 'short' = t.side === 'long' ? 'long' : 'short'
+              const markers: { ts: number; type: 'entry' | 'exit'; side: 'long' | 'short' }[] = [
+                { ts: t.entry_ts, type: 'entry', side },
+              ]
+              if (t.exit_ts) markers.push({ ts: t.exit_ts, type: 'exit', side })
+              return markers
+            })}
             height={280}
           />
-          <div className="flex items-center gap-4 mt-2 text-[9px] text-ghost/50">
+          <div className="flex items-center gap-4 mt-2 text-[9px] text-ghost/50 flex-wrap">
             <span className="flex items-center gap-1">
               <span className="w-3 h-px bg-amber inline-block"></span> Strategy
             </span>
             <span className="flex items-center gap-1">
               <span className="w-3 h-px bg-ghost/30 inline-block" style={{borderTop: '1px dashed'}}></span> Buy &amp; Hold ({status.market})
             </span>
+            {trades.length > 0 && (
+              <>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-phosphor inline-block"></span> Long entry
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-loss inline-block"></span> Short entry
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-purple-400 inline-block"></span> Exit
+                </span>
+              </>
+            )}
             {eqHistory.some(e => e.is_replay) && eqHistory.some(e => !e.is_replay) && (
               <span className="text-ghost/30">| dashed = replay · solid = live</span>
             )}
@@ -347,7 +368,7 @@ function SessionDetail({ sessionId, onStop, onKill }: {
             <table className="w-full text-[11px] font-mono">
               <thead>
                 <tr className="border-b border-border">
-                  {['TIME', 'SIDE', 'PRICE', 'SIZE', 'FEE', 'PNL'].map(h => (
+                  {['ENTRY', 'EXIT', 'SIDE', 'ENTRY $', 'EXIT $', 'SIZE', 'PNL'].map(h => (
                     <th key={h} className="px-3 py-2 text-left text-[9px] text-ghost/50 tracking-[0.2em] font-normal">
                       {h}
                     </th>
@@ -355,22 +376,32 @@ function SessionDetail({ sessionId, onStop, onKill }: {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
-                {trades.slice().reverse().map((t: any, i: number) => (
-                  <tr key={i} className="hover:bg-amber-glow transition-colors">
-                    <td className="px-3 py-2 text-ghost/60 tabular-nums">
-                      {t.ts ? new Date(t.ts * 1000).toLocaleTimeString('en-US', { hour12: false }) : '-'}
-                    </td>
-                    <td className={`px-3 py-2 font-semibold ${t.side === 'buy' || t.side === 'long' ? 'text-phosphor' : 'text-loss'}`}>
-                      {t.side?.toUpperCase()}
-                    </td>
-                    <td className="px-3 py-2 text-white/70 tabular-nums">{fmtUsd(t.price ?? t.fill_price)}</td>
-                    <td className="px-3 py-2 text-white/70 tabular-nums">{fmt(t.size ?? t.quantity, 4)}</td>
-                    <td className="px-3 py-2 text-ghost/60 tabular-nums">{fmtUsd(t.fee)}</td>
-                    <td className={`px-3 py-2 tabular-nums font-medium ${(t.pnl ?? 0) >= 0 ? 'text-phosphor' : 'text-loss'}`}>
-                      {t.pnl != null ? ((t.pnl >= 0 ? '+' : '') + fmtUsd(t.pnl)) : '-'}
-                    </td>
-                  </tr>
-                ))}
+                {trades.slice().reverse().map((t: any, i: number) => {
+                  const fmtTime = (ts: number | undefined) =>
+                    ts ? new Date(ts * 1000).toLocaleString('en-US', {
+                      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                      hour12: false, timeZone: 'UTC',
+                    }) : '-'
+                  return (
+                    <tr key={i} className="hover:bg-amber-glow transition-colors">
+                      <td className="px-3 py-2 text-ghost/60 tabular-nums whitespace-nowrap">
+                        {fmtTime(t.entry_ts)}
+                      </td>
+                      <td className="px-3 py-2 text-ghost/60 tabular-nums whitespace-nowrap">
+                        {fmtTime(t.exit_ts)}
+                      </td>
+                      <td className={`px-3 py-2 font-semibold ${t.side === 'buy' || t.side === 'long' ? 'text-phosphor' : 'text-loss'}`}>
+                        {t.side?.toUpperCase()}
+                      </td>
+                      <td className="px-3 py-2 text-white/70 tabular-nums">{fmtUsd(t.entry_price)}</td>
+                      <td className="px-3 py-2 text-white/70 tabular-nums">{fmtUsd(t.exit_price)}</td>
+                      <td className="px-3 py-2 text-white/70 tabular-nums">{fmt(t.size ?? t.quantity, 4)}</td>
+                      <td className={`px-3 py-2 tabular-nums font-medium ${(t.pnl ?? 0) >= 0 ? 'text-phosphor' : 'text-loss'}`}>
+                        {t.pnl != null ? ((t.pnl >= 0 ? '+' : '') + fmtUsd(t.pnl)) : '-'}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

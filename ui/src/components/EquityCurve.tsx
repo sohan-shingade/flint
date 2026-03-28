@@ -1,11 +1,20 @@
 import { useMemo } from 'react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  ReferenceDot,
 } from 'recharts'
+
+interface TradeMarker {
+  ts: number
+  type: 'entry' | 'exit'
+  side: 'long' | 'short'
+  price?: number
+}
 
 interface Props {
   equity: [number, number][]
   buyHold?: [number, number][]
+  trades?: TradeMarker[]
   height?: number
 }
 
@@ -39,7 +48,7 @@ function downsample(arr: any[], maxPoints: number): any[] {
   return result
 }
 
-export default function EquityCurve({ equity, buyHold, height = 300 }: Props) {
+export default function EquityCurve({ equity, buyHold, trades, height = 300 }: Props) {
   const data = useMemo(() => {
     const full = equity.map(([ts, val], i) => ({
       ts,
@@ -49,6 +58,21 @@ export default function EquityCurve({ equity, buyHold, height = 300 }: Props) {
     }))
     return downsample(full, 200)
   }, [equity, buyHold])
+
+  // Map trade markers to the nearest data point's date label for positioning
+  const tradeMarkers = useMemo(() => {
+    if (!trades || trades.length === 0 || data.length === 0) return []
+    return trades.map(t => {
+      // Find the closest equity data point by timestamp
+      let closest = data[0]
+      let minDist = Math.abs(data[0].ts - t.ts)
+      for (const d of data) {
+        const dist = Math.abs(d.ts - t.ts)
+        if (dist < minDist) { minDist = dist; closest = d }
+      }
+      return { ...t, date: closest.date, equity: closest.equity }
+    })
+  }, [trades, data])
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -61,6 +85,18 @@ export default function EquityCurve({ equity, buyHold, height = 300 }: Props) {
         {buyHold && (
           <Line type="monotone" dataKey="buyHold" stroke="#707078" strokeWidth={1} dot={false} strokeDasharray="4 4" name="Buy & Hold" isAnimationActive={false} />
         )}
+        {tradeMarkers.map((m, i) => (
+          <ReferenceDot
+            key={`trade-${i}`}
+            x={m.date}
+            y={m.equity}
+            r={4}
+            fill={m.type === 'entry'
+              ? (m.side === 'long' ? '#4ade80' : '#f87171')
+              : '#a78bfa'}
+            stroke="none"
+          />
+        ))}
       </LineChart>
     </ResponsiveContainer>
   )
