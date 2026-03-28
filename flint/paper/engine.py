@@ -43,6 +43,12 @@ class PaperSession:
         self.last_candle_ts = 0
 
     def to_dict(self) -> dict:
+        unrealized_pnl = sum(
+            p.get("unrealized_pnl", 0) for p in self.broker.positions.values()
+        )
+        realized_pnl = sum(
+            t.get("pnl", 0) for t in self.broker.closed_trades
+        )
         return {
             "session_id": self.session_id,
             "strategy": self.strategy.name,
@@ -52,11 +58,15 @@ class PaperSession:
             "started_at": self.started_at,
             "equity": self.broker.equity,
             "cash": self.broker.cash,
+            "initial_capital": self.broker.initial_capital,
             "positions": list(self.broker.positions.values()),
             "pending_orders": len(self.broker.pending_orders),
             "total_trades": len(self.broker.closed_trades),
             "total_fees": self.broker.total_fees,
-            "pnl": self.broker.equity - self.broker.initial_capital,
+            "total_funding": self.broker.total_funding,
+            "realized_pnl": realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+            "pnl": realized_pnl + unrealized_pnl,
         }
 
 
@@ -219,8 +229,14 @@ class PaperTradingEngine:
                         "unrealized_pnl": p.get("unrealized_pnl", 0),
                     }
 
-                # Restore closed trade count
+                # Restore closed trades into broker memory
                 trades = ss.get_trades(sid)
+                broker.closed_trades = trades
+                broker.total_fees = sum(t.get("fees", 0) for t in trades)
+
+                # Restore funding total
+                funding_payments = ss.get_funding_payments(sid)
+                broker.total_funding = sum(fp.get("payment", 0) for fp in funding_payments)
 
                 # Create context and session
                 ctx = LiveContext(broker, store=self.store, resolution_s=3600, session_id=sid)
