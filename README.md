@@ -5,7 +5,7 @@
     <img alt="Flint" src="https://img.shields.io/badge/FLINT-Solana_Trading_Engine-e8a849?style=for-the-badge&labelColor=09090b">
   </picture>
   <br/><br/>
-  <strong>Backtest trading strategies on Solana. Free data, local-first, no cloud.</strong>
+  <strong>Backtest, paper trade, and research trading strategies on Solana. Free data, local-first, no cloud.</strong>
   <br/><br/>
   <a href="#getting-started"><img src="https://img.shields.io/badge/setup-3_commands-57c84d?style=flat-square&labelColor=141418" alt="3 commands"></a>
   <a href="#writing-strategies"><img src="https://img.shields.io/badge/strategies-15_built--in-e8a849?style=flat-square&labelColor=141418" alt="15 strategies"></a>
@@ -27,6 +27,20 @@ Flint is built specifically for **Solana DeFi** — Drift perpetuals, Jupiter sw
 <p align="center">
   <img src="imgs/homepage.png" alt="Flint homepage" width="100%">
 </p>
+
+### Why Flint?
+
+| | Flint | Freqtrade | Hummingbot | TradingView |
+|---|:---:|:---:|:---:|:---:|
+| **Solana-native** (Drift, Jupiter, Raydium) | Yes | No | Partial | No |
+| **Free data** (no API keys needed) | Yes | No | No | Paid |
+| **Browser-based strategy editor** | Yes | No | No | Yes |
+| **Paper trading with live data** | Yes | Yes | Yes | No |
+| **Funding rate analysis** (10 venues) | Yes | Limited | No | No |
+| **Optuna optimization** | Yes | Hyperopt | No | No |
+| **MCP server** (AI integration) | Yes | No | No | No |
+| **Local-first** (nothing leaves your machine) | Yes | Yes | Yes | No |
+| **Setup time** | 3 commands | 10+ min | Docker | Browser |
 
 ---
 
@@ -99,6 +113,22 @@ Define a `parameters()` method on your strategy and Flint uses **Optuna** to fin
   <br/>
   <em>Optuna optimization — 10 trials ranked by Sharpe ratio with one-click "backtest with best params"</em>
 </p>
+
+### Paper Trading
+
+Deploy any backtested strategy to run live against real Drift market data with simulated execution. Click **Deploy to Paper** on any backtest result and it goes live immediately.
+
+Each strategy runs as its own independent portfolio with:
+
+- **Replay-forward execution** — replays up to 30 days of history, then seamlessly transitions to live candle processing
+- **Risk guardrails** — configurable max drawdown, daily loss limit, position size cap, and perp liquidation simulation
+- **Realistic fills** — 5bps slippage, Drift fee schedule, optional order latency
+- **Funding rate payments** — applied hourly from real multi-venue data
+- **Live PnL updates** — DLOB mid-price polling every 5 seconds
+- **Equity curve with buy-and-hold baseline** — see your strategy vs just holding the asset
+- **Trade markers** — entry/exit dots on the equity chart
+- **Session persistence** — survives server restarts, resumes automatically
+- **Multi-venue support** — per-venue capital allocation with transfer delays
 
 ### Data Explorer
 
@@ -278,7 +308,7 @@ claude mcp add flint -- python -m flint.mcp_server
 | Data | 14 providers (Drift, Pyth, Birdeye, Helius, Raydium, Orca, GeckoTerminal, CoinGecko, Jupiter, CCXT) |
 | Funding | 10 venues (Drift, Binance, Hyperliquid, OKX, Bybit, Gate.io, Bitget, dYdX + CCXT) |
 | Execution | driftpy (Drift Protocol), Jupiter |
-| Testing | 536 tests, all mocked (no network calls) |
+| Testing | 650+ tests, all mocked (no network calls) |
 
 ---
 
@@ -289,7 +319,7 @@ Flint is a **backtesting and research tool**, not a production trading system. K
 - **Backtests are not predictions.** Past performance doesn't guarantee future results. Overfitting to historical data is easy — use walk-forward validation and Monte Carlo to stress-test your strategies.
 - **Fill simulation is approximate.** Slippage models use configurable bps, and orderbook fills use snapshots — neither captures real-time liquidity dynamics, queue priority, or MEV-induced price impact.
 - **Funding rate data varies by venue.** Some venues don't provide historical mark/index prices per record, so funding payments in backtests use the candle close price as a proxy for notional calculation.
-- **No live execution yet.** Paper trading uses real prices but simulated fills. On-chain execution through Drift is scaffolded but not production-ready — use at your own risk.
+- **Paper trading, not live execution.** Paper trading uses real prices with simulated fills (slippage, fees, funding). On-chain execution through Drift is scaffolded but not production-ready — use at your own risk.
 - **Single-machine only.** Flint runs locally on one machine. There's no distributed mode, no cloud deployment, and no multi-user support. DuckDB is single-writer.
 - **Solana-centric.** Data providers are built around the Solana ecosystem (Drift, Jupiter, Raydium, Orca). CEX data is available via CCXT but the execution layer targets Drift.
 
