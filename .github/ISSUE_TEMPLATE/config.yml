@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Help
+    url: https://github.com/sohan-shingade/flint/discussions/categories/q-a
+    about: Ask questions in Discussions instead of opening an issue
+  - name: Feature Ideas
+    url: https://github.com/sohan-shingade/flint/discussions/categories/ideas
+    about: Suggest features in Discussions
+  - name: Share Your Strategy
+    url: https://github.com/sohan-shingade/flint/discussions/categories/show-and-tell
+    about: Show off your strategies and results
