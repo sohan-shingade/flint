@@ -26,6 +26,42 @@ from .risk_guard import RiskGuard, RiskConfig
 logger = logging.getLogger("flint.paper")
 
 
+def backfill_candle_gap(store: FlintStore, market: str, from_ts: int, to_ts: int) -> int:
+    """Download candles for a gap period so resumed sessions can catch up.
+
+    Tries DriftCandleProvider first (faster, recent data), falls back to S3.
+    Returns count of candles stored.
+    """
+    if to_ts - from_ts < 3600:
+        return 0
+
+    stored = 0
+    try:
+        from ..providers.drift_candles import DriftCandleProvider
+        provider = DriftCandleProvider()
+        candles = provider.fetch_candles(market, 3600, from_ts, to_ts)
+        provider.close()
+        if candles:
+            stored = store.upsert_candles(candles)
+            logger.info("Backfilled %d candles for %s via API (%d->%d)", stored, market, from_ts, to_ts)
+    except Exception as e:
+        logger.debug("API backfill failed for %s: %s, trying S3", market, e)
+
+    if stored == 0:
+        try:
+            from ..providers.drift_s3 import DriftS3Provider
+            provider = DriftS3Provider()
+            candles = provider.fetch_candles(market, 3600, from_ts, to_ts)
+            provider.close()
+            if candles:
+                stored = store.upsert_candles(candles)
+                logger.info("Backfilled %d candles for %s via S3 (%d->%d)", stored, market, from_ts, to_ts)
+        except Exception as e:
+            logger.warning("S3 backfill also failed for %s: %s", market, e)
+
+    return stored
+
+
 class PaperSession:
     """Represents a single paper trading session."""
 
@@ -271,6 +307,11 @@ class PaperTradingEngine:
 
                 # Cancel stale pending orders (they're from before restart)
                 broker.pending_orders.clear()
+
+                # Backfill any candle data missing during server downtime
+                now_ts = int(time.time())
+                if last_ts > 0 and now_ts - last_ts > 3600:
+                    backfill_candle_gap(self.store, full["market"], last_ts, now_ts)
 
                 # Launch live loop
                 task = self._schedule_async_task(self._run_live_session(session))

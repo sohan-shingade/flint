@@ -1,6 +1,9 @@
 """Tests for paper trading session resumption."""
 import os
 import tempfile
+import time
+from unittest.mock import patch
+
 import pytest
 
 from flint.models import Candle
@@ -170,3 +173,47 @@ def test_resume_skips_stopped_sessions(store_and_engine):
     engine2 = PaperTradingEngine(store)
     resumed = engine2.resume_sessions()
     assert resumed == 0
+
+
+def test_resume_calls_backfill_candle_gap(store_and_engine):
+    """When a session's last equity snapshot was >1 hour ago, resume should backfill candles."""
+    store, engine = store_and_engine
+
+    # Save a session whose last equity snapshot was 2 hours ago
+    now = int(time.time())
+    two_hours_ago = now - 7200
+    ss = PaperSessionStore(store)
+    ss.save_session(
+        session_id="backfill-test", strategy_name="MA-Crossover(5/10)",
+        strategy_code='''
+from flint.strategy import Strategy
+from flint.models import Candle, Signal
+class S(Strategy):
+    @property
+    def name(self): return "S"
+    def reset(self): pass
+    def on_candle(self, c, h, ctx=None): return Signal.HOLD
+''',
+        strategy_params={}, market="SOL-PERP",
+        initial_capital=10000, replay_start_ts=1700000000,
+        started_at=1700000000, status="live", risk_config={},
+    )
+    ss.save_equity_snapshots("backfill-test", [
+        {"ts": two_hours_ago, "equity": 10500, "cash": 10500,
+         "unrealized_pnl": 0, "is_replay": False},
+    ])
+
+    engine2 = PaperTradingEngine(store)
+
+    with patch("flint.paper.engine.backfill_candle_gap") as mock_backfill:
+        mock_backfill.return_value = 2
+        resumed = engine2.resume_sessions()
+
+    assert resumed == 1
+    mock_backfill.assert_called_once()
+    call_args = mock_backfill.call_args
+    assert call_args[0][0] is store          # store
+    assert call_args[0][1] == "SOL-PERP"     # market
+    assert call_args[0][2] == two_hours_ago  # from_ts
+    # to_ts should be close to now (within a few seconds of test execution)
+    assert abs(call_args[0][3] - now) < 5
