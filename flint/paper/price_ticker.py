@@ -11,9 +11,13 @@ from typing import Dict, List, Optional
 
 import httpx
 
+from ..precision import PRICE_PRECISION
+
 logger = logging.getLogger("flint.paper")
 
 DLOB_BASE = "https://dlob.drift.trade"
+
+_PRICE_SCALE = float(PRICE_PRECISION)
 
 
 def _fetch_mid_price(market: str) -> Optional[float]:
@@ -29,8 +33,9 @@ def _fetch_mid_price(market: str) -> Optional[float]:
         bids = data.get("bids", [])
         asks = data.get("asks", [])
         if bids and asks:
-            best_bid = float(bids[0]["price"])
-            best_ask = float(asks[0]["price"])
+            # DLOB returns raw Drift protocol prices (scaled by PRICE_PRECISION)
+            best_bid = float(bids[0]["price"]) / _PRICE_SCALE
+            best_ask = float(asks[0]["price"]) / _PRICE_SCALE
             return (best_bid + best_ask) / 2
     except Exception as e:
         logger.debug("DLOB fetch failed for %s: %s", market, e)

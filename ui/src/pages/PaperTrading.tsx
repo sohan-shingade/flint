@@ -62,7 +62,7 @@ interface SidebarCardProps {
 function SidebarCard({ session, selected, onClick }: SidebarCardProps) {
   const pnlPositive = session.pnl >= 0
   const capital = session.initial_capital || 10000
-  const returnPct = session.equity > 0 ? ((session.equity - capital) / capital * 100) : 0
+  const returnPct = capital > 0 ? ((session.equity - capital) / capital * 100) : 0
   const returnPositive = returnPct >= 0
 
   return (
@@ -151,16 +151,18 @@ function SessionDetail({ sessionId, onStop, onKill }: {
     )
   }
 
-  const pnlPositive = (status.pnl ?? 0) >= 0
-  const upnlPositive = (status.unrealized_pnl ?? 0) >= 0
+  const realizedPnl = status.realized_pnl ?? 0
+  const unrealizedPnl = status.unrealized_pnl ?? 0
+  const rpnlPositive = realizedPnl >= 0
+  const upnlPositive = unrealizedPnl >= 0
 
   // Use equity history from dedicated endpoint if available, fall back to status.equity_curve
   const equityCurve = eqHistory.length > 0 ? eqHistory : (status.equity_curve || [])
 
   const metrics: { label: string; value: string; accent: boolean | undefined }[] = [
     { label: 'EQUITY', value: fmtUsd(status.equity), accent: undefined },
-    { label: 'REALIZED.PNL', value: (pnlPositive ? '+' : '') + fmtUsd(status.pnl), accent: pnlPositive },
-    { label: 'UNREALIZED.PNL', value: (upnlPositive ? '+' : '') + fmtUsd(status.unrealized_pnl), accent: upnlPositive },
+    { label: 'REALIZED.PNL', value: (rpnlPositive ? '+' : '') + fmtUsd(realizedPnl), accent: rpnlPositive },
+    { label: 'UNREALIZED.PNL', value: (upnlPositive ? '+' : '') + fmtUsd(unrealizedPnl), accent: upnlPositive },
     { label: 'TOTAL.TRADES', value: String(status.total_trades ?? 0), accent: undefined },
     { label: 'TOTAL.FEES', value: fmtUsd(status.total_fees), accent: undefined },
     { label: 'STATUS', value: statusLabel(status.status ?? status.phase), accent: undefined },
@@ -340,7 +342,8 @@ function SessionDetail({ sessionId, onStop, onKill }: {
                 <span className={`w-12 text-center text-[10px] tracking-wider ${pos.side === 'long' ? 'text-phosphor' : 'text-loss'}`}>
                   {pos.side?.toUpperCase()}
                 </span>
-                <span className="text-white/70 tabular-nums w-24">{fmtUsd(pos.notional ?? pos.size)}</span>
+                <span className="text-white/70 tabular-nums w-20">{fmtUsd(pos.entry_price)}</span>
+                <span className="text-ghost/60 tabular-nums w-16">{fmt(pos.size, 4)}</span>
                 <span className={`tabular-nums ml-auto font-medium ${(pos.unrealized_pnl ?? 0) >= 0 ? 'text-phosphor' : 'text-loss'}`}>
                   {(pos.unrealized_pnl ?? 0) >= 0 ? '+' : ''}{fmtUsd(pos.unrealized_pnl)}
                 </span>

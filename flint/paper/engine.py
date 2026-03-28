@@ -82,9 +82,13 @@ class PaperSession:
         unrealized_pnl = sum(
             p.get("unrealized_pnl", 0) for p in self.broker.positions.values()
         )
-        realized_pnl = sum(
-            t.get("pnl", 0) for t in self.broker.closed_trades
-        )
+        # Include DB trades (replay + live) when session_store is available
+        ss = getattr(self, "session_store", None)
+        if ss:
+            all_trades = ss.get_trades(self.session_id)
+        else:
+            all_trades = self.broker.closed_trades
+        realized_pnl = sum(t.get("pnl", 0) for t in all_trades)
         return {
             "session_id": self.session_id,
             "strategy": self.strategy.name,
@@ -97,7 +101,7 @@ class PaperSession:
             "initial_capital": self.broker.initial_capital,
             "positions": list(self.broker.positions.values()),
             "pending_orders": len(self.broker.pending_orders),
-            "total_trades": len(self.broker.closed_trades),
+            "total_trades": len(all_trades),
             "total_fees": self.broker.total_fees,
             "total_funding": self.broker.total_funding,
             "realized_pnl": realized_pnl,
@@ -215,6 +219,10 @@ class PaperTradingEngine:
         session = self.sessions.get(session_id)
         if session is None:
             return []
+        # Use DB trades (includes replay + live) when session_store is available
+        ss = getattr(session, "session_store", None)
+        if ss:
+            return ss.get_trades(session_id)
         return session.broker.closed_trades
 
     def list_sessions(self) -> List[dict]:

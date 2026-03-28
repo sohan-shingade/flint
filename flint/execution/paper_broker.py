@@ -212,8 +212,28 @@ class PaperBroker:
             self.pending_orders.append(order)
         return order.order_id
 
+    def _is_valid_price(self, price: float, market: str) -> bool:
+        """Reject obviously corrupt prices (e.g. Unix timestamps used as prices)."""
+        if price <= 0 or price > 1_000_000_000:
+            return False
+        # If we have an existing position, reject prices that move >100x from entry
+        pos = self.positions.get(market)
+        if pos and pos.get("entry_price", 0) > 0:
+            ratio = price / pos["entry_price"]
+            if ratio > 100 or ratio < 0.01:
+                return False
+        return True
+
     def process_candle(self, candle: Candle) -> List[Fill]:
         """Process all pending orders against this candle."""
+        # Reject candles with obviously corrupt prices
+        if not self._is_valid_price(candle.close, candle.market):
+            logger.warning(
+                "Rejecting candle with suspect price: %s close=%.2f (ts=%d)",
+                candle.market, candle.close, candle.ts,
+            )
+            return []
+
         # Expire timed-out limit/stop orders
         if self._limit_timeout_bars > 0:
             expired = []
