@@ -11,7 +11,7 @@
   <a href="#writing-strategies"><img src="https://img.shields.io/badge/strategies-15_built--in-e8a849?style=flat-square&labelColor=141418" alt="15 strategies"></a>
   <a href="#where-data-comes-from"><img src="https://img.shields.io/badge/providers-14_data_sources-8b5cf6?style=flat-square&labelColor=141418" alt="14 providers"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776ab?style=flat-square&labelColor=141418" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/license-MIT-gray?style=flat-square&labelColor=141418" alt="MIT License">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-gray?style=flat-square&labelColor=141418" alt="AGPL-3.0 License">
 </p>
 
 ---
