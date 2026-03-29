@@ -39,9 +39,7 @@ def system_status(request: Request):
     store = getattr(request.app.state, "store", None)
     has_data = False
     if store is not None:
-        with store._lock:
-            row = store._conn.execute("SELECT COUNT(*) FROM candles").fetchone()
-            has_data = row[0] > 0 if row else False
+        has_data = store.has_candles()
     return SystemStatus(initialized=has_data, version="0.3.0")
 
 

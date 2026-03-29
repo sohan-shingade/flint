@@ -8,9 +8,7 @@ from fastapi.testclient import TestClient
 
 def _make_app(candle_count: int = 0):
     mock_store = MagicMock()
-    mock_store._conn = MagicMock()
-    mock_store._lock = MagicMock()
-    mock_store._conn.execute.return_value.fetchone.return_value = (candle_count,)
+    mock_store.has_candles.return_value = candle_count > 0
 
     with patch("flint.api.main.load_config") as mock_cfg, \
          patch("flint.api.main.FlintStore", return_value=mock_store), \

@@ -371,6 +371,12 @@ class FlintStore:
             ).fetchone()
         return row[0] if row else 0
 
+    def has_candles(self) -> bool:
+        """Check if any candle data exists."""
+        with self._lock:
+            row = self._conn.execute("SELECT 1 FROM candles LIMIT 1").fetchone()
+            return row is not None
+
     # -- funding rates ---------------------------------------------------------
 
     def upsert_funding_rates(self, rates: List[FundingRate]) -> int:
