@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal
+from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal, system
 from .routes.backtest import configure_concurrency
 from ..config import FlintConfig, load_config
 from ..store import FlintStore
@@ -119,6 +119,7 @@ app.include_router(collector.router, prefix="/api/v1/collector", tags=["collecto
 app.include_router(paper.router, prefix="/api/v1/paper", tags=["paper"])
 app.include_router(optimization.router, prefix="/api/v1/optimize", tags=["optimize"])
 app.include_router(journal.router, prefix="/api/v1/journal", tags=["journal"])
+app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
 
 
 @app.get("/api/v1/health")
