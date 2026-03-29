@@ -319,7 +319,7 @@ export default function Setup() {
         <div className="mt-4">
           <div className="h-px bg-border relative">
             <div
-              className="h-px bg-amber transition-all duration-500"
+              className="absolute inset-y-0 left-0 bg-amber transition-all duration-500"
               style={{ width: `${selectedMarkets.length > 0 ? (completed / selectedMarkets.length) * 100 : 0}%` }}
             />
           </div>
