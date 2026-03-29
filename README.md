@@ -7,8 +7,8 @@
   <br/><br/>
   <strong>Backtest, paper trade, and research trading strategies on Solana. Free data, local-first, no cloud.</strong>
   <br/><br/>
-  <a href="#getting-started"><img src="https://img.shields.io/badge/setup-3_commands-57c84d?style=flat-square&labelColor=141418" alt="3 commands"></a>
-  <a href="#writing-strategies"><img src="https://img.shields.io/badge/strategies-15_built--in-e8a849?style=flat-square&labelColor=141418" alt="15 strategies"></a>
+  <a href="#getting-started"><img src="https://img.shields.io/badge/setup-1_command-57c84d?style=flat-square&labelColor=141418" alt="1 command"></a>
+  <a href="#writing-strategies"><img src="https://img.shields.io/badge/strategies-16_built--in-e8a849?style=flat-square&labelColor=141418" alt="16 strategies"></a>
   <a href="#where-data-comes-from"><img src="https://img.shields.io/badge/providers-14_data_sources-8b5cf6?style=flat-square&labelColor=141418" alt="14 providers"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776ab?style=flat-square&labelColor=141418" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-gray?style=flat-square&labelColor=141418" alt="AGPL-3.0 License">
@@ -40,21 +40,49 @@ Flint is built specifically for **Solana DeFi** — Drift perpetuals, Jupiter sw
 | **Optuna optimization** | Yes | Hyperopt | No | No |
 | **MCP server** (AI integration) | Yes | No | No | No |
 | **Local-first** (nothing leaves your machine) | Yes | Yes | Yes | No |
-| **Setup time** | 3 commands | 10+ min | Docker | Browser |
+| **Setup time** | 1 command | 10+ min | Docker | Browser |
 
 ---
 
 ## Getting Started
 
+### Option 1: One-line install (recommended)
+
 ```bash
-pip install -e .          # install flint + dependencies
-flint init                # downloads sample data, runs a demo backtest
+curl -fsSL https://raw.githubusercontent.com/sohan-shingade/flint/main/install.sh | bash
+```
+
+This installs Python, Node, clones the repo, builds the UI, and opens your browser. A **setup wizard** walks you through picking markets and downloading data — no terminal required after the initial command.
+
+### Option 2: Docker
+
+```bash
+git clone https://github.com/sohan-shingade/flint.git && cd flint
+docker compose up
+```
+
+Open [localhost:8000](http://localhost:8000) — the setup wizard handles the rest. Data persists in a Docker volume.
+
+### Option 3: From source (developers)
+
+```bash
+git clone https://github.com/sohan-shingade/flint.git && cd flint
+pip install -e .
+flint init
 flint serve               # starts everything at localhost:8000
 ```
 
-That's it. Open [localhost:8000](http://localhost:8000) and you'll see the dashboard. Go to the **Lab** tab to write and test strategies, or the **Data** tab to download market data.
+Or use the **Makefile** for dev workflows:
 
-If you want to develop on the UI separately:
+```bash
+make install              # pip install + npm install
+make dev                  # API (hot reload) + UI dev server
+make test                 # run all 676 tests
+make serve                # production build + serve
+make build                # build Docker image
+```
+
+For UI development:
 
 ```bash
 flint serve --dev         # API only on :8000
@@ -308,7 +336,7 @@ claude mcp add flint -- python -m flint.mcp_server
 | Data | 14 providers (Drift, Pyth, Birdeye, Helius, Raydium, Orca, GeckoTerminal, CoinGecko, Jupiter, CCXT) |
 | Funding | 10 venues (Drift, Binance, Hyperliquid, OKX, Bybit, Gate.io, Bitget, dYdX + CCXT) |
 | Execution | driftpy (Drift Protocol), Jupiter |
-| Testing | 650+ tests, all mocked (no network calls) |
+| Testing | 676 tests, all mocked (no network calls) |
 
 ---
 

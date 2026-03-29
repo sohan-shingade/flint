@@ -284,11 +284,24 @@ print(f"Overfitting ratio: {result.overfitting_ratio:.2f}")  # > 2x = suspicious
         id: 'installation',
         title: 'Installation',
         content: `
-          <p>Flint requires <strong>Python 3.9+</strong> and runs on macOS, Linux, and WSL. No external database or API keys needed.</p>
-          <h4>Quick Install</h4>
+          <p>Flint runs on macOS, Linux, and WSL. No external database or API keys needed. Choose the method that fits your workflow.</p>
+          <h4>One-Line Install (recommended)</h4>
+          <p>Installs Python, Node, clones the repo, builds the UI, and opens your browser. A setup wizard walks you through market selection and data download.</p>
+          <h4>Docker</h4>
+          <p>Clone the repo and run <code>docker compose up</code>. Data persists in a Docker volume. Open localhost:8000 and the setup wizard handles the rest.</p>
+          <h4>From Source (developers)</h4>
+          <p>Clone, pip install, init, serve. Or use the Makefile: <code>make install</code>, <code>make dev</code>, <code>make test</code>.</p>
         `,
         codeBlocks: [
-          { language: 'bash', code: `git clone <repo-url> && cd flint
+          { language: 'bash', code: `# Option 1: One-line install
+curl -fsSL https://raw.githubusercontent.com/sohan-shingade/flint/main/install.sh | bash
+
+# Option 2: Docker
+git clone https://github.com/sohan-shingade/flint.git && cd flint
+docker compose up
+
+# Option 3: From source
+git clone https://github.com/sohan-shingade/flint.git && cd flint
 pip install -e .
 flint init          # creates config, backfills data, runs sample backtest
 flint serve         # starts the API + UI` },
@@ -1395,14 +1408,25 @@ risk:
         id: 'docker',
         title: 'Docker',
         content: `
-          <p>Run everything with one command:</p>
+          <p>The Docker setup uses a multi-stage build (Python backend + Node frontend) with a smart entrypoint that auto-generates config on first run. Data persists in a named Docker volume.</p>
+          <h4>Quick Start</h4>
+          <p>Clone the repo and run <code>docker compose up</code>. Open localhost:8000 — the setup wizard handles market selection and data download.</p>
+          <h4>Healthcheck</h4>
+          <p>The container includes a healthcheck that pings <code>/api/v1/health</code> every 30 seconds. Docker will restart it automatically if the server goes down.</p>
+          <h4>API Keys</h4>
+          <p>Create a <code>.env</code> file in the project root with optional keys (Birdeye, Helius). The compose file loads it automatically.</p>
         `,
         codeBlocks: [
-          { language: 'bash', code: `docker compose up   # starts API + UI + data collector
+          { language: 'bash', code: `# Start with docker compose (recommended)
+docker compose up
 
-# Or build manually:
+# Or build and run manually
 docker build -t flint .
-docker run -p 8000:8000 -v ./data:/app/data flint` },
+docker run -p 8000:8000 -v flint-data:/app/data flint
+
+# Pass API keys via .env
+echo "FLINT_BIRDEYE_API_KEY=your-key" > .env
+docker compose up` },
         ],
       },
       {

@@ -4,7 +4,7 @@
 set -euo pipefail
 
 FLINT_HOME="${FLINT_HOME:-$HOME/.flint}"
-REPO_URL="${FLINT_REPO_URL:-https://github.com/sohan/flint.git}"
+REPO_URL="${FLINT_REPO_URL:-https://github.com/sohan-shingade/flint.git}"
 MIN_PYTHON="3.10"
 MIN_NODE="18"
 
