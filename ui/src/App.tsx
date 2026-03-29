@@ -7,6 +7,7 @@ import DataExplorer from './pages/DataExplorer'
 import Docs from './pages/Docs'
 import MevDashboard from './pages/MevDashboard'
 import PaperTrading from './pages/PaperTrading'
+import Setup from './pages/Setup'
 
 const navItems = [
   { to: '/', label: 'HOME', key: '1' },
@@ -42,6 +43,22 @@ export default function App() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
+  }, [navigate])
+
+  const [_initChecked, setInitChecked] = useState(false)
+  const [_isInitialized, setIsInitialized] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/v1/system/status')
+      .then(r => r.json())
+      .then(data => {
+        setIsInitialized(data.initialized)
+        setInitChecked(true)
+        if (!data.initialized && window.location.pathname !== '/setup') {
+          navigate('/setup')
+        }
+      })
+      .catch(() => setInitChecked(true))
   }, [navigate])
 
   return (
@@ -93,6 +110,7 @@ export default function App() {
           <Route path="/docs" element={<Docs />} />
           <Route path="/mev" element={<MevDashboard />} />
           <Route path="/paper" element={<PaperTrading />} />
+          <Route path="/setup" element={<Setup />} />
         </Routes>
       </main>
 
