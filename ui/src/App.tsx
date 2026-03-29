@@ -51,11 +51,12 @@ export default function App() {
       .then(r => r.json())
       .then(data => {
         if (!data.initialized && location.pathname !== '/setup') {
-          navigate('/setup')
+          navigate('/setup', { replace: true })
         }
       })
       .catch(() => {})
-  }, [navigate, location.pathname])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div className="min-h-screen relative">

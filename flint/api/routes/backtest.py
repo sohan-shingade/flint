@@ -545,10 +545,9 @@ def run_backtest(req: BacktestRequest, request: Request):
                                     capital_allocator=cap_alloc,
                                     max_runtime_s=_MAX_BACKTEST_SECONDS)
             if extra_candles:
-                # Multi-market: pass dict of all markets
-                all_candles = {req.market: candles}
-                all_candles.update(extra_candles)
-                result = engine.run(all_candles)
+                # Multi-market: pass primary candles + extras separately
+                # so the engine doesn't pick a different primary by count
+                result = engine.run(candles, extra_markets=extra_candles)
             else:
                 result = engine.run(candles)
 
