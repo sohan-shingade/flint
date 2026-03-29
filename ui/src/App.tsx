@@ -1,4 +1,4 @@
-import { Routes, Route, NavLink, useNavigate } from 'react-router-dom'
+import { Routes, Route, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import AsciiBackground from './components/AsciiBackground'
 import Dashboard from './pages/Dashboard'
@@ -21,6 +21,7 @@ const navItems = [
 export default function App() {
   const [clock, setClock] = useState('')
   const navigate = useNavigate()
+  const location = useLocation()
 
   useEffect(() => {
     const tick = () => {
@@ -45,21 +46,16 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [navigate])
 
-  const [_initChecked, setInitChecked] = useState(false)
-  const [_isInitialized, setIsInitialized] = useState(true)
-
   useEffect(() => {
     fetch('/api/v1/system/status')
       .then(r => r.json())
       .then(data => {
-        setIsInitialized(data.initialized)
-        setInitChecked(true)
-        if (!data.initialized && window.location.pathname !== '/setup') {
+        if (!data.initialized && location.pathname !== '/setup') {
           navigate('/setup')
         }
       })
-      .catch(() => setInitChecked(true))
-  }, [navigate])
+      .catch(() => {})
+  }, [navigate, location.pathname])
 
   return (
     <div className="min-h-screen relative">

@@ -34,6 +34,7 @@ export default function Setup() {
   const [showKeys, setShowKeys] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress[]>([])
   const [loadingMarkets, setLoadingMarkets] = useState(false)
+  const [fetchError, setFetchError] = useState(false)
 
   useEffect(() => {
     if (step === 'markets' && availableMarkets.length === 0) {
@@ -47,7 +48,7 @@ export default function Setup() {
           }))
           setAvailableMarkets(markets)
         })
-        .catch(() => {})
+        .catch(() => setFetchError(true))
         .finally(() => setLoadingMarkets(false))
     }
   }, [step, availableMarkets.length])
@@ -97,6 +98,7 @@ export default function Setup() {
             funding_venues: [],
           }),
         })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = await res.json()
         const total = (data.downloaded || 0) + (data.existing || 0)
         progress[i].status = 'done'
@@ -112,7 +114,7 @@ export default function Setup() {
 
   const handleKeysNext = async () => {
     await saveKeys()
-    startDownload()
+    await startDownload()
   }
 
   // -- Welcome --
@@ -122,7 +124,7 @@ export default function Setup() {
         <div className="text-center">
           <h1 className="text-amber text-2xl font-bold tracking-[0.2em] mb-3">FLINT</h1>
           <p className="text-ghost text-sm tracking-wider">
-            Algorithmic trading, backtesting &amp; MEV research for Solana
+            Algorithmic trading, backtesting & MEV research for Solana
           </p>
         </div>
         <button
@@ -169,6 +171,16 @@ export default function Setup() {
 
         {loadingMarkets ? (
           <p className="text-ghost text-xs animate-pulse">Loading available markets...</p>
+        ) : fetchError ? (
+          <div className="text-loss text-xs mb-4">
+            <p>Failed to load markets.</p>
+            <button
+              onClick={() => { setFetchError(false); setAvailableMarkets([]); }}
+              className="text-amber text-[11px] mt-2 hover:underline"
+            >
+              Retry
+            </button>
+          </div>
         ) : (
           <>
             {perpMarkets.length > 0 && (
@@ -262,7 +274,7 @@ export default function Setup() {
                 type="text"
                 value={heliusKey}
                 onChange={e => setHeliusKey(e.target.value)}
-                placeholder="For liquidations &amp; whale tracking"
+                placeholder="For liquidations & whale tracking"
                 className="w-full bg-void border border-border px-3 py-2 text-xs text-terminal placeholder:text-ghost/40 focus:border-amber focus:outline-none"
               />
               <p className="text-ghost/50 text-[10px] mt-1">Free at helius.dev</p>
