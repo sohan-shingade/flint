@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
+from flint.api.routes.system import _get_version
+
 
 def _make_app(candle_count: int = 0):
     mock_store = MagicMock()
@@ -37,7 +39,7 @@ def test_system_status_uninitialized():
     assert resp.status_code == 200
     data = resp.json()
     assert data["initialized"] is False
-    assert data["version"] == "0.3.0"
+    assert data["version"] == _get_version()
 
 
 def test_system_status_initialized():
@@ -46,7 +48,7 @@ def test_system_status_initialized():
     assert resp.status_code == 200
     data = resp.json()
     assert data["initialized"] is True
-    assert data["version"] == "0.3.0"
+    assert data["version"] == _get_version()
 
 
 def test_system_config_saves_api_keys(tmp_path):
@@ -90,3 +92,22 @@ def test_system_config_skips_empty_values(tmp_path):
     content = env_file.read_text()
     assert "FLINT_BIRDEYE_API_KEY" not in content
     assert "FLINT_HELIUS_API_KEY=hel789" in content
+
+
+def test_system_config_preserves_comments(tmp_path):
+    """POST /api/v1/system/config preserves comments and blank lines."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("# API Keys\nFLINT_BIRDEYE_API_KEY=old\n\n# RPC\nSOLANA_RPC_URL=https://example.com\n")
+    client, _ = _make_app()
+
+    with patch("flint.api.routes.system._get_env_path", return_value=str(env_file)):
+        resp = client.post("/api/v1/system/config", json={
+            "birdeye_api_key": "new-key",
+        })
+
+    assert resp.status_code == 200
+    content = env_file.read_text()
+    assert "# API Keys" in content
+    assert "# RPC" in content
+    assert "FLINT_BIRDEYE_API_KEY=new-key" in content
+    assert "SOLANA_RPC_URL=https://example.com" in content
