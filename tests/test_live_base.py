@@ -195,6 +195,50 @@ class TestTickLoop:
         mock_strategy.on_candle.assert_not_called()
 
 
+class TestModifyOrder:
+    def test_modify_price(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        oid = ctx.limit_order("SOL-PERP", Side.LONG, 10.0, 150.0)
+        new_oid = ctx.modify_order(oid, new_price=145.0)
+        assert new_oid != ""
+        assert new_oid != oid
+        # Original should be cancelled
+        old = ctx._tracker.get(oid)
+        assert old.state == OrderState.CANCELLED
+        # New order should have updated price
+        new = ctx._tracker.get(new_oid)
+        assert new.order.price == 145.0
+        assert new.order.size == 10.0
+
+    def test_modify_size(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        oid = ctx.limit_order("SOL-PERP", Side.LONG, 10.0, 150.0)
+        new_oid = ctx.modify_order(oid, new_size=5.0)
+        new = ctx._tracker.get(new_oid)
+        assert new.order.size == 5.0
+        assert new.order.price == 150.0
+
+    def test_modify_both(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        oid = ctx.limit_order("SOL-PERP", Side.LONG, 10.0, 150.0)
+        new_oid = ctx.modify_order(oid, new_size=5.0, new_price=145.0)
+        new = ctx._tracker.get(new_oid)
+        assert new.order.size == 5.0
+        assert new.order.price == 145.0
+
+    def test_modify_terminal_order_fails(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        oid = ctx.market_order("SOL-PERP", Side.LONG, 10.0)
+        ctx.cancel(oid)  # now it's cancelled (terminal)
+        new_oid = ctx.modify_order(oid, new_size=5.0)
+        assert new_oid == ""
+
+    def test_modify_nonexistent_fails(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        new_oid = ctx.modify_order("nonexistent", new_size=5.0)
+        assert new_oid == ""
+
+
 class TestOrderPolling:
     def test_poll_detects_fill(self):
         ctx = MockVenueContext(venue="test", initial_capital=10000.0)

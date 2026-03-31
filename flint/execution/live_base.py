@@ -317,6 +317,36 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
             count += 1
         return count
 
+    def modify_order(self, order_id: str, new_size: Optional[float] = None, new_price: Optional[float] = None) -> str:
+        """Modify an order by cancelling and replacing it.
+
+        Returns the new order_id, or empty string if the original order
+        couldn't be cancelled (already filled/terminal).
+        """
+        tracked = self._tracker.get(order_id)
+        if not tracked or tracked.is_terminal:
+            logger.warning("Cannot modify order %s: not found or terminal", order_id)
+            return ""
+
+        # Capture original order params before cancelling
+        original = tracked.order
+        size = new_size if new_size is not None else original.size
+        price = new_price if new_price is not None else original.price
+
+        # Cancel the original
+        self._tracker.mark_cancelled(order_id)
+
+        # Place replacement
+        if original.order_type == OrderType.MARKET:
+            return self.market_order(original.market, original.side, size, venue=original.venue)
+        elif original.order_type == OrderType.LIMIT:
+            return self.limit_order(original.market, original.side, size, price, venue=original.venue)
+        elif original.order_type == OrderType.STOP_LOSS:
+            return self.stop_order(original.market, original.side, size, price, venue=original.venue)
+        elif original.order_type == OrderType.TAKE_PROFIT:
+            return self.take_profit_order(original.market, original.side, size, price, venue=original.venue)
+        return ""
+
     # --- Internal order routing ---
 
     def _submit_order(self, order: Order) -> str:
