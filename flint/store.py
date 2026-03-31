@@ -222,6 +222,68 @@ CREATE TABLE IF NOT EXISTS paper_funding_payments (
 );
 """
 
+_CREATE_LIVE_SESSIONS = """
+CREATE TABLE IF NOT EXISTS live_sessions (
+    session_id      VARCHAR PRIMARY KEY,
+    strategy_name   VARCHAR NOT NULL,
+    market          VARCHAR NOT NULL,
+    network         VARCHAR NOT NULL,
+    venue           VARCHAR NOT NULL DEFAULT 'drift',
+    initial_capital DOUBLE,
+    config_snapshot VARCHAR,
+    status          VARCHAR DEFAULT 'running',
+    started_at      BIGINT NOT NULL,
+    stopped_at      BIGINT
+);
+"""
+
+_CREATE_LIVE_ORDERS = """
+CREATE TABLE IF NOT EXISTS live_orders (
+    order_id       VARCHAR PRIMARY KEY,
+    session_id     VARCHAR NOT NULL,
+    venue_order_id INTEGER,
+    market         VARCHAR NOT NULL,
+    side           VARCHAR NOT NULL,
+    order_type     VARCHAR NOT NULL,
+    size           DOUBLE NOT NULL,
+    price          DOUBLE,
+    state          VARCHAR NOT NULL,
+    retry_count    INTEGER DEFAULT 0,
+    tx_sig         VARCHAR,
+    created_at     BIGINT NOT NULL,
+    updated_at     BIGINT NOT NULL,
+    state_history  VARCHAR
+);
+"""
+
+_CREATE_LIVE_FILLS = """
+CREATE TABLE IF NOT EXISTS live_fills (
+    fill_id    VARCHAR PRIMARY KEY,
+    order_id   VARCHAR NOT NULL,
+    session_id VARCHAR NOT NULL,
+    market     VARCHAR NOT NULL,
+    side       VARCHAR NOT NULL,
+    price      DOUBLE NOT NULL,
+    size       DOUBLE NOT NULL,
+    fee        DOUBLE NOT NULL,
+    tx_sig     VARCHAR NOT NULL,
+    venue      VARCHAR NOT NULL DEFAULT 'drift',
+    is_partial BOOLEAN DEFAULT FALSE,
+    ts         BIGINT NOT NULL
+);
+"""
+
+_CREATE_LIVE_EQUITY_HISTORY = """
+CREATE TABLE IF NOT EXISTS live_equity_history (
+    session_id     VARCHAR NOT NULL,
+    ts             BIGINT NOT NULL,
+    equity         DOUBLE NOT NULL,
+    cash           DOUBLE NOT NULL,
+    unrealized_pnl DOUBLE NOT NULL,
+    PRIMARY KEY (session_id, ts)
+);
+"""
+
 
 class FlintStore:
     """Thread-safe DuckDB store.
@@ -307,6 +369,11 @@ class FlintStore:
         self._conn.execute(_CREATE_PAPER_TRADES)
         self._conn.execute(_CREATE_PAPER_POSITIONS)
         self._conn.execute(_CREATE_PAPER_FUNDING_PAYMENTS)
+        # Live trading persistence
+        self._conn.execute(_CREATE_LIVE_SESSIONS)
+        self._conn.execute(_CREATE_LIVE_ORDERS)
+        self._conn.execute(_CREATE_LIVE_FILLS)
+        self._conn.execute(_CREATE_LIVE_EQUITY_HISTORY)
 
     # -- candles ---------------------------------------------------------------
 
@@ -851,6 +918,143 @@ class FlintStore:
         return [
             {"provider": r[0], "market": r[1], "data_type": r[2], "last_sync_ts": r[3],
              "age_s": now - r[3], "record_count": r[4], "status": r[5], "error_msg": r[6]}
+            for r in rows
+        ]
+
+    # -- live trading persistence -----------------------------------------------
+
+    def create_live_session(
+        self, session_id: str, strategy_name: str, market: str,
+        network: str, venue: str, initial_capital: float, config_snapshot: str,
+    ) -> None:
+        import time as _time
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO live_sessions "
+                "(session_id, strategy_name, market, network, venue, "
+                "initial_capital, config_snapshot, started_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [session_id, strategy_name, market, network, venue,
+                 initial_capital, config_snapshot, int(_time.time())],
+            )
+
+    def update_live_session_status(
+        self, session_id: str, status: str, stopped_at: Optional[int] = None,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE live_sessions SET status = ?, stopped_at = ? WHERE session_id = ?",
+                [status, stopped_at, session_id],
+            )
+
+    def get_live_session(self, session_id: str) -> Optional[dict]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT session_id, strategy_name, market, network, venue, "
+                "initial_capital, config_snapshot, status, started_at, stopped_at "
+                "FROM live_sessions WHERE session_id = ?",
+                [session_id],
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "session_id": row[0], "strategy_name": row[1], "market": row[2],
+            "network": row[3], "venue": row[4], "initial_capital": row[5],
+            "config_snapshot": row[6], "status": row[7],
+            "started_at": row[8], "stopped_at": row[9],
+        }
+
+    def upsert_live_order(
+        self, order_id: str, session_id: str, venue_order_id: Optional[int],
+        market: str, side: str, order_type: str, size: float, price: float,
+        state: str, retry_count: int, tx_sig: Optional[str],
+        created_at: int, updated_at: int, state_history: str,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO live_orders "
+                "(order_id, session_id, venue_order_id, market, side, order_type, "
+                "size, price, state, retry_count, tx_sig, created_at, updated_at, state_history) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [order_id, session_id, venue_order_id, market, side, order_type,
+                 size, price, state, retry_count, tx_sig, created_at, updated_at, state_history],
+            )
+
+    def get_live_orders(self, session_id: str, state: Optional[str] = None) -> list:
+        sql = (
+            "SELECT order_id, session_id, venue_order_id, market, side, order_type, "
+            "size, price, state, retry_count, tx_sig, created_at, updated_at, state_history "
+            "FROM live_orders WHERE session_id = ?"
+        )
+        params: list = [session_id]
+        if state:
+            sql += " AND state = ?"
+            params.append(state)
+        sql += " ORDER BY created_at ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [
+            {"order_id": r[0], "session_id": r[1], "venue_order_id": r[2],
+             "market": r[3], "side": r[4], "order_type": r[5], "size": r[6],
+             "price": r[7], "state": r[8], "retry_count": r[9], "tx_sig": r[10],
+             "created_at": r[11], "updated_at": r[12], "state_history": r[13]}
+            for r in rows
+        ]
+
+    def insert_live_fill(
+        self, fill_id: str, order_id: str, session_id: str,
+        market: str, side: str, price: float, size: float, fee: float,
+        tx_sig: str, venue: str, is_partial: bool, ts: int,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO live_fills "
+                "(fill_id, order_id, session_id, market, side, price, size, "
+                "fee, tx_sig, venue, is_partial, ts) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [fill_id, order_id, session_id, market, side, price, size,
+                 fee, tx_sig, venue, is_partial, ts],
+            )
+
+    def get_live_fills(self, session_id: str, market: Optional[str] = None) -> list:
+        sql = (
+            "SELECT fill_id, order_id, session_id, market, side, price, size, "
+            "fee, tx_sig, venue, is_partial, ts FROM live_fills WHERE session_id = ?"
+        )
+        params: list = [session_id]
+        if market:
+            sql += " AND market = ?"
+            params.append(market)
+        sql += " ORDER BY ts ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [
+            {"fill_id": r[0], "order_id": r[1], "session_id": r[2], "market": r[3],
+             "side": r[4], "price": r[5], "size": r[6], "fee": r[7], "tx_sig": r[8],
+             "venue": r[9], "is_partial": r[10], "ts": r[11]}
+            for r in rows
+        ]
+
+    def insert_live_equity(
+        self, session_id: str, ts: int, equity: float, cash: float, unrealized_pnl: float,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO live_equity_history "
+                "(session_id, ts, equity, cash, unrealized_pnl) VALUES (?, ?, ?, ?, ?)",
+                [session_id, ts, equity, cash, unrealized_pnl],
+            )
+
+    def get_live_equity_history(self, session_id: str) -> list:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT session_id, ts, equity, cash, unrealized_pnl "
+                "FROM live_equity_history WHERE session_id = ? ORDER BY ts ASC",
+                [session_id],
+            ).fetchall()
+        return [
+            {"session_id": r[0], "ts": r[1], "equity": r[2],
+             "cash": r[3], "unrealized_pnl": r[4]}
             for r in rows
         ]
 
