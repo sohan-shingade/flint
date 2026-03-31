@@ -114,6 +114,16 @@ Flint is **production-ready for backtesting and paper trading**. The core infras
 
 **Note**: This is the single biggest new subsystem. No WebSocket code exists anywhere in the codebase today. Design the base class (`WebSocketFeed`) to be reusable for Hyperliquid in Phase 2.
 
+**Implemented (Sub-project 2):**
+- [x] `WebSocketFeed` base class with reconnection, health checks, REST fallback (`flint/providers/websocket.py`)
+- [x] `CandleAggregator` — raw trades → OHLCV candle bars (`flint/providers/candle_aggregator.py`)
+- [x] `DriftWebSocketFeed` — trade streaming + funding rate subscription (`flint/providers/drift_ws.py`)
+- [x] `PythWebSocketFeed` — sub-second oracle prices with batch persistence (`flint/providers/pyth_ws.py`)
+- [x] Event-driven tick mode (`on_candle_close`) replacing timer-based ticking
+- [x] `venue` field on `Candle` dataclass for multi-venue support
+- [x] `tick_markets` config for controlling which markets trigger strategy ticks
+- [x] `get_oracle_price()` convenience method on ExecutionContext
+
 ### 1.4 Safety Rails
 
 **Extend**: `flint/risk/guards.py`
