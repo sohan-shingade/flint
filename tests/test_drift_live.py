@@ -106,6 +106,54 @@ class TestNetworkConfig:
                 assert ctx._rpc_url == "https://custom-rpc.example.com"
 
 
+class TestRetryWithBackoff:
+    def test_succeeds_first_try(self):
+        import asyncio
+        from flint.execution.drift_live import _retry_with_backoff
+
+        call_count = 0
+        async def succeed():
+            nonlocal call_count
+            call_count += 1
+            return "ok"
+
+        result = asyncio.get_event_loop().run_until_complete(
+            _retry_with_backoff(succeed, max_retries=3, base_delay=0.01)
+        )
+        assert result == "ok"
+        assert call_count == 1
+
+    def test_retries_on_failure(self):
+        import asyncio
+        from flint.execution.drift_live import _retry_with_backoff
+
+        call_count = 0
+        async def fail_then_succeed():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("RPC down")
+            return "ok"
+
+        result = asyncio.get_event_loop().run_until_complete(
+            _retry_with_backoff(fail_then_succeed, max_retries=3, base_delay=0.01)
+        )
+        assert result == "ok"
+        assert call_count == 3
+
+    def test_raises_after_max_retries(self):
+        import asyncio
+        from flint.execution.drift_live import _retry_with_backoff
+
+        async def always_fail():
+            raise ConnectionError("RPC down")
+
+        with pytest.raises(ConnectionError, match="RPC down"):
+            asyncio.get_event_loop().run_until_complete(
+                _retry_with_backoff(always_fail, max_retries=3, base_delay=0.01)
+            )
+
+
 class TestCLILiveCommand:
     def test_live_help(self):
         from typer.testing import CliRunner

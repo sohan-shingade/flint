@@ -44,6 +44,32 @@ _NETWORK_RPC = {
 }
 
 
+async def _retry_with_backoff(coro_fn, max_retries=3, base_delay=1.0):
+    """Retry an async operation with exponential backoff.
+
+    Args:
+        coro_fn: Async callable (no args) to retry.
+        max_retries: Max attempts.
+        base_delay: Initial delay in seconds (doubles each retry).
+    Returns:
+        Result of coro_fn().
+    Raises:
+        Last exception if all retries fail.
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return await coro_fn()
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                logger.warning("Attempt %d/%d failed: %s. Retrying in %.1fs",
+                             attempt + 1, max_retries, e, delay)
+                await asyncio.sleep(delay)
+    raise last_error
+
+
 def _check_driftpy():
     """Check if driftpy is installed."""
     try:
@@ -139,6 +165,16 @@ class LiveDriftContext(LiveExecutionContext):
         if market_idx is None:
             raise ValueError(f"Unknown Drift market: {order.market}")
 
+        # Pre-flight: check collateral
+        try:
+            balance = await self._fetch_balance()
+            if balance <= 0:
+                raise ValueError(f"Insufficient collateral: {balance:.2f} USDC available")
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.warning("Collateral check failed, proceeding: %s", e)
+
         from driftpy.types import (
             OrderParams, OrderType as DriftOrderType,
             MarketType, PositionDirection,
@@ -192,7 +228,11 @@ class LiveDriftContext(LiveExecutionContext):
         else:
             raise ValueError(f"Unsupported order type: {order.order_type}")
 
-        tx_sig = await self._drift_client.place_perp_order(order_params)
+        # Submit with retry + exponential backoff
+        async def _submit():
+            return await self._drift_client.place_perp_order(order_params)
+
+        tx_sig = await _retry_with_backoff(_submit, max_retries=3, base_delay=1.0)
         tx_sig_str = str(tx_sig) if tx_sig else ""
         logger.info("Order submitted: %s tx=%s", order.order_id, tx_sig_str)
 
@@ -212,8 +252,10 @@ class LiveDriftContext(LiveExecutionContext):
         if self._drift_client is None:
             return []
         try:
-            user = self._drift_client.get_user()
-            perp_positions = user.get_perp_positions()
+            async def _fetch():
+                user = self._drift_client.get_user()
+                return user.get_perp_positions()
+            perp_positions = await _retry_with_backoff(_fetch, max_retries=2, base_delay=0.5)
             result = []
             for pos in perp_positions:
                 if pos.base_asset_amount == 0:
@@ -251,8 +293,10 @@ class LiveDriftContext(LiveExecutionContext):
         if self._drift_client is None:
             return 0.0
         try:
-            user = self._drift_client.get_user()
-            free_collateral = user.get_free_collateral()
+            async def _fetch():
+                user = self._drift_client.get_user()
+                return user.get_free_collateral()
+            free_collateral = await _retry_with_backoff(_fetch, max_retries=2, base_delay=0.5)
             from ..precision import QUOTE_PRECISION
             return float(free_collateral) / QUOTE_PRECISION
         except Exception as e:
@@ -263,8 +307,10 @@ class LiveDriftContext(LiveExecutionContext):
         if self._drift_client is None:
             return OrderState.FAILED
         try:
-            user = self._drift_client.get_user()
-            order = user.get_order(venue_order_id)
+            async def _fetch():
+                user = self._drift_client.get_user()
+                return user.get_order(venue_order_id)
+            order = await _retry_with_backoff(_fetch, max_retries=2, base_delay=0.5)
             if order is None:
                 return OrderState.CANCELLED
 
