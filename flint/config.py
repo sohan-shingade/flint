@@ -104,6 +104,17 @@ class FlintConfig(BaseSettings):
     # --- RPC ---
     solana_rpc_url: str = "https://api.mainnet-beta.solana.com"
 
+    # --- Live trading ---
+    live_network: str = "devnet"
+    live_tick_interval_s: int = 60
+    live_on_order_failure: str = "drop"
+    live_max_retries: int = 3
+    live_position_sync_interval: int = 5
+    live_limit_order_timeout_bars: int = 10
+    live_rate_limit_orders_per_sec: int = 10
+    live_rate_limit_concurrent_tx: int = 2
+    live_wallet_mode: str = "keypair"
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""

@@ -89,6 +89,27 @@ collector:
             assert isinstance(result, dict)
 
 
+class TestLiveConfig:
+    def test_defaults(self):
+        cfg = FlintConfig()
+        assert cfg.live_network == "devnet"
+        assert cfg.live_tick_interval_s == 60
+        assert cfg.live_on_order_failure == "drop"
+        assert cfg.live_max_retries == 3
+        assert cfg.live_position_sync_interval == 5
+        assert cfg.live_limit_order_timeout_bars == 10
+        assert cfg.live_rate_limit_orders_per_sec == 10
+        assert cfg.live_rate_limit_concurrent_tx == 2
+        assert cfg.live_wallet_mode == "keypair"
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("FLINT_LIVE_NETWORK", "mainnet")
+        monkeypatch.setenv("FLINT_LIVE_MAX_RETRIES", "5")
+        cfg = FlintConfig()
+        assert cfg.live_network == "mainnet"
+        assert cfg.live_max_retries == 5
+
+
 class TestLoadConfig:
     def test_load_config_returns_config(self):
         config = load_config()
