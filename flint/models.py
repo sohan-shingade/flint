@@ -31,6 +31,22 @@ class OrderStatus(enum.Enum):
     CANCELLED = "cancelled"
 
 
+class OrderState(enum.Enum):
+    """Full lifecycle state for live/on-chain orders.
+
+    Distinct from OrderStatus (used by backtest/paper).
+    Tracks the on-chain submission → confirmation → fill pipeline.
+    """
+    PENDING = "pending"
+    SUBMITTED = "submitted"
+    CONFIRMED = "confirmed"
+    FILLED = "filled"
+    PARTIALLY_FILLED = "partially_filled"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+    FAILED = "failed"
+
+
 class TimeInForce(str, enum.Enum):
     IOC = "ioc"
     FOK = "fok"

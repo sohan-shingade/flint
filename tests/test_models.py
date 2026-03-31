@@ -2,6 +2,7 @@
 from flint.models import (
     Candle, Position, Signal, Side, BacktestResult,
     OpenInterest, Liquidation, WhaleTransfer, DexVolume, TokenUnlock, SyncMetadata,
+    OrderState,
 )
 
 
@@ -143,3 +144,26 @@ def test_sync_metadata_error_state():
     )
     assert sm.status == "error"
     assert sm.error_msg == "rate limited"
+
+
+# ---------------------------------------------------------------------------
+# OrderState enum (live order lifecycle)
+# ---------------------------------------------------------------------------
+
+class TestOrderState:
+    def test_all_states_exist(self):
+        assert OrderState.PENDING.value == "pending"
+        assert OrderState.SUBMITTED.value == "submitted"
+        assert OrderState.CONFIRMED.value == "confirmed"
+        assert OrderState.FILLED.value == "filled"
+        assert OrderState.PARTIALLY_FILLED.value == "partially_filled"
+        assert OrderState.CANCELLED.value == "cancelled"
+        assert OrderState.EXPIRED.value == "expired"
+        assert OrderState.FAILED.value == "failed"
+
+    def test_terminal_states(self):
+        terminal = {OrderState.FILLED, OrderState.CANCELLED, OrderState.EXPIRED, OrderState.FAILED}
+        assert OrderState.PENDING not in terminal
+        assert OrderState.SUBMITTED not in terminal
+        assert OrderState.CONFIRMED not in terminal
+        assert OrderState.FILLED in terminal
