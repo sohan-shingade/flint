@@ -50,6 +50,8 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         tick_interval_s: int = 60,
         position_sync_interval: int = 5,
         limit_order_timeout_bars: int = 10,
+        tick_mode: str = "on_candle_close",
+        tick_markets: Optional[List[str]] = None,
     ):
         self._venue = venue
         self._initial_capital = initial_capital
@@ -60,6 +62,10 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         self._tick_interval_s = tick_interval_s
         self._position_sync_interval = position_sync_interval
         self._limit_order_timeout_bars = limit_order_timeout_bars
+        self._tick_mode = tick_mode
+        self._tick_markets = tick_markets or []
+        self._candle_queue: asyncio.Queue = asyncio.Queue()
+        self._pyth_feed = None
 
         self._positions_cache: Dict[Tuple[str, str], PositionInfo] = {}
         self._current_candle: Optional[Candle] = None
@@ -117,35 +123,80 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
 
     # --- Tick loop ---
 
-    async def run(self, strategy, market: str, fetch_candle=None) -> None:
+    async def run(self, strategy, market: str, feeds=None, fetch_candle=None) -> None:
         """Run the strategy tick loop.
 
         Args:
             strategy: Strategy instance with on_candle(ctx) method.
             market: Primary market symbol (e.g. "SOL-PERP").
-            fetch_candle: Optional async callable() -> Candle. If None, fetches from store.
+            feeds: Optional list of WebSocketFeed instances to start.
+            fetch_candle: Optional async callable() -> Candle for timer mode fallback.
         """
         self._running = True
         self._tick_count = 0
-        logger.info("Starting tick loop (interval=%ds, market=%s)", self._tick_interval_s, market)
+        self._candle_queue = asyncio.Queue()
+
+        if not self._tick_markets:
+            self._tick_markets = [market]
+
+        logger.info("Starting %s tick loop (market=%s, tick_markets=%s)",
+                     self._tick_mode, market, self._tick_markets)
+
+        feed_tasks = []
+        if feeds:
+            for feed in feeds:
+                feed_tasks.append(asyncio.create_task(feed.start()))
 
         poll_task = asyncio.create_task(self._poll_orders_loop())
 
         try:
-            while self._running:
-                self._tick_count += 1
-                try:
-                    await self._tick(strategy, market, fetch_candle)
-                except Exception as e:
-                    logger.error("Tick %d failed: %s", self._tick_count, e)
-                await asyncio.sleep(self._tick_interval_s)
+            if self._tick_mode == "on_candle_close":
+                await self._run_event_driven(strategy, market, fetch_candle)
+            else:
+                await self._run_timer(strategy, market, fetch_candle)
         finally:
+            for task in feed_tasks:
+                task.cancel()
             poll_task.cancel()
-            try:
-                await poll_task
-            except asyncio.CancelledError:
-                pass
+            for task in feed_tasks + [poll_task]:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             logger.info("Tick loop stopped after %d ticks", self._tick_count)
+
+    async def _run_event_driven(self, strategy, market: str, fetch_candle=None) -> None:
+        """Event-driven loop: ticks on candle close events from WebSocket feeds."""
+        while self._running:
+            try:
+                candle = await asyncio.wait_for(
+                    self._candle_queue.get(),
+                    timeout=self._tick_interval_s * 2,
+                )
+                self._current_candle = candle
+                self._tick_count += 1
+                await self._tick(strategy, market)
+            except asyncio.TimeoutError:
+                logger.debug("No WS candle within timeout, falling back to REST")
+                self._tick_count += 1
+                await self._tick(strategy, market, fetch_candle)
+
+    async def _run_timer(self, strategy, market: str, fetch_candle=None) -> None:
+        """Timer-based loop: ticks at fixed intervals (original behavior)."""
+        while self._running:
+            self._tick_count += 1
+            try:
+                await self._tick(strategy, market, fetch_candle)
+            except Exception as e:
+                logger.error("Tick %d failed: %s", self._tick_count, e)
+            await asyncio.sleep(self._tick_interval_s)
+
+    def _on_ws_candle(self, candle) -> None:
+        """Called by CandleAggregator when a bar closes. Enqueues if market is in tick_markets."""
+        venue_market = f"{candle.venue}:{candle.market}"
+        if candle.market in self._tick_markets or venue_market in self._tick_markets:
+            self._current_candle = candle
+            self._candle_queue.put_nowait(candle)
 
     async def _tick(self, strategy, market: str, fetch_candle=None) -> None:
         """Execute one tick of the strategy loop."""
@@ -510,3 +561,18 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
 
     def log(self, message: str) -> None:
         logger.info("[%s] %s", self._session_id, message)
+
+    def get_oracle_price(self, market: Optional[str] = None) -> Optional[Tuple[float, int]]:
+        """Get latest oracle price. Returns (price, ts) or None."""
+        if self._pyth_feed:
+            mkt = market or (self._current_candle.market if self._current_candle else None)
+            if mkt:
+                return self._pyth_feed.get_price(mkt)
+        if self._store and market:
+            try:
+                prices = self._store.query_oracle_prices(market)
+                if prices:
+                    return (prices[-1].price, prices[-1].ts)
+            except Exception:
+                pass
+        return None

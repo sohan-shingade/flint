@@ -241,6 +241,10 @@ class ExecutionContext(abc.ABC):
         """
         return {}
 
+    def get_oracle_price(self, market: Optional[str] = None) -> Optional[tuple]:
+        """Get latest oracle price for a market. Returns (price, timestamp) or None."""
+        return None
+
     def log(self, message: str) -> None:
         """Log a message from the strategy. Default: no-op. Override in subclasses."""
         pass

@@ -251,3 +251,74 @@ class TestOrderPolling:
         run(ctx._poll_active_orders())
         assert oid in ctx._tracker.completed_orders
         assert ctx._tracker.completed_orders[oid].state == OrderState.FILLED
+
+
+class TestEventDrivenTick:
+    def test_candle_queue_triggers_tick(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0,
+                               tick_mode="on_candle_close", tick_markets=["SOL-PERP"])
+        mock_strategy = MagicMock()
+        candle = Candle(ts=1000, open=150.0, high=151.0, low=149.0,
+                        close=150.5, volume=1000.0, market="SOL-PERP",
+                        resolution_s=60, venue="drift")
+
+        async def fetch():
+            return candle
+
+        async def test():
+            ctx._candle_queue = asyncio.Queue()
+            ctx._running = True
+            ctx._candle_queue.put_nowait(candle)
+            got = await asyncio.wait_for(ctx._candle_queue.get(), timeout=1.0)
+            ctx._current_candle = got
+            ctx._tick_count += 1
+            await ctx._tick(mock_strategy, "SOL-PERP", fetch_candle=fetch)
+        run(test())
+        mock_strategy.on_candle.assert_called_once()
+        assert ctx._current_candle == candle
+
+    def test_on_ws_candle_filters_by_tick_markets(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0,
+                               tick_mode="on_candle_close", tick_markets=["SOL-PERP"])
+        ctx._candle_queue = asyncio.Queue()
+
+        sol_candle = Candle(ts=1000, open=150.0, high=151.0, low=149.0,
+                           close=150.5, volume=1000.0, market="SOL-PERP",
+                           resolution_s=60, venue="drift")
+        btc_candle = Candle(ts=1000, open=65000.0, high=65100.0, low=64900.0,
+                           close=65050.0, volume=10.0, market="BTC-PERP",
+                           resolution_s=60, venue="drift")
+
+        ctx._on_ws_candle(sol_candle)
+        ctx._on_ws_candle(btc_candle)
+        assert ctx._candle_queue.qsize() == 1
+
+    def test_venue_specific_tick_markets(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0,
+                               tick_mode="on_candle_close", tick_markets=["drift:SOL-PERP"])
+        ctx._candle_queue = asyncio.Queue()
+
+        drift_candle = Candle(ts=1000, open=150.0, high=151.0, low=149.0,
+                             close=150.5, volume=1000.0, market="SOL-PERP",
+                             resolution_s=60, venue="drift")
+        hl_candle = Candle(ts=1000, open=150.0, high=151.0, low=149.0,
+                          close=150.5, volume=1000.0, market="SOL-PERP",
+                          resolution_s=60, venue="hyperliquid")
+
+        ctx._on_ws_candle(drift_candle)
+        ctx._on_ws_candle(hl_candle)
+        assert ctx._candle_queue.qsize() == 1
+
+
+class TestOraclePrice:
+    def test_get_oracle_price_default_none(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        assert ctx.get_oracle_price("SOL-PERP") is None
+
+    def test_get_oracle_price_from_pyth_feed(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        mock_pyth = MagicMock()
+        mock_pyth.get_price.return_value = (150.25, 1000)
+        ctx._pyth_feed = mock_pyth
+        result = ctx.get_oracle_price("SOL-PERP")
+        assert result == (150.25, 1000)
