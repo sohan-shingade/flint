@@ -11,7 +11,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
-from ..models import Fill, Order, OrderState
+from ..models import Fill, Order, OrderState, OrderType
 
 logger = logging.getLogger("flint.order_tracker")
 
@@ -36,6 +36,8 @@ class TrackedOrder:
     venue_order_id: Optional[int] = None
     tx_sig: Optional[str] = None
     retry_count: int = 0
+    submitted_at: Optional[int] = None
+    confirmed_at_bar: int = 0
     state_history: List[Tuple[OrderState, int]] = field(default_factory=list)
     fills: List[Fill] = field(default_factory=list)
     created_at: int = field(default_factory=lambda: int(time.time()))
@@ -69,6 +71,8 @@ class TrackedOrder:
             self.tx_sig = tx_sig
         if venue_order_id is not None:
             self.venue_order_id = venue_order_id
+        if new_state == OrderState.SUBMITTED and self.submitted_at is None:
+            self.submitted_at = int(time.time())
         logger.debug(
             "Order %s: %s → %s", self.flint_order_id, old_state.value, new_state.value
         )
@@ -163,12 +167,13 @@ class OrderTracker:
         if self._on_state_change:
             self._on_state_change(order_id, old, OrderState.SUBMITTED)
 
-    def mark_confirmed(self, order_id: str, venue_order_id: int) -> None:
+    def mark_confirmed(self, order_id: str, venue_order_id: int, bar_count: int = 0) -> None:
         tracked = self.active_orders.get(order_id)
         if not tracked:
             return
         old = tracked.state
         tracked.transition(OrderState.CONFIRMED, venue_order_id=venue_order_id)
+        tracked.confirmed_at_bar = bar_count
         if self._on_state_change:
             self._on_state_change(order_id, old, OrderState.CONFIRMED)
 
@@ -234,6 +239,46 @@ class OrderTracker:
             return False
         logger.info("Order %s retry %d/%d", order_id, tracked.retry_count, self.max_retries)
         return True
+
+    def get_submitted(self) -> List[TrackedOrder]:
+        """Get all orders in SUBMITTED state (awaiting on-chain confirmation)."""
+        return [t for t in self.active_orders.values() if t.state == OrderState.SUBMITTED]
+
+    def get_confirmed(self) -> List[TrackedOrder]:
+        """Get all orders in CONFIRMED or PARTIALLY_FILLED state (awaiting fill)."""
+        return [t for t in self.active_orders.values()
+                if t.state in (OrderState.CONFIRMED, OrderState.PARTIALLY_FILLED)]
+
+    def check_timeouts(self, submission_timeout_s: int = 30, current_bar: int = 0, limit_timeout_bars: int = 10) -> List[str]:
+        """Check for timed-out orders. Returns list of order_ids that timed out.
+
+        Args:
+            submission_timeout_s: Seconds before a SUBMITTED order is considered timed out.
+            current_bar: Current tick/bar count (for limit order timeout).
+            limit_timeout_bars: Number of bars before an unfilled limit order expires.
+        """
+        now = int(time.time())
+        timed_out = []
+        for oid, tracked in list(self.active_orders.items()):
+            # Submission timeout: SUBMITTED but no confirmation within timeout
+            if tracked.state == OrderState.SUBMITTED and tracked.submitted_at:
+                if now - tracked.submitted_at >= submission_timeout_s:
+                    logger.warning("Order %s submission timeout after %ds", oid, now - tracked.submitted_at)
+                    if not self.increment_retry(oid):
+                        timed_out.append(oid)
+                    else:
+                        timed_out.append(oid)
+
+            # Limit order timeout: CONFIRMED limit order not filled within N bars
+            if (tracked.state in (OrderState.CONFIRMED, OrderState.PARTIALLY_FILLED)
+                    and tracked.order.order_type != OrderType.MARKET
+                    and tracked.confirmed_at_bar > 0
+                    and current_bar - tracked.confirmed_at_bar >= limit_timeout_bars):
+                logger.warning("Order %s expired after %d bars", oid, current_bar - tracked.confirmed_at_bar)
+                self.mark_expired(oid)
+                timed_out.append(oid)
+
+        return timed_out
 
     def _move_to_completed(self, order_id: str) -> None:
         tracked = self.active_orders.pop(order_id, None)

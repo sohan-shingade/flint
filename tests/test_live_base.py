@@ -2,6 +2,7 @@
 import asyncio
 import time
 import pytest
+from unittest.mock import MagicMock
 
 from flint.models import (
     AccountState, Candle, Fill, Order, OrderType, OrderState,
@@ -10,6 +11,11 @@ from flint.models import (
 from flint.execution.live_base import LiveExecutionContext
 from flint.execution.order_tracker import OrderTracker
 from flint.risk.guards import RiskManager
+from flint.store import FlintStore
+
+
+def run(coro):
+    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 class MockVenueContext(LiveExecutionContext):
@@ -166,3 +172,38 @@ class TestAccountState:
         assert account.cash == 10000.0
         assert account.unrealized_pnl == 50.0
         assert account.equity == 10050.0
+
+
+class TestTickLoop:
+    def test_single_tick(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        mock_strategy = MagicMock()
+        candle = Candle(ts=1000, open=150.0, high=151.0, low=149.0,
+                        close=150.5, volume=1000.0, market="SOL-PERP", resolution_s=60)
+        async def fetch():
+            return candle
+        run(ctx._tick(mock_strategy, "SOL-PERP", fetch_candle=fetch))
+        mock_strategy.on_candle.assert_called_once_with(ctx)
+        assert ctx._current_candle == candle
+
+    def test_tick_no_candle_skips(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        mock_strategy = MagicMock()
+        async def fetch():
+            return None
+        run(ctx._tick(mock_strategy, "SOL-PERP", fetch_candle=fetch))
+        mock_strategy.on_candle.assert_not_called()
+
+
+class TestOrderPolling:
+    def test_poll_detects_fill(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        oid = ctx.market_order("SOL-PERP", Side.LONG, 10.0)
+        ctx._tracker.mark_submitted(oid, tx_sig="tx1")
+        ctx._tracker.mark_confirmed(oid, venue_order_id=1)
+        async def mock_poll(venue_oid):
+            return OrderState.FILLED
+        ctx._poll_order_status = mock_poll
+        run(ctx._poll_active_orders())
+        assert oid in ctx._tracker.completed_orders
+        assert ctx._tracker.completed_orders[oid].state == OrderState.FILLED

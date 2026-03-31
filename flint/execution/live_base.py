@@ -49,6 +49,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         max_concurrent_tx: int = 2,
         tick_interval_s: int = 60,
         position_sync_interval: int = 5,
+        limit_order_timeout_bars: int = 10,
     ):
         self._venue = venue
         self._initial_capital = initial_capital
@@ -58,6 +59,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         self._session_id = session_id or str(uuid.uuid4())[:8]
         self._tick_interval_s = tick_interval_s
         self._position_sync_interval = position_sync_interval
+        self._limit_order_timeout_bars = limit_order_timeout_bars
 
         self._positions_cache: Dict[Tuple[str, str], PositionInfo] = {}
         self._current_candle: Optional[Candle] = None
@@ -112,6 +114,128 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         self._running = False
         await self._disconnect()
         logger.info("Disconnected from %s", self._venue)
+
+    # --- Tick loop ---
+
+    async def run(self, strategy, market: str, fetch_candle=None) -> None:
+        """Run the strategy tick loop.
+
+        Args:
+            strategy: Strategy instance with on_candle(ctx) method.
+            market: Primary market symbol (e.g. "SOL-PERP").
+            fetch_candle: Optional async callable() -> Candle. If None, fetches from store.
+        """
+        self._running = True
+        self._tick_count = 0
+        logger.info("Starting tick loop (interval=%ds, market=%s)", self._tick_interval_s, market)
+
+        poll_task = asyncio.create_task(self._poll_orders_loop())
+
+        try:
+            while self._running:
+                self._tick_count += 1
+                try:
+                    await self._tick(strategy, market, fetch_candle)
+                except Exception as e:
+                    logger.error("Tick %d failed: %s", self._tick_count, e)
+                await asyncio.sleep(self._tick_interval_s)
+        finally:
+            poll_task.cancel()
+            try:
+                await poll_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Tick loop stopped after %d ticks", self._tick_count)
+
+    async def _tick(self, strategy, market: str, fetch_candle=None) -> None:
+        """Execute one tick of the strategy loop."""
+        if fetch_candle:
+            candle = await fetch_candle()
+        else:
+            candle = self._fetch_candle_from_store(market)
+        if candle is None:
+            logger.debug("Tick %d: no candle available", self._tick_count)
+            return
+        self._current_candle = candle
+
+        self._tracker.check_timeouts(
+            submission_timeout_s=30,
+            current_bar=self._tick_count,
+            limit_timeout_bars=self._limit_order_timeout_bars,
+        )
+
+        try:
+            strategy.on_candle(self)
+        except Exception as e:
+            logger.error("Strategy error on tick %d: %s", self._tick_count, e)
+
+        await self.submit_pending_orders()
+
+        if self._tick_count % self._position_sync_interval == 0:
+            try:
+                positions = await self._fetch_positions()
+                self._reconcile_positions(positions)
+                self._cash = await self._fetch_balance()
+            except Exception as e:
+                logger.error("Position sync failed: %s", e)
+
+        self._persist_equity()
+
+    def _fetch_candle_from_store(self, market: str):
+        """Fetch the most recent candle from FlintStore."""
+        if not self._store:
+            return None
+        try:
+            import time as _time
+            now = int(_time.time())
+            candles = self._store.query_candles(market, self._tick_interval_s, start_ts=now - self._tick_interval_s * 3)
+            return candles[-1] if candles else None
+        except Exception:
+            return None
+
+    async def stop(self) -> None:
+        """Stop the tick loop gracefully."""
+        self._running = False
+        logger.info("Stop requested, will halt after current tick")
+
+    # --- Order polling loop ---
+
+    async def _poll_orders_loop(self, poll_interval_s: float = 2.0) -> None:
+        """Background loop that polls venue for order status updates."""
+        logger.info("Order polling loop started (interval=%.1fs)", poll_interval_s)
+        while self._running:
+            try:
+                await self._poll_active_orders()
+            except Exception as e:
+                logger.error("Order polling error: %s", e)
+            await asyncio.sleep(poll_interval_s)
+
+    async def _poll_active_orders(self) -> None:
+        """Poll venue for status of all in-flight orders."""
+        for tracked in self._tracker.get_submitted() + self._tracker.get_confirmed():
+            if tracked.venue_order_id is None:
+                continue
+            try:
+                new_state = await self._poll_order_status(tracked.venue_order_id)
+                if new_state == tracked.state:
+                    continue
+                if new_state == OrderState.CONFIRMED and tracked.state == OrderState.SUBMITTED:
+                    self._tracker.mark_confirmed(tracked.flint_order_id, venue_order_id=tracked.venue_order_id, bar_count=self._tick_count)
+                elif new_state == OrderState.FILLED:
+                    fill = Fill(
+                        market=tracked.order.market, side=tracked.order.side,
+                        price=tracked.order.price or 0,
+                        size=tracked.order.size - tracked.filled_size,
+                        fee=0, ts=int(time.time()),
+                        order_id=tracked.flint_order_id,
+                        tx_sig=tracked.tx_sig or "", venue=self._venue,
+                    )
+                    self._tracker.mark_filled(tracked.flint_order_id, fill)
+                elif new_state == OrderState.CANCELLED:
+                    self._tracker.mark_cancelled(tracked.flint_order_id)
+                self._persist_order(tracked)
+            except Exception as e:
+                logger.error("Poll failed for order %s: %s", tracked.flint_order_id, e)
 
     # --- ExecutionContext interface ---
 

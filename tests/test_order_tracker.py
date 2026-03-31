@@ -201,3 +201,47 @@ class TestRateLimiter:
         assert tracker.can_submit() is False
         tracker.mark_confirmed("rl-0", venue_order_id=1)
         assert tracker.can_submit() is True
+
+
+class TestTimeouts:
+    def test_submission_timeout(self):
+        tracker = OrderTracker(max_retries=1, on_failure="drop")
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                      size=10.0, order_id="to-1", ts=1000)
+        tracker.submit(order)
+        tracker.mark_submitted("to-1", tx_sig="sig1")
+        tracker.active_orders["to-1"].submitted_at = int(time.time()) - 31
+        timed_out = tracker.check_timeouts(submission_timeout_s=30)
+        assert len(timed_out) > 0
+
+    def test_limit_order_bar_timeout(self):
+        tracker = OrderTracker(max_retries=3, on_failure="drop")
+        order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.LIMIT,
+                      size=10.0, price=150.0, order_id="to-2", ts=1000)
+        tracker.submit(order)
+        tracker.mark_submitted("to-2", tx_sig="sig2")
+        tracker.mark_confirmed("to-2", venue_order_id=1, bar_count=5)
+        timed_out = tracker.check_timeouts(current_bar=10, limit_timeout_bars=10)
+        assert len(timed_out) == 0
+        timed_out = tracker.check_timeouts(current_bar=15, limit_timeout_bars=10)
+        assert "to-2" in timed_out
+
+    def test_get_submitted(self):
+        tracker = OrderTracker(max_retries=3, on_failure="drop")
+        o1 = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                   size=10.0, order_id="gs-1", ts=1000)
+        o2 = Order(market="BTC-PERP", side=Side.SHORT, order_type=OrderType.LIMIT,
+                   size=0.1, price=65000.0, order_id="gs-2", ts=1000)
+        tracker.submit(o1)
+        tracker.submit(o2)
+        tracker.mark_submitted("gs-1", tx_sig="sig1")
+        assert len(tracker.get_submitted()) == 1
+
+    def test_get_confirmed(self):
+        tracker = OrderTracker(max_retries=3, on_failure="drop")
+        o1 = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
+                   size=10.0, order_id="gc-1", ts=1000)
+        tracker.submit(o1)
+        tracker.mark_submitted("gc-1", tx_sig="sig1")
+        tracker.mark_confirmed("gc-1", venue_order_id=1)
+        assert len(tracker.get_confirmed()) == 1
