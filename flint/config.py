@@ -115,6 +115,11 @@ class FlintConfig(BaseSettings):
     live_rate_limit_concurrent_tx: int = 2
     live_wallet_mode: str = "keypair"
 
+    # --- Live trading (WebSocket feeds) ---
+    live_tick_mode: str = "on_candle_close"
+    live_candle_resolution_s: int = 60
+    live_tick_markets: List[str] = Field(default=[])
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""

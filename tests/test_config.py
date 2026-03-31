@@ -110,6 +110,21 @@ class TestLiveConfig:
         assert cfg.live_max_retries == 5
 
 
+class TestWebSocketConfig:
+    def test_defaults(self):
+        cfg = FlintConfig()
+        assert cfg.live_tick_mode == "on_candle_close"
+        assert cfg.live_candle_resolution_s == 60
+        assert cfg.live_tick_markets == []
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("FLINT_LIVE_TICK_MODE", "timer")
+        monkeypatch.setenv("FLINT_LIVE_CANDLE_RESOLUTION_S", "300")
+        cfg = FlintConfig()
+        assert cfg.live_tick_mode == "timer"
+        assert cfg.live_candle_resolution_s == 300
+
+
 class TestLoadConfig:
     def test_load_config_returns_config(self):
         config = load_config()
