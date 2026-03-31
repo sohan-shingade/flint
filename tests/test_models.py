@@ -167,3 +167,25 @@ class TestOrderState:
         assert OrderState.SUBMITTED not in terminal
         assert OrderState.CONFIRMED not in terminal
         assert OrderState.FILLED in terminal
+
+
+class TestCandleVenue:
+    def test_default_venue(self):
+        from flint.models import Candle
+        c = Candle(ts=1000, open=100.0, high=101.0, low=99.0,
+                   close=100.5, volume=500.0, market="SOL-PERP", resolution_s=60)
+        assert c.venue == "default"
+
+    def test_explicit_venue(self):
+        from flint.models import Candle
+        c = Candle(ts=1000, open=100.0, high=101.0, low=99.0,
+                   close=100.5, volume=500.0, market="SOL-PERP", resolution_s=60,
+                   venue="drift")
+        assert c.venue == "drift"
+
+    def test_backward_compatible(self):
+        from flint.models import Candle
+        c = Candle(ts=1000, open=100.0, high=101.0, low=99.0,
+                   close=100.5, volume=500.0, market="SOL-PERP", resolution_s=60)
+        assert c.market == "SOL-PERP"
+        assert c.venue == "default"

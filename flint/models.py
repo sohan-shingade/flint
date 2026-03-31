@@ -67,6 +67,7 @@ class Candle:
     volume: float  # base asset amount
     market: str  # e.g. "SOL-PERP"
     resolution_s: int  # candle width in seconds
+    venue: str = "default"
 
 
 @dataclass
