@@ -136,5 +136,108 @@ class HyperliquidClient:
             formatted = formatted.rstrip("0").rstrip(".")
         return formatted
 
+    # --- EIP-712 Signing ---
+
+    def _sign_action(self, action: dict) -> tuple:
+        """Sign an exchange action using EIP-712 phantom agent approach.
+        Returns (signature_dict, nonce).
+        """
+        nonce = int(time.time() * 1000)
+        action_bytes = self._action_hash(action, nonce)
+
+        # Phantom agent typed data
+        source = "a" if self._network == "mainnet" else "b"
+        typed_data = {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"},
+                ],
+                "HyperliquidTransaction:Approve": [
+                    {"name": "hyperliquidChain", "type": "string"},
+                    {"name": "source", "type": "string"},
+                    {"name": "connectionId", "type": "bytes32"},
+                ],
+            },
+            "primaryType": "HyperliquidTransaction:Approve",
+            "domain": {
+                "name": "Exchange",
+                "version": "1",
+                "chainId": self._chain_id,
+                "verifyingContract": "0x0000000000000000000000000000000000000000",
+            },
+            "message": {
+                "hyperliquidChain": "Mainnet" if self._network == "mainnet" else "Testnet",
+                "source": source,
+                "connectionId": action_bytes,
+            },
+        }
+
+        signed = self._account.sign_typed_data(
+            typed_data["domain"],
+            {"HyperliquidTransaction:Approve": typed_data["types"]["HyperliquidTransaction:Approve"]},
+            typed_data["message"],
+        )
+        signature = {
+            "r": hex(signed.r),
+            "s": hex(signed.s),
+            "v": signed.v,
+        }
+        return signature, nonce
+
+    def _action_hash(self, action: dict, nonce: int) -> bytes:
+        """Compute action hash for signing."""
+        import msgpack
+        import hashlib
+        data = msgpack.packb(action, use_bin_type=True)
+        combined = data + nonce.to_bytes(8, "big") + b"\x00"
+        return hashlib.sha256(combined).digest()
+
+    # --- Exchange endpoints (write, signed) ---
+
+    async def place_order(self, asset: int, is_buy: bool, size: str, price: str,
+                          order_type: dict, reduce_only: bool = False) -> dict:
+        action = {
+            "type": "order",
+            "orders": [{"a": asset, "b": is_buy, "p": price, "s": size, "r": reduce_only, "t": order_type}],
+            "grouping": "na",
+        }
+        return await self._exchange_request(action)
+
+    async def cancel_order(self, asset: int, oid: int) -> dict:
+        action = {"type": "cancel", "cancels": [{"a": asset, "o": oid}]}
+        return await self._exchange_request(action)
+
+    async def cancel_all_orders(self, asset: Optional[int] = None) -> dict:
+        if asset is not None:
+            action = {"type": "cancel", "cancels": [{"a": asset, "o": -1}]}
+        else:
+            action = {"type": "cancelByCloid", "cancels": []}
+        return await self._exchange_request(action)
+
+    async def _exchange_request(self, action: dict) -> dict:
+        signature, nonce = self._sign_action(action)
+        payload = {"action": action, "nonce": nonce, "signature": signature}
+        resp = await self._http.post(f"{self._base_url}/exchange", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    @staticmethod
+    def parse_order_id(response: dict) -> Optional[int]:
+        """Extract order ID from a place_order response."""
+        try:
+            statuses = response["response"]["data"]["statuses"]
+            if statuses:
+                status = statuses[0]
+                if "resting" in status:
+                    return status["resting"]["oid"]
+                elif "filled" in status:
+                    return status["filled"]["oid"]
+        except (KeyError, IndexError):
+            pass
+        return None
+
     async def close(self) -> None:
         await self._http.aclose()
