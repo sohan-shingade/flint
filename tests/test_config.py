@@ -125,6 +125,26 @@ class TestWebSocketConfig:
         assert cfg.live_candle_resolution_s == 300
 
 
+class TestSafetyRailsConfig:
+    def test_defaults(self):
+        cfg = FlintConfig()
+        assert cfg.live_dry_run is False
+        assert cfg.live_kill_switch_drawdown_pct == 0.15
+        assert cfg.live_kill_switch_check_interval_s == 5.0
+        assert cfg.live_max_orders_per_minute == 30
+        assert cfg.live_per_market_position_limits == ""
+        assert cfg.live_drawdown_warning_pct == 0.075
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("FLINT_LIVE_DRY_RUN", "true")
+        monkeypatch.setenv("FLINT_LIVE_KILL_SWITCH_DRAWDOWN_PCT", "0.10")
+        monkeypatch.setenv("FLINT_LIVE_MAX_ORDERS_PER_MINUTE", "60")
+        cfg = FlintConfig()
+        assert cfg.live_dry_run is True
+        assert cfg.live_kill_switch_drawdown_pct == 0.10
+        assert cfg.live_max_orders_per_minute == 60
+
+
 class TestLoadConfig:
     def test_load_config_returns_config(self):
         config = load_config()

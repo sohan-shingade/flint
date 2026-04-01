@@ -120,6 +120,14 @@ class FlintConfig(BaseSettings):
     live_candle_resolution_s: int = 60
     live_tick_markets: List[str] = Field(default=[])
 
+    # --- Safety rails ---
+    live_dry_run: bool = False
+    live_kill_switch_drawdown_pct: float = 0.15
+    live_kill_switch_check_interval_s: float = 5.0
+    live_max_orders_per_minute: int = 30
+    live_per_market_position_limits: str = ""
+    live_drawdown_warning_pct: float = 0.075
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""
