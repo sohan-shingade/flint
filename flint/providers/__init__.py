@@ -3,6 +3,7 @@ from .birdeye import BirdeyeProvider
 from .ccxt_markets import CCXTMarketMapper
 from .ccxt_provider import CCXTProvider
 from .drift_candles import DriftCandleProvider
+from .hyperliquid_candles import HyperliquidCandleProvider
 from .drift_s3 import DriftS3Provider
 from .drift_api import DriftDataProvider
 from .funding_rates import (
@@ -40,6 +41,7 @@ __all__ = [
     "DriftS3Provider",
     "GeckoProvider",
     "HeliusProvider",
+    "HyperliquidCandleProvider",
     "HyperliquidFundingProvider",
     "JupiterProvider",
     "OKXFundingProvider",
