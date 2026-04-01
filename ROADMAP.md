@@ -312,6 +312,18 @@ What to build:
   - Configurable: `wait_for_all_legs: true` or `independent_legs: true`
   - Timeout per leg: cancel unfilled side after N seconds
 
+**Implemented:**
+- [x] `MultiVenueLiveContext(ExecutionContext)` wrapping multiple venue contexts (`flint/execution/multi_venue_live.py`)
+- [x] Order routing by venue parameter (market, limit, stop, take_profit, cancel, cancel_all)
+- [x] Aggregated `account` property (sum of all venue equity/cash)
+- [x] `venue_account(venue)` for per-venue breakdown
+- [x] `total_exposure(market)` net size across venues
+- [x] `per_venue_pnl()` unrealized PnL per venue
+- [x] Paired leg submission (`submit_leg_group`) with timeout and optional auto-unwind
+- [x] Configurable tick mode: "primary" (single venue triggers ticks) or "any" (all venues trigger)
+- [x] EquityMonitor integration via aggregated account property
+- [x] `OrderLeg`, `LegGroup`, `LegGroupResult` dataclasses in models.py
+
 ### 3.2 Funding Arb Strategy (Built-In Template)
 
 **New file**: `flint/strategy/funding_arb.py`
@@ -335,6 +347,14 @@ What to build:
   - Run on historical cross-venue funding data (already in FlintStore)
   - Expect: low volatility, consistent positive carry, Sharpe > 2
 
+**Implemented:**
+- [x] `FundingArbStrategy` template with Optuna-optimizable parameters (`flint/strategy/funding_arb.py`)
+- [x] Cross-venue funding spread detection via `ctx.get_funding_by_venue()`
+- [x] Delta-neutral entry: long low-funding venue, short high-funding venue
+- [x] Exit on spread convergence or max hold time
+- [x] Min spread duration guard
+- [x] Works in both backtest and live modes
+
 ### 3.3 Cross-Venue Backtest Engine
 
 **Extend**: `flint/backtest/engine.py`
@@ -353,6 +373,12 @@ What to build:
   - PnL attribution by venue
   - Funding income breakdown by venue
   - Correlation of venue-specific returns
+
+**Implemented:**
+- [x] `venue:market` composite key parsing in BacktestEngine (`_parse_venue_market`)
+- [x] Backward compatible: plain keys (no prefix) default to "default" venue
+- [x] Per-venue PnL, trade count, and funding income in BacktestResult
+- [x] Candle venue tagging from composite keys
 
 ### Phase 3 Deliverables
 
