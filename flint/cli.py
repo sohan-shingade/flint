@@ -1089,6 +1089,57 @@ def parity(
     store.close()
 
 
+# ─── SLIPPAGE CALIBRATION ──────────────────────────────────
+
+@app.command()
+def calibrate(
+    venue: str = typer.Argument(..., help="Venue to calibrate (e.g. drift, hyperliquid)"),
+    market: str = typer.Option("SOL-PERP", help="Market to calibrate"),
+    lookback: int = typer.Option(30, help="Days of fill data to use"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print report without writing to config"),
+):
+    """Calibrate slippage impact model from live fill data."""
+    from flint.config import load_config
+    from flint.store import FlintStore
+    from flint.backtest.calibration import CalibrationEngine
+
+    config = load_config()
+    store = FlintStore(config.db_path)
+
+    try:
+        engine = CalibrationEngine(store)
+        report = engine.calibrate(venue=venue, market=market,
+            lookback_days=lookback, min_fills=config.calibration_min_fills)
+        console.print(report.summary())
+        if not dry_run:
+            _write_impact_to_yaml(venue, report.recommended_impact_coeff)
+            console.print(f"\n[green]Updated flint.yaml with impact_coefficient={report.recommended_impact_coeff:.6f}[/green]")
+        else:
+            console.print("\n[yellow]Dry run — config not updated.[/yellow]")
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    finally:
+        store.close()
+
+
+def _write_impact_to_yaml(venue: str, impact_coeff: float) -> None:
+    """Update impact_coefficient for a venue in flint.yaml."""
+    import os
+    import yaml
+    yaml_path = os.path.join(os.getcwd(), "flint.yaml")
+    if not os.path.exists(yaml_path):
+        data = {}
+    else:
+        with open(yaml_path, "r") as f:
+            data = yaml.safe_load(f) or {}
+    venues = data.setdefault("venues", {})
+    venue_data = venues.setdefault(venue, {})
+    venue_data["impact_coefficient"] = round(impact_coeff, 6)
+    with open(yaml_path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+
 # ─── ENTRY POINT ───────────────────────────────────────────
 
 def main():
