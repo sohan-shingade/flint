@@ -14,6 +14,7 @@ from .macd_divergence import MACDDivergenceStrategy
 from .atr_breakout import ATRBreakoutStrategy
 from .multi_venue_funding import MultiVenueFundingStrategy
 from .rsi_macd_combo import RSIMACDComboStrategy
+from .funding_arb import FundingArbStrategy
 
 __all__ = [
     "Strategy",
@@ -32,6 +33,7 @@ __all__ = [
     "ATRBreakoutStrategy",
     "MultiVenueFundingStrategy",
     "RSIMACDComboStrategy",
+    "FundingArbStrategy",
 ]
 
 # Re-export ExecutionContext for convenience
