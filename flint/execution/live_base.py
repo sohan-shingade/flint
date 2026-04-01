@@ -53,6 +53,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         tick_mode: str = "on_candle_close",
         tick_markets: Optional[List[str]] = None,
         dry_run: bool = False,
+        notification_manager=None,
     ):
         self._venue = venue
         self._initial_capital = initial_capital
@@ -68,6 +69,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         self._candle_queue: asyncio.Queue = asyncio.Queue()
         self._pyth_feed = None
         self._dry_run = dry_run
+        self._notification_manager = notification_manager
 
         self._positions_cache: Dict[Tuple[str, str], PositionInfo] = {}
         self._current_candle: Optional[Candle] = None
@@ -409,6 +411,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
             )
             if result is None:
                 logger.info("Order %s rejected by risk guards", order.order_id)
+                self._notify("risk_rejection", f"Order rejected on {order.market}: {order.side.value} {order.size:.4f}")
                 return ""
             order = result
         self._tracker.submit(order)
@@ -469,6 +472,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         self._persist_fill(fill)
         logger.info("Fill: %s %s %.4f @ %.2f (fee=%.4f)",
                      fill.side.value, fill.market, fill.size, fill.price, fill.fee)
+        self._notify("fill", f"Fill: {fill.side.value} {fill.market} {fill.size:.4f} @ {fill.price:.2f}")
 
     def _handle_fail(self, order_id: str, reason: str) -> None:
         logger.warning("Order %s failed: %s (policy=%s)",
@@ -476,6 +480,29 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         if self._tracker.on_failure == "halt":
             self._running = False
             logger.error("Strategy halted due to order failure")
+        self._notify("order_failed", f"Order {order_id} failed: {reason}")
+
+    def _notify(self, event_type: str, message: str, data=None) -> None:
+        """Fire a notification if manager is configured."""
+        if not self._notification_manager:
+            return
+        from ..notifications.base import TradingEvent
+        import time as _time
+        event = TradingEvent(
+            event_type=event_type,
+            message=message,
+            data=data or {},
+            timestamp=int(_time.time()),
+        )
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(self._notification_manager.notify(event))
+            else:
+                loop.run_until_complete(self._notification_manager.notify(event))
+        except Exception as e:
+            logger.error("Notification failed: %s", e)
 
     # --- Position management ---
 

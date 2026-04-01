@@ -2,7 +2,7 @@
 import asyncio
 import time
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from flint.models import (
     AccountState, Candle, Fill, Order, OrderType, OrderState,
@@ -362,3 +362,45 @@ class TestDryRunMode:
         ctx.market_order("SOL-PERP", Side.LONG, 10.0)
         run(ctx.submit_pending_orders())
         assert len(ctx._placed_orders) == 0
+
+
+class TestAlertIntegration:
+    def test_fill_fires_notification(self):
+        nm = MagicMock()
+        nm.notify = AsyncMock(return_value=1)
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0,
+                               notification_manager=nm)
+        fill = Fill(market="SOL-PERP", side=Side.LONG, price=150.0,
+                    size=10.0, fee=0.15, ts=1000, order_id="o1", venue="test")
+        ctx._handle_fill("o1", fill)
+        assert nm.notify.call_count == 1
+        event = nm.notify.call_args[0][0]
+        assert event.event_type == "fill"
+
+    def test_failure_fires_notification(self):
+        nm = MagicMock()
+        nm.notify = AsyncMock(return_value=1)
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0,
+                               notification_manager=nm)
+        ctx._handle_fail("o1", "retries exhausted")
+        assert nm.notify.call_count == 1
+        event = nm.notify.call_args[0][0]
+        assert event.event_type == "order_failed"
+
+    def test_risk_rejection_fires_notification(self):
+        from flint.risk.guards import RiskManager, MaxOpenPositions
+        nm = MagicMock()
+        nm.notify = AsyncMock(return_value=1)
+        rm = RiskManager(guards=[MaxOpenPositions(max_positions=0)])
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0,
+                               risk_manager=rm, notification_manager=nm)
+        ctx.market_order("SOL-PERP", Side.LONG, 10.0)
+        assert nm.notify.call_count == 1
+        event = nm.notify.call_args[0][0]
+        assert event.event_type == "risk_rejection"
+
+    def test_no_notification_without_manager(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        fill = Fill(market="SOL-PERP", side=Side.LONG, price=150.0,
+                    size=10.0, fee=0.15, ts=1000, order_id="o1", venue="test")
+        ctx._handle_fill("o1", fill)  # Should not raise
