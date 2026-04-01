@@ -214,6 +214,15 @@ What to build:
   - Min order sizes, tick sizes, lot sizes
   - Fetch on startup, cache locally
 
+**Implemented:**
+- [x] `HyperliquidClient` async REST connector with EIP-712 signing (`flint/connectors/hyperliquid.py`)
+- [x] Info endpoints: get_meta, get_clearinghouse_state, get_open_orders, get_user_fills, get_candle_snapshot, get_l2_book
+- [x] Exchange endpoints: place_order, cancel_order, cancel_all_orders with signed requests
+- [x] Market metadata caching (asset indices, tick sizes, lot sizes) from get_meta()
+- [x] Precision formatting (format_size, format_price) per asset
+- [x] Testnet/mainnet URL + chain ID toggle
+- [x] `FLINT_HYPERLIQUID_PRIVATE_KEY` env var authentication (API wallet recommended, withdrawals via Hyperliquid web UI)
+
 ### 2.2 Hyperliquid Live Execution
 
 **New file**: `flint/execution/hyperliquid_live.py`
@@ -232,6 +241,15 @@ What to build:
   - Reconcile with FlintStore
 - [ ] Same safety rails as Drift (reuse RiskGuard chain)
 
+**Implemented:**
+- [x] `LiveHyperliquidContext(LiveExecutionContext)` with all 7 abstract methods (`flint/execution/hyperliquid_live.py`)
+- [x] Market order simulation via IOC limit with configurable slippage (default 0.3%)
+- [x] Position parsing from clearinghouse state (long/short detection, zero filtering)
+- [x] Balance extraction from marginSummary.accountValue
+- [x] Order status polling: open orders → fills → cancelled fallback
+- [x] `HyperliquidWebSocketFeed` with candle, L2 book, and orderUpdates channels (`flint/providers/hyperliquid_ws.py`)
+- [x] All safety rails reused (kill switch, risk guards, dry-run mode)
+
 ### 2.3 Hyperliquid Backtest Data
 
 - [ ] Historical candles via Hyperliquid API
@@ -243,6 +261,13 @@ What to build:
 - [ ] Integrate into existing data download pipeline
   - `flint download --venue hyperliquid --market SOL-PERP`
   - Or via API: `POST /api/v1/data/download` with venue param
+
+**Implemented:**
+- [x] `HyperliquidCandleProvider` for historical candle data (`flint/providers/hyperliquid_candles.py`)
+- [x] Pagination support (5000 candles per batch)
+- [x] All 6 resolutions: 1m, 5m, 15m, 1h, 4h, 1d
+- [x] Integrated into data download pipeline (`flint/api/routes/data.py`)
+- [x] 17 markets supported via HYPERLIQUID_SYMBOLS mapping
 
 ### Phase 2 Deliverables
 
