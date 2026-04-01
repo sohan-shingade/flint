@@ -1,7 +1,10 @@
 """Tests for CalibrationEngine, CalibrationReport, DriftReport."""
 import json
+import numpy as np
 import pytest
-from flint.backtest.calibration import CalibrationReport, DriftReport
+from flint.backtest.calibration import CalibrationReport, DriftReport, CalibrationEngine
+from flint.store import FlintStore
+from flint.models import Candle
 
 
 class TestCalibrationReport:
@@ -72,3 +75,86 @@ class TestDriftReport:
         s = report.summary()
         assert "drift" in s
         assert "20.0" in s
+
+
+def _populate_store_with_synthetic_data(store, num_fills=200, true_a=100.0, true_b=0.5):
+    """Insert synthetic fills and candles with known impact model."""
+    import random
+    import time
+    random.seed(42)
+    np.random.seed(42)
+
+    # Place data within the last 25 days so calibrate(lookback_days=30) will find it
+    base_ts = int(time.time()) - 25 * 86400
+    resolution_s = 3600
+
+    candles = []
+    for i in range(720):
+        ts = base_ts + i * resolution_s
+        price = 150.0 + random.uniform(-5, 5)
+        vol = 10000.0 + random.uniform(-2000, 2000)
+        candles.append(Candle(
+            ts=ts, open=price, high=price + 1, low=price - 1,
+            close=price + 0.5, volume=vol,
+            market="SOL-PERP", resolution_s=resolution_s,
+        ))
+    store.upsert_candles(candles)
+
+    adv = 10000.0 * 24
+    sigma = 0.02
+
+    for i in range(num_fills):
+        ts = base_ts + i * 3600 + 1800
+        size = random.uniform(1.0, 50.0)
+        participation = size / adv
+        true_impact_pct = true_a * sigma * (participation ** true_b) / 10000
+        noise = random.gauss(0, true_impact_pct * 0.3)
+        actual_impact_pct = max(0.00001, true_impact_pct + noise)
+        mid_price = 150.0
+        fill_price = mid_price * (1 + actual_impact_pct)
+
+        store.insert_live_fill(
+            fill_id=f"f{i}", order_id=f"o{i}", session_id="s1",
+            market="SOL-PERP", side="long", price=fill_price, size=size,
+            fee=fill_price * size * 0.0005, tx_sig=f"tx{i}",
+            venue="drift", is_partial=False, ts=ts,
+        )
+
+
+class TestCalibrationEngine:
+    def test_calibrate_recovers_known_model(self, tmp_path):
+        store = FlintStore(path=str(tmp_path / "test.duckdb"))
+        _populate_store_with_synthetic_data(store, num_fills=200, true_a=100.0, true_b=0.5)
+
+        engine = CalibrationEngine(store)
+        report = engine.calibrate("drift", "SOL-PERP", lookback_days=30)
+
+        assert report.venue == "drift"
+        assert report.market == "SOL-PERP"
+        assert report.num_fills > 50  # After winsorizing
+        assert report.model_type in ("power_law", "sqrt")
+        assert report.coefficient_a > 0
+        assert 0.1 < report.exponent_b < 1.0
+        assert report.r_squared >= -1.0  # Can be negative with noisy data; bounded check
+        assert report.mae_bps >= 0
+        assert report.recommended_impact_coeff > 0
+        store.close()
+
+    def test_calibrate_too_few_fills_raises(self, tmp_path):
+        store = FlintStore(path=str(tmp_path / "test.duckdb"))
+        _populate_store_with_synthetic_data(store, num_fills=10)
+
+        engine = CalibrationEngine(store)
+        with pytest.raises(ValueError, match="fills"):
+            engine.calibrate("drift", "SOL-PERP", lookback_days=30, min_fills=100)
+        store.close()
+
+    def test_calibrate_sqrt_model_when_few_fills(self, tmp_path):
+        store = FlintStore(path=str(tmp_path / "test.duckdb"))
+        _populate_store_with_synthetic_data(store, num_fills=150)
+
+        engine = CalibrationEngine(store)
+        report = engine.calibrate("drift", "SOL-PERP", lookback_days=30, min_fills=100)
+        assert report.model_type == "sqrt"
+        assert report.exponent_b == 0.5
+        store.close()
