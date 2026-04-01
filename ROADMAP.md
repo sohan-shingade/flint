@@ -463,6 +463,18 @@ What to build:
   - If live fills diverge from model by > threshold → alert
   - Suggests recalibration
 
+**Implemented:**
+- [x] `CalibrationEngine` with power-law and square-root model fitting (`flint/backtest/calibration.py`)
+- [x] Volatility + ADV normalization for regime-robust calibration
+- [x] Huber-like robust regression with iterative reweighting
+- [x] Bootstrap 95% confidence intervals on coefficients
+- [x] 5-fold cross-validation for model selection (power-law vs sqrt)
+- [x] Drift detection with configurable threshold (default 15%)
+- [x] CLI: `flint calibrate --venue <venue> --market <market>` (writes to config by default, `--dry-run` to skip)
+- [x] API: `POST /api/v1/calibrate` (read-only)
+- [x] `CalibrationReport` and `DriftReport` dataclasses with summary() and to_dict()
+- [x] `query_live_fills_by_venue()` store method for fill retrieval
+
 ### Phase 4 Deliverables
 
 1. vAMM fill model validated against real Drift fills
