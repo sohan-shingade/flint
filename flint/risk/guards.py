@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import abc
 import logging
-from typing import List, Optional
+from collections import deque
+from typing import Dict, List, Optional
 
 from ..models import AccountState, Order, PositionInfo
 
@@ -130,6 +131,51 @@ class DailyLossLimit(RiskGuard):
         if daily_pnl <= -self.max_daily_loss:
             self._tripped = True
             logger.info("DailyLossLimit: tripped at %.2f daily loss", daily_pnl)
+            return None
+        return order
+
+
+class MaxOrdersPerMinute(RiskGuard):
+    """Reject orders if too many have been placed in the last 60 seconds."""
+    def __init__(self, max_orders: int = 30):
+        self.max_orders = max_orders
+        self._timestamps: deque = deque()
+
+    def check(self, order, account, positions):
+        now = order.ts if order.ts else int(__import__('time').time())
+        while self._timestamps and self._timestamps[0] < now - 60:
+            self._timestamps.popleft()
+        if len(self._timestamps) >= self.max_orders:
+            logger.info("MaxOrdersPerMinute: rejected order %s (%d orders in last 60s)",
+                       order.order_id, len(self._timestamps))
+            return None
+        self._timestamps.append(now)
+        return order
+
+
+class PerMarketPositionLimit(RiskGuard):
+    """Hard cap per market in USD notional."""
+    def __init__(self, limits: Dict[str, float]):
+        self.limits = limits
+
+    def check(self, order, account, positions):
+        limit = self.limits.get(order.market)
+        if limit is None:
+            return order
+        price = order.price
+        if price <= 0:
+            for p in positions:
+                if p.market == order.market and p.entry_price > 0:
+                    price = p.entry_price
+                    break
+            if price <= 0:
+                price = 1.0
+        existing = sum(p.size * p.entry_price for p in positions if p.market == order.market)
+        new_notional = order.size * price
+        total = existing + new_notional
+        if total > limit:
+            logger.info("PerMarketPositionLimit: rejected order %s on %s (notional=%.2f > limit=%.2f)",
+                       order.order_id, order.market, total, limit)
             return None
         return order
 
