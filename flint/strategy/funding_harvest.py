@@ -53,6 +53,7 @@ class FundingHarvestStrategy(Strategy):
             "exit_threshold": {"type": "float", "low": 0.000001, "high": 0.00002, "default": 0.000005},
             "stop_loss_pct": {"type": "float", "low": 0.02, "high": 0.10, "default": 0.05},
             "lookback": {"type": "int", "low": 4, "high": 24, "default": 8},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def _get_avg_funding(self, candle: Candle, history: List[Candle],

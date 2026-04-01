@@ -40,6 +40,7 @@ class EMACrossoverStrategy(Strategy):
         return {
             "fast_period": {"type": "int", "low": 5, "high": 50, "default": 12},
             "slow_period": {"type": "int", "low": 20, "high": 200, "default": 26},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx: Optional["ExecutionContext"] = None) -> Signal:

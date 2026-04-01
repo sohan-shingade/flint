@@ -34,6 +34,7 @@ class RSIStrategy(Strategy):
             "period": {"type": "int", "low": 5, "high": 30, "default": 14},
             "oversold": {"type": "float", "low": 15, "high": 40, "default": 30},
             "overbought": {"type": "float", "low": 60, "high": 85, "default": 70},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx: Optional["ExecutionContext"] = None) -> Signal:

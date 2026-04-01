@@ -55,6 +55,7 @@ class MultiVenueFundingStrategy(Strategy):
             "exit_threshold": {"type": "float", "low": 0.000001, "high": 0.00002, "default": 0.000005},
             "lookback": {"type": "int", "low": 4, "high": 24, "default": 12},
             "min_venues": {"type": "int", "low": 1, "high": 5, "default": 2},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def _get_cross_venue_signal(self, candle: Candle, history: List[Candle],

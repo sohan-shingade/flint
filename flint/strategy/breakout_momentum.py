@@ -38,6 +38,7 @@ class BreakoutMomentumStrategy(Strategy):
             "lookback": {"type": "int", "low": 10, "high": 50, "default": 20},
             "volume_mult": {"type": "float", "low": 1.0, "high": 3.0, "default": 1.5},
             "atr_mult": {"type": "float", "low": 1.0, "high": 4.0, "default": 2.0},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle],

@@ -48,6 +48,7 @@ class MACDDivergenceStrategy(Strategy):
             "fast": {"type": "int", "low": 5, "high": 20, "default": 12},
             "slow": {"type": "int", "low": 15, "high": 50, "default": 26},
             "signal": {"type": "int", "low": 5, "high": 15, "default": 9},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle],

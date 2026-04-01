@@ -47,6 +47,7 @@ class GridTraderStrategy(Strategy):
         return {
             "grid_spacing_pct": {"type": "float", "low": 0.5, "high": 5.0, "default": 2.0},
             "grid_levels": {"type": "int", "low": 2, "high": 5, "default": 3},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle],

@@ -29,6 +29,7 @@ class MomentumStrategy(Strategy):
         return {
             "lookback": {"type": "int", "low": 6, "high": 72, "default": 24},
             "threshold_pct": {"type": "float", "low": 1.0, "high": 15.0, "default": 5.0},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx: Optional["ExecutionContext"] = None) -> Signal:

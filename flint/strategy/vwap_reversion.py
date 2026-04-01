@@ -38,6 +38,7 @@ class VWAPReversionStrategy(Strategy):
             "period": {"type": "int", "low": 10, "high": 50, "default": 20},
             "entry_pct": {"type": "float", "low": 0.5, "high": 5.0, "default": 2.0},
             "exit_pct": {"type": "float", "low": 0.1, "high": 2.0, "default": 0.5},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle],

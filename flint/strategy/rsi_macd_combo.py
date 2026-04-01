@@ -72,6 +72,7 @@ class RSIMACDComboStrategy(Strategy):
             "macd_signal": {"type": "int", "low": 5, "high": 15, "default": 9},
             "rsi_oversold": {"type": "float", "low": 15, "high": 40, "default": 30},
             "rsi_overbought": {"type": "float", "low": 60, "high": 85, "default": 70},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def _compute_rsi(self, history: List[Candle]) -> float:

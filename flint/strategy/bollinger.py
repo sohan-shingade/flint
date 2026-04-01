@@ -31,6 +31,7 @@ class BollingerStrategy(Strategy):
         return {
             "period": {"type": "int", "low": 10, "high": 50, "default": 20},
             "num_std": {"type": "float", "low": 1.0, "high": 3.5, "default": 2.0},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle], ctx: Optional["ExecutionContext"] = None) -> Signal:

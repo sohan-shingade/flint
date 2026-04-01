@@ -39,6 +39,7 @@ class DualTimeframeStrategy(Strategy):
             "trend_period": {"type": "int", "low": 30, "high": 100, "default": 50},
             "entry_period": {"type": "int", "low": 5, "high": 20, "default": 10},
             "entry_threshold": {"type": "float", "low": 0.005, "high": 0.05, "default": 0.02},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle],

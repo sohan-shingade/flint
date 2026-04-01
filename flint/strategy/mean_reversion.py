@@ -40,6 +40,7 @@ class MeanReversionStrategy(Strategy):
             "entry_z": {"type": "float", "low": 1.0, "high": 3.5, "default": 2.0},
             "exit_z": {"type": "float", "low": 0.0, "high": 1.5, "default": 0.5},
             "stop_loss_pct": {"type": "float", "low": 0.02, "high": 0.10, "default": 0.05},
+            "candle_resolution_s": {"type": "int", "low": 5, "high": 3600, "default": 60},
         }
 
     def on_candle(self, candle: Candle, history: List[Candle],
