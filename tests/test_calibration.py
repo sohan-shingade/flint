@@ -158,3 +158,32 @@ class TestCalibrationEngine:
         assert report.model_type == "sqrt"
         assert report.exponent_b == 0.5
         store.close()
+
+
+class TestDriftDetection:
+    def test_no_drift_when_model_matches(self, tmp_path):
+        store = FlintStore(path=str(tmp_path / "test.duckdb"))
+        _populate_store_with_synthetic_data(store, num_fills=200)
+        engine = CalibrationEngine(store)
+        report = engine.detect_drift("drift", "SOL-PERP", window_days=30)
+        assert report.venue == "drift"
+        assert report.num_fills > 0
+        assert isinstance(report.divergence_pct, float)
+        store.close()
+
+    def test_drift_detected_with_wrong_model(self, tmp_path):
+        store = FlintStore(path=str(tmp_path / "test.duckdb"))
+        _populate_store_with_synthetic_data(store, num_fills=200, true_a=5000.0, true_b=0.5)
+        engine = CalibrationEngine(store)
+        report = engine.detect_drift("drift", "SOL-PERP", window_days=30, threshold_pct=15.0)
+        assert report.needs_recalibration is True
+        assert report.divergence_pct > 15.0
+        store.close()
+
+    def test_no_recalibration_with_high_threshold(self, tmp_path):
+        store = FlintStore(path=str(tmp_path / "test.duckdb"))
+        _populate_store_with_synthetic_data(store, num_fills=200)
+        engine = CalibrationEngine(store)
+        report = engine.detect_drift("drift", "SOL-PERP", window_days=30, threshold_pct=99.0)
+        assert report.needs_recalibration is False
+        store.close()

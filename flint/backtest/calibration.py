@@ -298,6 +298,55 @@ class CalibrationEngine:
         b_ci = (float(np.percentile(b_arr, 2.5)), float(np.percentile(b_arr, 97.5)))
         return a_ci, b_ci
 
+    def detect_drift(
+        self, venue: str, market: str,
+        window_days: int = 7, threshold_pct: float = 15.0,
+    ) -> DriftReport:
+        """Compare recent fills against current impact model."""
+        import time as _time
+        from ..execution.venue_config import get_venue_config
+
+        end_ts = int(_time.time())
+        start_ts = end_ts - window_days * 86400
+
+        fills = self._store.query_live_fills_by_venue(venue, market, start_ts=start_ts, end_ts=end_ts)
+        candles = self._store.query_candles(market, 3600, start_ts=start_ts, end_ts=end_ts)
+
+        if not fills or not candles:
+            return DriftReport(venue=venue, market=market, num_fills=0,
+                mean_predicted_bps=0, mean_actual_bps=0, divergence_pct=0, needs_recalibration=False)
+
+        config = get_venue_config(venue)
+        k = config.impact_coefficient
+        candle_by_ts = {c.ts: c for c in candles}
+
+        predicted_list, actual_list = [], []
+        for fill in fills:
+            closest_ts = min(candle_by_ts.keys(), key=lambda t: abs(t - fill["ts"]), default=None)
+            if closest_ts is None:
+                continue
+            candle = candle_by_ts[closest_ts]
+            if candle.close <= 0 or candle.volume <= 0:
+                continue
+            participation = fill["size"] / candle.volume
+            predicted_bps = k * math.sqrt(participation) * 10000
+            actual_bps = abs(fill["price"] - candle.close) / candle.close * 10000
+            if actual_bps > 0.01:
+                predicted_list.append(predicted_bps)
+                actual_list.append(actual_bps)
+
+        if not actual_list:
+            return DriftReport(venue=venue, market=market, num_fills=0,
+                mean_predicted_bps=0, mean_actual_bps=0, divergence_pct=0, needs_recalibration=False)
+
+        mean_pred = float(np.mean(predicted_list))
+        mean_actual = float(np.mean(actual_list))
+        divergence = abs(mean_pred - mean_actual) / max(mean_actual, 1.0) * 100
+
+        return DriftReport(venue=venue, market=market, num_fills=len(actual_list),
+            mean_predicted_bps=mean_pred, mean_actual_bps=mean_actual,
+            divergence_pct=float(divergence), needs_recalibration=divergence > threshold_pct)
+
     def _cross_validate(self, x, y, fix_b=None, k=5):
         n = len(x)
         indices = np.arange(n)
