@@ -28,6 +28,7 @@ flint = "flint.cli:main"
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
+hyperliquid = ["eth-account>=0.10", "msgpack>=1.0"]
 ccxt = ["ccxt>=4.0"]
 dev = [
     "pytest>=7.0",

@@ -151,6 +151,22 @@ class HyperliquidWebSocketFeed(WebSocketFeed):
             return
         self._orderbooks[market] = data
 
+        # Periodic persistence to store
+        now = time.time()
+        if self._store and now - self._last_l2_persist > self._l2_persist_interval_s:
+            self._last_l2_persist = now
+            try:
+                import json as _json
+                levels = data.get("levels", [[], []])
+                bids = levels[0] if len(levels) > 0 else []
+                asks = levels[1] if len(levels) > 1 else []
+                self._store.upsert_orderbook_snapshot(
+                    market=market, venue="hyperliquid", ts=int(now),
+                    bids=_json.dumps(bids), asks=_json.dumps(asks),
+                )
+            except Exception as e:
+                logger.error("Failed to persist L2 book: %s", e)
+
     def _handle_order_updates(self, data: list) -> None:
         for update in data:
             self._on_order_update(update)
