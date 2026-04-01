@@ -149,6 +149,14 @@ Flint is **production-ready for backtesting and paper trading**. The core infras
   - Events: fill received, position opened/closed, liquidation risk, kill switch triggered, error
   - Config: `alerts.telegram_bot_token` + `alerts.telegram_chat_id`
 
+**Implemented (Sub-project 3):**
+- [x] `EquityMonitor` with real-time kill switch — auto-flattens all positions on drawdown breach (`flint/risk/monitor.py`)
+- [x] `MaxOrdersPerMinute` risk guard — sliding window rate limiter
+- [x] `PerMarketPositionLimit` risk guard — per-market USD notional caps
+- [x] Dry-run mode — full pipeline with simulated fills, `tx_sig="DRY_RUN"`
+- [x] Alert integration — fills, rejections, failures, kill switch fire Telegram/Discord notifications
+- [x] Safety rails config: kill switch threshold, warning threshold, rate limits, per-market limits
+
 ### 1.5 Backtest-to-Live Parity Test
 
 - [ ] Run paper engine and backtest engine on same historical window
@@ -156,6 +164,13 @@ Flint is **production-ready for backtesting and paper trading**. The core infras
 - [ ] Compute divergence metrics: MAE of fill prices, correlation of equity curves
 - [ ] Output parity report (JSON + human-readable)
 - [ ] Acceptable threshold: < 2% PnL divergence on a trend-following strategy
+
+**Implemented (Sub-project 3):**
+- [x] `ParityTest` class comparing backtest vs paper engine (`flint/backtest/parity.py`)
+- [x] `ParityReport` with divergence metrics: PnL divergence, fill price MAE, equity correlation, signal timing match
+- [x] CLI: `flint parity --strategy <name> --market <market> --start <date> --end <date>`
+- [x] API: `POST /api/v1/backtest/parity`
+- [x] Pass/fail threshold: < 2% PnL divergence
 
 ### Phase 1 Deliverables
 
