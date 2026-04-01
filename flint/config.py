@@ -128,6 +128,11 @@ class FlintConfig(BaseSettings):
     live_per_market_position_limits: str = ""
     live_drawdown_warning_pct: float = 0.075
 
+    # --- Hyperliquid ---
+    live_hyperliquid_network: str = "testnet"
+    live_hyperliquid_market_order_slippage: float = 0.003
+    live_hyperliquid_l2_persist_interval_s: int = 60
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""

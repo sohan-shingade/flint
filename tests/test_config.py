@@ -145,6 +145,23 @@ class TestSafetyRailsConfig:
         assert cfg.live_max_orders_per_minute == 60
 
 
+class TestHyperliquidConfig:
+    def test_hyperliquid_defaults(self):
+        from flint.config import FlintConfig
+        config = FlintConfig()
+        assert config.live_hyperliquid_network == "testnet"
+        assert config.live_hyperliquid_market_order_slippage == 0.003
+        assert config.live_hyperliquid_l2_persist_interval_s == 60
+
+    def test_hyperliquid_env_override(self, monkeypatch):
+        monkeypatch.setenv("FLINT_LIVE_HYPERLIQUID_NETWORK", "mainnet")
+        monkeypatch.setenv("FLINT_LIVE_HYPERLIQUID_MARKET_ORDER_SLIPPAGE", "0.005")
+        from flint.config import FlintConfig
+        config = FlintConfig()
+        assert config.live_hyperliquid_network == "mainnet"
+        assert config.live_hyperliquid_market_order_slippage == 0.005
+
+
 class TestLoadConfig:
     def test_load_config_returns_config(self):
         config = load_config()
