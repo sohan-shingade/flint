@@ -158,3 +158,87 @@ class TestOrderRouting:
         ctx = MultiVenueLiveContext(contexts={"drift": drift, "hyperliquid": hl})
         total = ctx.cancel_all()
         assert total == 3
+
+
+class TestLegGroupSubmission:
+    def test_submit_leg_group_both_fill(self):
+        from flint.execution.multi_venue_live import MultiVenueLiveContext
+        from flint.models import OrderLeg
+
+        drift = _make_mock_venue("drift")
+        drift.market_order.return_value = "drift-ord-1"
+        hl = _make_mock_venue("hyperliquid")
+        hl.market_order.return_value = "hl-ord-1"
+
+        drift.submit_pending_orders = AsyncMock(return_value=[
+            Fill(market="SOL-PERP", side=Side.LONG, price=150.0, size=10.0, fee=0.075, ts=1000, order_id="drift-ord-1", venue="drift"),
+        ])
+        hl.submit_pending_orders = AsyncMock(return_value=[
+            Fill(market="SOL-PERP", side=Side.SHORT, price=150.0, size=10.0, fee=0.05, ts=1000, order_id="hl-ord-1", venue="hyperliquid"),
+        ])
+
+        ctx = MultiVenueLiveContext(contexts={"drift": drift, "hyperliquid": hl})
+        legs = [
+            OrderLeg(order_id="", venue="drift", market="SOL-PERP", side=Side.LONG, size=10.0),
+            OrderLeg(order_id="", venue="hyperliquid", market="SOL-PERP", side=Side.SHORT, size=10.0),
+        ]
+        result = run(ctx.submit_leg_group(legs))
+        assert result.status == "filled"
+        assert len(result.filled_legs) == 2
+        assert len(result.failed_legs) == 0
+
+    def test_submit_leg_group_one_fails_no_unwind(self):
+        from flint.execution.multi_venue_live import MultiVenueLiveContext
+        from flint.models import OrderLeg
+
+        drift = _make_mock_venue("drift")
+        drift.market_order.return_value = "drift-ord-1"
+        hl = _make_mock_venue("hyperliquid")
+        hl.market_order.return_value = "hl-ord-1"
+
+        drift.submit_pending_orders = AsyncMock(return_value=[
+            Fill(market="SOL-PERP", side=Side.LONG, price=150.0, size=10.0, fee=0.075, ts=1000, order_id="drift-ord-1", venue="drift"),
+        ])
+        hl.submit_pending_orders = AsyncMock(return_value=[])
+
+        ctx = MultiVenueLiveContext(
+            contexts={"drift": drift, "hyperliquid": hl},
+            leg_timeout_s=0.1,
+            auto_unwind_failed_legs=False,
+        )
+        legs = [
+            OrderLeg(order_id="", venue="drift", market="SOL-PERP", side=Side.LONG, size=10.0),
+            OrderLeg(order_id="", venue="hyperliquid", market="SOL-PERP", side=Side.SHORT, size=10.0),
+        ]
+        result = run(ctx.submit_leg_group(legs))
+        assert result.status == "partial"
+        assert len(result.filled_legs) == 1
+        assert len(result.failed_legs) == 1
+        assert len(result.unwind_order_ids) == 0
+
+    def test_submit_leg_group_auto_unwind(self):
+        from flint.execution.multi_venue_live import MultiVenueLiveContext
+        from flint.models import OrderLeg
+
+        drift = _make_mock_venue("drift")
+        drift.market_order.return_value = "drift-ord-1"
+        hl = _make_mock_venue("hyperliquid")
+        hl.market_order.return_value = "hl-ord-1"
+
+        drift.submit_pending_orders = AsyncMock(return_value=[
+            Fill(market="SOL-PERP", side=Side.LONG, price=150.0, size=10.0, fee=0.075, ts=1000, order_id="drift-ord-1", venue="drift"),
+        ])
+        hl.submit_pending_orders = AsyncMock(return_value=[])
+
+        ctx = MultiVenueLiveContext(
+            contexts={"drift": drift, "hyperliquid": hl},
+            leg_timeout_s=0.1,
+            auto_unwind_failed_legs=True,
+        )
+        legs = [
+            OrderLeg(order_id="", venue="drift", market="SOL-PERP", side=Side.LONG, size=10.0),
+            OrderLeg(order_id="", venue="hyperliquid", market="SOL-PERP", side=Side.SHORT, size=10.0),
+        ]
+        result = run(ctx.submit_leg_group(legs))
+        assert result.status == "unwound"
+        assert len(result.unwind_order_ids) == 1

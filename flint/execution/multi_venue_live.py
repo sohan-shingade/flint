@@ -163,3 +163,84 @@ class MultiVenueLiveContext(ExecutionContext):
 
     def log(self, message: str) -> None:
         logger.info("[multi-venue] %s", message)
+
+    async def submit_leg_group(self, legs: List[OrderLeg]) -> LegGroupResult:
+        """Submit a group of paired orders across venues.
+
+        Places all legs in parallel, waits for fills up to leg_timeout_s.
+        If some legs don't fill, cancels them. If auto_unwind is True,
+        also closes the filled legs.
+        """
+        group_id = str(uuid.uuid4())[:8]
+        group = LegGroup(
+            group_id=group_id, legs=legs,
+            created_at=int(time.time()), timeout_s=self._leg_timeout_s,
+        )
+        self._leg_groups[group_id] = group
+
+        # Place all legs
+        for leg in legs:
+            target = self._resolve_venue(leg.venue)
+            ctx = self._contexts.get(target)
+            if ctx is None:
+                continue
+            oid = ctx.market_order(leg.market, leg.side, leg.size, venue=target)
+            leg.order_id = oid
+
+        # Submit in parallel
+        submit_tasks = []
+        for venue, ctx in self._contexts.items():
+            if any(leg.venue == venue for leg in legs):
+                submit_tasks.append(ctx.submit_pending_orders())
+        all_fills = []
+        results = await asyncio.gather(*submit_tasks, return_exceptions=True)
+        for r in results:
+            if isinstance(r, list):
+                all_fills.extend(r)
+
+        # Determine which legs filled
+        filled_order_ids = {f.order_id for f in all_fills}
+        filled_legs = [leg.order_id for leg in legs if leg.order_id in filled_order_ids]
+        failed_legs = [leg.order_id for leg in legs if leg.order_id not in filled_order_ids]
+
+        # If some legs didn't fill, wait up to timeout then cancel
+        if failed_legs:
+            await asyncio.sleep(min(self._leg_timeout_s, 0.5))
+            for leg in legs:
+                if leg.order_id in failed_legs:
+                    target = self._resolve_venue(leg.venue)
+                    ctx = self._contexts.get(target)
+                    if ctx:
+                        ctx.cancel(leg.order_id)
+
+        # Auto-unwind filled legs if enabled and some failed
+        unwind_ids = []
+        if self._auto_unwind and failed_legs and filled_legs:
+            for leg in legs:
+                if leg.order_id in filled_legs:
+                    opposite = Side.SHORT if leg.side == Side.LONG else Side.LONG
+                    target = self._resolve_venue(leg.venue)
+                    ctx = self._contexts.get(target)
+                    if ctx:
+                        unwind_id = ctx.market_order(leg.market, opposite, leg.size, venue=target)
+                        unwind_ids.append(unwind_id)
+            for venue, ctx in self._contexts.items():
+                if ctx.pending_orders:
+                    await ctx.submit_pending_orders()
+
+        # Determine status
+        if not failed_legs:
+            status = "filled"
+        elif unwind_ids:
+            status = "unwound"
+        elif filled_legs:
+            status = "partial"
+        else:
+            status = "failed"
+
+        group.status = status
+        return LegGroupResult(
+            group_id=group_id, status=status,
+            filled_legs=filled_legs, failed_legs=failed_legs,
+            unwind_order_ids=unwind_ids,
+        )
