@@ -1039,6 +1039,56 @@ def provider_disable(
     console.print(f"  [green]✓[/green] Disabled provider [bold]{name}[/bold] in flint.yaml")
 
 
+# ─── PARITY TEST ──────────────────────────────────────────
+
+@app.command()
+def parity(
+    strategy: str = typer.Argument(..., help="Strategy name (e.g. momentum)"),
+    market: str = typer.Option("SOL-PERP", help="Market to test"),
+    start: str = typer.Option(..., help="Start date (YYYY-MM-DD)"),
+    end: str = typer.Option(..., help="End date (YYYY-MM-DD)"),
+    capital: float = typer.Option(10_000.0, help="Initial capital"),
+    fee_rate: float = typer.Option(0.0005, help="Fee rate"),
+):
+    """Run backtest-vs-paper parity test."""
+    import datetime
+    from flint.config import load_config
+    from flint.store import FlintStore
+    from flint.backtest.parity import ParityTest
+
+    config = load_config()
+    store = FlintStore(config.db_path)
+
+    start_dt = datetime.datetime.strptime(start, "%Y-%m-%d")
+    end_dt = datetime.datetime.strptime(end, "%Y-%m-%d")
+    start_ts = int(start_dt.timestamp())
+    end_ts = int(end_dt.timestamp())
+
+    candles = store.query_candles(market, 3600, start_ts=start_ts, end_ts=end_ts)
+    if not candles:
+        console.print(f"[red]No candle data for {market} in date range. Run 'flint init' first.[/red]")
+        store.close()
+        raise typer.Exit(1)
+
+    from flint.api.routes.backtest import _build_strategy
+    strat = _build_strategy(strategy, {})
+    if strat is None:
+        console.print(f"[red]Unknown strategy: {strategy}[/red]")
+        store.close()
+        raise typer.Exit(1)
+
+    console.print(f"Parity Test: {strategy} on {market} ({start} to {end})")
+    console.print("[dim]" + "\u2500" * 50 + "[/dim]")
+
+    pt = ParityTest(
+        strategy=strat, market=market, candles=candles,
+        initial_capital=capital, fee_rate=fee_rate,
+    )
+    report = pt.run()
+    console.print(report.summary())
+    store.close()
+
+
 # ─── ENTRY POINT ───────────────────────────────────────────
 
 def main():

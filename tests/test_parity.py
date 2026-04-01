@@ -65,3 +65,13 @@ class TestParityTest:
         report = pt.run()
         assert len(report.backtest_equity_curve) > 0
         assert len(report.paper_equity_curve) > 0
+
+
+class TestCLIParity:
+    def test_parity_help(self):
+        from typer.testing import CliRunner
+        from flint.cli import app
+        runner = CliRunner()
+        result = runner.invoke(app, ["parity", "--help"])
+        assert result.exit_code == 0
+        assert "strategy" in result.output.lower() or "market" in result.output.lower()

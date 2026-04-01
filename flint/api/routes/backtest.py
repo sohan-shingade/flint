@@ -728,3 +728,35 @@ def compare_backtests(ids: str):
                     "equity_curve": r.get("equity_curve", []),
                 })
     return {"comparisons": results}
+
+
+@router.post("/parity")
+def run_parity(req: dict, request: Request):
+    """Run backtest-vs-paper parity test."""
+    from ...backtest.parity import ParityTest
+
+    store: Optional[FlintStore] = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(500, "Store not available")
+
+    market = req.get("market", "SOL-PERP")
+    strategy_name = req.get("strategy", "momentum")
+    start_ts = req.get("start_ts", 0)
+    end_ts = req.get("end_ts", 0)
+    capital = req.get("capital", 10_000.0)
+    fee_rate = req.get("fee_rate", 0.0005)
+
+    candles = store.query_candles(market, 3600, start_ts=start_ts, end_ts=end_ts)
+    if not candles:
+        return {"error": f"No candle data for {market}"}
+
+    strategy = _build_strategy(strategy_name, req.get("params", {}))
+    if strategy is None:
+        return {"error": f"Unknown strategy: {strategy_name}"}
+
+    pt = ParityTest(
+        strategy=strategy, market=market, candles=candles,
+        initial_capital=capital, fee_rate=fee_rate,
+    )
+    report = pt.run()
+    return report.to_dict()
