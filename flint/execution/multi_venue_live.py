@@ -244,3 +244,120 @@ class MultiVenueLiveContext(ExecutionContext):
             filled_legs=filled_legs, failed_legs=failed_legs,
             unwind_order_ids=unwind_ids,
         )
+
+    # --- Tick routing ---
+
+    def _on_ws_candle(self, candle: Candle) -> None:
+        """Called by WebSocket feeds when a candle closes."""
+        if self._tick_mode == "primary":
+            if candle.venue == self._primary_venue:
+                self._candle_queue.put_nowait(candle)
+        else:
+            self._candle_queue.put_nowait(candle)
+
+    # --- Run lifecycle ---
+
+    async def run(self, strategy, market: str, feeds=None, fetch_candle=None) -> None:
+        """Run the multi-venue tick loop."""
+        self._running = True
+        self._candle_queue = asyncio.Queue()
+
+        await asyncio.gather(*[ctx.connect() for ctx in self._contexts.values()])
+
+        feed_tasks = []
+        if feeds:
+            for feed in feeds:
+                feed_tasks.append(asyncio.create_task(feed.start()))
+
+        poll_tasks = [asyncio.create_task(ctx._poll_orders_loop())
+                      for ctx in self._contexts.values()]
+
+        monitor_task = None
+        if self._equity_monitor:
+            monitor_task = asyncio.create_task(self._equity_monitor.run())
+
+        try:
+            while self._running:
+                try:
+                    candle = await asyncio.wait_for(
+                        self._candle_queue.get(), timeout=120,
+                    )
+                    primary = self._contexts.get(self._primary_venue)
+                    if primary:
+                        primary._current_candle = candle
+
+                    try:
+                        strategy.on_candle(candle, [], ctx=self)
+                    except Exception as e:
+                        logger.error("Strategy error: %s", e)
+
+                    submit_tasks = []
+                    for ctx in self._contexts.values():
+                        if ctx.pending_orders:
+                            submit_tasks.append(ctx.submit_pending_orders())
+                    if submit_tasks:
+                        await asyncio.gather(*submit_tasks)
+
+                except asyncio.TimeoutError:
+                    logger.debug("No candle within timeout")
+        finally:
+            if monitor_task:
+                monitor_task.cancel()
+            for task in feed_tasks + poll_tasks:
+                task.cancel()
+            for task in feed_tasks + poll_tasks + ([monitor_task] if monitor_task else []):
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            await asyncio.gather(*[ctx.disconnect() for ctx in self._contexts.values()])
+
+    async def stop(self) -> None:
+        self._running = False
+
+    # --- Position helpers ---
+
+    def close_position(self, market, venue="default"):
+        target = self._resolve_venue(venue)
+        ctx = self._contexts.get(target)
+        if ctx is None:
+            return None
+        return ctx.close_position(market, target)
+
+    def position(self, market, venue="default"):
+        target = self._resolve_venue(venue)
+        ctx = self._contexts.get(target)
+        if ctx is None:
+            return None
+        return ctx.position(market, target)
+
+    # --- Market data helpers ---
+
+    def get_candles(self, market, lookback=50):
+        primary = self._contexts.get(self._primary_venue)
+        if primary:
+            return primary.get_candles(market, lookback)
+        return []
+
+    def get_oracle_price(self, market=None):
+        primary = self._contexts.get(self._primary_venue)
+        if primary:
+            return primary.get_oracle_price(market)
+        return None
+
+    def get_funding_rate(self, market=None):
+        primary = self._contexts.get(self._primary_venue)
+        if primary:
+            return primary.get_funding_rate(market)
+        return None
+
+    def get_funding_by_venue(self, market=None, lookback=24):
+        result = {}
+        for venue, ctx in self._contexts.items():
+            try:
+                rates = ctx.get_funding_rates(market, lookback)
+                if rates:
+                    result[venue] = rates
+            except Exception:
+                pass
+        return result

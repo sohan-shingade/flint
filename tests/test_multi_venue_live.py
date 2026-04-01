@@ -242,3 +242,53 @@ class TestLegGroupSubmission:
         result = run(ctx.submit_leg_group(legs))
         assert result.status == "unwound"
         assert len(result.unwind_order_ids) == 1
+
+
+class TestTickRouting:
+    def test_on_ws_candle_primary_mode_filters(self):
+        from flint.execution.multi_venue_live import MultiVenueLiveContext
+        drift = _make_mock_venue("drift")
+        hl = _make_mock_venue("hyperliquid")
+        ctx = MultiVenueLiveContext(
+            contexts={"drift": drift, "hyperliquid": hl},
+            primary_venue="drift",
+            tick_mode="primary",
+        )
+        ctx._candle_queue = asyncio.Queue()
+
+        drift_candle = Candle(ts=1000, open=150.0, high=155.0, low=148.0, close=153.0, volume=100.0, market="SOL-PERP", resolution_s=60, venue="drift")
+        ctx._on_ws_candle(drift_candle)
+        assert ctx._candle_queue.qsize() == 1
+
+        hl_candle = Candle(ts=1000, open=150.0, high=155.0, low=148.0, close=153.0, volume=100.0, market="SOL-PERP", resolution_s=60, venue="hyperliquid")
+        ctx._on_ws_candle(hl_candle)
+        assert ctx._candle_queue.qsize() == 1  # Still 1
+
+    def test_on_ws_candle_any_mode_enqueues_all(self):
+        from flint.execution.multi_venue_live import MultiVenueLiveContext
+        drift = _make_mock_venue("drift")
+        hl = _make_mock_venue("hyperliquid")
+        ctx = MultiVenueLiveContext(
+            contexts={"drift": drift, "hyperliquid": hl},
+            tick_mode="any",
+        )
+        ctx._candle_queue = asyncio.Queue()
+
+        drift_candle = Candle(ts=1000, open=150.0, high=155.0, low=148.0, close=153.0, volume=100.0, market="SOL-PERP", resolution_s=60, venue="drift")
+        ctx._on_ws_candle(drift_candle)
+        hl_candle = Candle(ts=1000, open=150.0, high=155.0, low=148.0, close=153.0, volume=100.0, market="SOL-PERP", resolution_s=60, venue="hyperliquid")
+        ctx._on_ws_candle(hl_candle)
+        assert ctx._candle_queue.qsize() == 2
+
+
+class TestClosePosition:
+    def test_close_position_on_specific_venue(self):
+        from flint.execution.multi_venue_live import MultiVenueLiveContext
+        drift_pos = [PositionInfo(market="SOL-PERP", side=Side.LONG, size=10.0, entry_price=150.0, venue="drift")]
+        drift = _make_mock_venue("drift", positions=drift_pos)
+        drift.close_position = MagicMock(return_value="close-1")
+        hl = _make_mock_venue("hyperliquid")
+        hl.close_position = MagicMock(return_value=None)
+        ctx = MultiVenueLiveContext(contexts={"drift": drift, "hyperliquid": hl})
+        result = ctx.close_position("SOL-PERP", venue="drift")
+        drift.close_position.assert_called_once_with("SOL-PERP", "drift")
