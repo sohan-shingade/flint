@@ -52,6 +52,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         limit_order_timeout_bars: int = 10,
         tick_mode: str = "on_candle_close",
         tick_markets: Optional[List[str]] = None,
+        dry_run: bool = False,
     ):
         self._venue = venue
         self._initial_capital = initial_capital
@@ -66,6 +67,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         self._tick_markets = tick_markets or []
         self._candle_queue: asyncio.Queue = asyncio.Queue()
         self._pyth_feed = None
+        self._dry_run = dry_run
 
         self._positions_cache: Dict[Tuple[str, str], PositionInfo] = {}
         self._current_candle: Optional[Candle] = None
@@ -423,16 +425,39 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
                 logger.debug("Rate limit hit, deferring remaining orders")
                 break
 
-            try:
-                tx_sig, venue_order_id = await self._place_order(tracked.order)
-                self._tracker.mark_submitted(tracked.flint_order_id, tx_sig=tx_sig)
-                if venue_order_id is not None:
-                    self._tracker.mark_confirmed(tracked.flint_order_id, venue_order_id=venue_order_id)
+            if self._dry_run:
+                price = (self._current_candle.close if self._current_candle
+                         else tracked.order.price or 0)
+                fill = Fill(
+                    market=tracked.order.market,
+                    side=tracked.order.side,
+                    price=price,
+                    size=tracked.order.size,
+                    fee=price * tracked.order.size * 0.0005,
+                    ts=int(time.time()),
+                    order_id=tracked.flint_order_id,
+                    tx_sig="DRY_RUN",
+                    venue=self._venue,
+                )
+                self._tracker.mark_submitted(tracked.flint_order_id, tx_sig="DRY_RUN")
+                self._tracker.mark_confirmed(tracked.flint_order_id, venue_order_id=0)
+                self._tracker.mark_filled(tracked.flint_order_id, fill)
                 self._persist_order(tracked)
-            except Exception as e:
-                logger.error("Order %s submission failed: %s", tracked.flint_order_id, e)
-                if not self._tracker.increment_retry(tracked.flint_order_id):
-                    pass
+                logger.info("[DRY RUN] %s %s %.4f %s @ %.2f",
+                           tracked.order.side.value, tracked.order.market,
+                           tracked.order.size, tracked.order.order_type.value, price)
+                fills.append(fill)
+            else:
+                try:
+                    tx_sig, venue_order_id = await self._place_order(tracked.order)
+                    self._tracker.mark_submitted(tracked.flint_order_id, tx_sig=tx_sig)
+                    if venue_order_id is not None:
+                        self._tracker.mark_confirmed(tracked.flint_order_id, venue_order_id=venue_order_id)
+                    self._persist_order(tracked)
+                except Exception as e:
+                    logger.error("Order %s submission failed: %s", tracked.flint_order_id, e)
+                    if not self._tracker.increment_retry(tracked.flint_order_id):
+                        pass
 
         return fills
 

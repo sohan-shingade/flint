@@ -322,3 +322,43 @@ class TestOraclePrice:
         ctx._pyth_feed = mock_pyth
         result = ctx.get_oracle_price("SOL-PERP")
         assert result == (150.25, 1000)
+
+
+class TestDryRunMode:
+    def test_dry_run_simulates_fill(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0, dry_run=True)
+        candle = Candle(ts=1000, open=150.0, high=151.0, low=149.0,
+                        close=150.5, volume=1000.0, market="SOL-PERP",
+                        resolution_s=60, venue="drift")
+        ctx._current_candle = candle
+        oid = ctx.market_order("SOL-PERP", Side.LONG, 10.0)
+        assert oid != ""
+        run(ctx.submit_pending_orders())
+        tracked = ctx._tracker.get(oid)
+        assert tracked is not None
+        assert tracked.state == OrderState.FILLED
+        assert len(tracked.fills) == 1
+        assert tracked.fills[0].tx_sig == "DRY_RUN"
+        assert tracked.fills[0].price == 150.5
+
+    def test_dry_run_updates_position(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0, dry_run=True)
+        candle = Candle(ts=1000, open=150.0, high=151.0, low=149.0,
+                        close=150.5, volume=1000.0, market="SOL-PERP",
+                        resolution_s=60, venue="drift")
+        ctx._current_candle = candle
+        ctx.market_order("SOL-PERP", Side.LONG, 10.0)
+        run(ctx.submit_pending_orders())
+        pos = ctx.position("SOL-PERP", venue="test")
+        assert pos is not None
+        assert pos.size == 10.0
+
+    def test_dry_run_does_not_call_place_order(self):
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0, dry_run=True)
+        candle = Candle(ts=1000, open=150.0, high=151.0, low=149.0,
+                        close=150.5, volume=1000.0, market="SOL-PERP",
+                        resolution_s=60, venue="drift")
+        ctx._current_candle = candle
+        ctx.market_order("SOL-PERP", Side.LONG, 10.0)
+        run(ctx.submit_pending_orders())
+        assert len(ctx._placed_orders) == 0
