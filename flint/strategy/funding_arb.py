@@ -55,11 +55,24 @@ class FundingArbStrategy(Strategy):
         if len(venue_data) < 2:
             return Signal.HOLD
 
+        # Check staleness — only enter if funding data is recent
+        for venue in self._venues:
+            rates = venue_data.get(venue, [])
+            if rates:
+                latest_ts = rates[-1][0]  # (ts, rate)
+                if candle.ts - latest_ts > 7200:  # 2 hours
+                    return Signal.HOLD
+
         venue_rates = {}
         for venue in self._venues:
             rates = venue_data.get(venue, [])
             if rates:
                 venue_rates[venue] = rates[-1][1]  # (ts, rate) -> rate
+
+        # Log spread and position status
+        if venue_rates:
+            rates_str = ", ".join(f"{v}={r*10000:.1f}bps" for v, r in venue_rates.items())
+            logger.debug("Funding rates: %s", rates_str)
 
         if len(venue_rates) < 2:
             return Signal.HOLD
@@ -106,6 +119,12 @@ class FundingArbStrategy(Strategy):
         ctx.market_order(candle.market, Side.LONG, size, venue=best_long)
         ctx.market_order(candle.market, Side.SHORT, size, venue=best_short)
 
+        # After placing orders, verify delta neutrality
+        if hasattr(ctx, 'total_exposure'):
+            exposure = ctx.total_exposure(candle.market)
+            if abs(exposure) > size * 0.01:  # > 1% of position size
+                logger.warning("Delta exposure after entry: %.4f (expected ~0)", exposure)
+
         self._entry_ts = candle.ts
         self._long_venue = best_long
         self._short_venue = best_short
@@ -142,6 +161,6 @@ class FundingArbStrategy(Strategy):
             "exit_spread_bps": {"type": "float", "low": 0.5, "high": 5.0, "default": 1.0},
             "max_hold_hours": {"type": "int", "low": 4, "high": 72, "default": 24},
             "position_size_usd": {"type": "float", "low": 100, "high": 10000, "default": 1000},
-            "min_spread_duration": {"type": "int", "low": 0, "high": 6, "default": 1},
+            "min_spread_duration": {"type": "int", "low": 1, "high": 6, "default": 1},
             "candle_resolution_s": {"type": "int", "low": 60, "high": 3600, "default": 60},
         }

@@ -295,11 +295,18 @@ class BacktestEngine:
         # Per-venue analytics
         per_venue_pnl = {}
         per_venue_trades_count = {}
+        per_venue_funding = {}
         for trade in trades:
             venue = trade.get("venue", "default")
             pnl = trade.get("pnl", 0)
             per_venue_pnl[venue] = per_venue_pnl.get(venue, 0) + pnl
             per_venue_trades_count[venue] = per_venue_trades_count.get(venue, 0) + 1
+            funding = trade.get("funding_paid", 0)
+            per_venue_funding[venue] = per_venue_funding.get(venue, 0) + funding
+
+        # Fallback: if no per-trade funding data, use ctx.total_funding as a single bucket
+        if not per_venue_funding and ctx.total_funding:
+            per_venue_funding["default"] = ctx.total_funding
 
         return BacktestResult(
             total_pnl=ctx.account.equity - self.initial_capital,
@@ -318,7 +325,7 @@ class BacktestEngine:
                                if "WARNING" in m or "LIQUIDATED" in m or "MARGIN REJECTED" in m],
             per_venue_pnl=per_venue_pnl,
             per_venue_trades=per_venue_trades_count,
-            per_venue_funding_income={},
+            per_venue_funding_income=per_venue_funding,
         )
 
 
