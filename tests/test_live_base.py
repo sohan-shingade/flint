@@ -364,6 +364,15 @@ class TestDryRunMode:
         assert len(ctx._placed_orders) == 0
 
 
+class TestEquityMonitorIntegration:
+    def test_monitor_attaches(self):
+        from flint.risk.monitor import EquityMonitor
+        ctx = MockVenueContext(venue="test", initial_capital=10000.0)
+        ctx._equity_monitor = EquityMonitor(context=ctx, kill_switch_pct=0.15)
+        assert ctx._equity_monitor is not None
+        assert ctx._equity_monitor.tripped is False
+
+
 class TestAlertIntegration:
     def test_fill_fires_notification(self):
         nm = MagicMock()

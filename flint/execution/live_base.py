@@ -70,6 +70,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         self._pyth_feed = None
         self._dry_run = dry_run
         self._notification_manager = notification_manager
+        self._equity_monitor = None
 
         self._positions_cache: Dict[Tuple[str, str], PositionInfo] = {}
         self._current_candle: Optional[Candle] = None
@@ -153,12 +154,22 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
 
         poll_task = asyncio.create_task(self._poll_orders_loop())
 
+        monitor_task = None
+        if self._equity_monitor:
+            monitor_task = asyncio.create_task(self._equity_monitor.run())
+
         try:
             if self._tick_mode == "on_candle_close":
                 await self._run_event_driven(strategy, market, fetch_candle)
             else:
                 await self._run_timer(strategy, market, fetch_candle)
         finally:
+            if monitor_task:
+                monitor_task.cancel()
+                try:
+                    await monitor_task
+                except asyncio.CancelledError:
+                    pass
             for task in feed_tasks:
                 task.cancel()
             poll_task.cancel()
