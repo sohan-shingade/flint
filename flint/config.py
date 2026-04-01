@@ -139,6 +139,10 @@ class FlintConfig(BaseSettings):
     live_multi_venue_leg_timeout_s: float = 30.0
     live_multi_venue_auto_unwind: bool = False
 
+    # --- Slippage Calibration ---
+    calibration_drift_threshold_pct: float = 15.0
+    calibration_min_fills: int = 100
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""
