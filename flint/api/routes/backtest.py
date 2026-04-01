@@ -730,6 +730,28 @@ def compare_backtests(ids: str):
     return {"comparisons": results}
 
 
+@router.post("/calibrate")
+def run_calibration(req: dict, request: Request):
+    """Run slippage calibration (read-only, does not write to config)."""
+    from ...backtest.calibration import CalibrationEngine
+
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        from fastapi import HTTPException
+        raise HTTPException(500, "Store not available")
+
+    venue = req.get("venue", "drift")
+    market = req.get("market", "SOL-PERP")
+    lookback_days = req.get("lookback_days", 30)
+
+    try:
+        engine = CalibrationEngine(store)
+        report = engine.calibrate(venue=venue, market=market, lookback_days=lookback_days)
+        return report.to_dict()
+    except ValueError as e:
+        return {"error": str(e)}
+
+
 @router.post("/parity")
 def run_parity(req: dict, request: Request):
     """Run backtest-vs-paper parity test."""
