@@ -145,6 +145,36 @@ class PositionInfo:
     venue: str = "default"
 
 
+@dataclass
+class OrderLeg:
+    """A single leg of a cross-venue order group."""
+    order_id: str
+    venue: str
+    market: str
+    side: Side
+    size: float
+
+
+@dataclass
+class LegGroup:
+    """A group of paired orders across venues."""
+    group_id: str
+    legs: List[OrderLeg]
+    status: str = "pending"  # "pending", "partial", "filled", "failed", "unwound"
+    created_at: int = 0
+    timeout_s: float = 30.0
+
+
+@dataclass
+class LegGroupResult:
+    """Result of a paired leg group submission."""
+    group_id: str
+    status: str  # "filled", "partial", "failed", "unwound"
+    filled_legs: List[str]  # order_ids that filled
+    failed_legs: List[str]  # order_ids that didn't fill
+    unwind_order_ids: List[str]  # orders placed to unwind filled legs
+
+
 # ---------------------------------------------------------------------------
 # Phase 3-4 models
 # ---------------------------------------------------------------------------
