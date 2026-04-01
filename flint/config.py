@@ -133,6 +133,12 @@ class FlintConfig(BaseSettings):
     live_hyperliquid_market_order_slippage: float = 0.003
     live_hyperliquid_l2_persist_interval_s: int = 60
 
+    # --- Multi-venue ---
+    live_multi_venue_primary: str = ""
+    live_multi_venue_tick_mode: str = "primary"
+    live_multi_venue_leg_timeout_s: float = 30.0
+    live_multi_venue_auto_unwind: bool = False
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""
