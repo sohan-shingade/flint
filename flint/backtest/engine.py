@@ -26,6 +26,14 @@ from ..execution.fill_models import FillModel, FillPipeline, OrderbookFillModel
 from ..strategy.base import Strategy
 
 
+def _parse_venue_market(key: str):
+    """Parse a 'venue:market' composite key. Returns (venue, market)."""
+    if ":" in key:
+        venue, market = key.split(":", 1)
+        return (venue, market)
+    return ("default", key)
+
+
 def _strategy_uses_context(strategy: Strategy) -> bool:
     """Detect if a strategy's on_candle explicitly uses the ctx parameter.
 
@@ -85,15 +93,34 @@ class BacktestEngine:
 
         Args:
             candles: Primary market candles (List[Candle]) or Dict[str, List[Candle]] for multi-market.
+                     Dict keys may be plain market names ("SOL-PERP") or venue:market composite
+                     keys ("drift:SOL-PERP", "hyperliquid:SOL-PERP").
             extra_markets: Optional dict of {market: List[Candle]} for cross-market data access.
         """
         # Normalize input: accept Dict[str, List[Candle]] or List[Candle]
         if isinstance(candles, dict):
             all_markets = candles
-            # Use the first market as primary, or pick the one with most candles
-            primary = max(all_markets.keys(), key=lambda k: len(all_markets[k]))
-            candles = all_markets[primary]
-            extra_markets = {k: v for k, v in all_markets.items() if k != primary}
+            # Parse venue:market composite keys — tag candles with venue
+            parsed = {}
+            for key, vals in all_markets.items():
+                venue, market = _parse_venue_market(key)
+                tagged = []
+                for c in vals:
+                    if c.venue == "default" and venue != "default":
+                        tagged.append(Candle(
+                            ts=c.ts, open=c.open, high=c.high, low=c.low,
+                            close=c.close, volume=c.volume, market=market,
+                            resolution_s=c.resolution_s, venue=venue,
+                        ))
+                    else:
+                        tagged.append(c)
+                # Use plain market as key (for BacktestContext compatibility)
+                # When two venue keys map to the same market, keep the longer stream
+                if market not in parsed or len(tagged) > len(parsed[market]):
+                    parsed[market] = tagged
+            primary = max(parsed.keys(), key=lambda k: len(parsed[k]))
+            candles = parsed[primary]
+            extra_markets = {k: v for k, v in parsed.items() if k != primary}
         return self._run_internal(candles, extra_markets)
 
     def _run_internal(self, candles: List[Candle], extra_markets: dict = None) -> BacktestResult:
@@ -265,6 +292,15 @@ class BacktestEngine:
         periods_per_year = 365.25 * 24 * 3600 / resolution_s if resolution_s > 0 else 8760
         sharpe = _sharpe_ratio(equity_curve, periods_per_year)
 
+        # Per-venue analytics
+        per_venue_pnl = {}
+        per_venue_trades_count = {}
+        for trade in trades:
+            venue = trade.get("venue", "default")
+            pnl = trade.get("pnl", 0)
+            per_venue_pnl[venue] = per_venue_pnl.get(venue, 0) + pnl
+            per_venue_trades_count[venue] = per_venue_trades_count.get(venue, 0) + 1
+
         return BacktestResult(
             total_pnl=ctx.account.equity - self.initial_capital,
             win_rate=win_rate,
@@ -280,6 +316,9 @@ class BacktestEngine:
             funding_paid=ctx.total_funding,
             strategy_warnings=[m for m in ctx.log_messages
                                if "WARNING" in m or "LIQUIDATED" in m or "MARGIN REJECTED" in m],
+            per_venue_pnl=per_venue_pnl,
+            per_venue_trades=per_venue_trades_count,
+            per_venue_funding_income={},
         )
 
 

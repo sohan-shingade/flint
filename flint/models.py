@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 class Signal(enum.Enum):
@@ -116,6 +116,9 @@ class BacktestResult:
     total_fees: float = 0.0
     funding_paid: float = 0.0
     strategy_warnings: List[str] = field(default_factory=list)
+    per_venue_pnl: Dict[str, float] = field(default_factory=dict)
+    per_venue_trades: Dict[str, int] = field(default_factory=dict)
+    per_venue_funding_income: Dict[str, float] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
