@@ -1035,6 +1035,33 @@ class FlintStore:
             for r in rows
         ]
 
+    def query_live_fills_by_venue(
+        self, venue: str, market: str,
+        start_ts: Optional[int] = None, end_ts: Optional[int] = None,
+    ) -> list:
+        """Query fills from live_fills by venue and market."""
+        sql = (
+            "SELECT fill_id, order_id, session_id, market, side, price, size, "
+            "fee, tx_sig, venue, is_partial, ts FROM live_fills "
+            "WHERE venue = ? AND market = ?"
+        )
+        params: list = [venue, market]
+        if start_ts is not None:
+            sql += " AND ts >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            sql += " AND ts <= ?"
+            params.append(end_ts)
+        sql += " ORDER BY ts ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [
+            {"fill_id": r[0], "order_id": r[1], "session_id": r[2], "market": r[3],
+             "side": r[4], "price": r[5], "size": r[6], "fee": r[7], "tx_sig": r[8],
+             "venue": r[9], "is_partial": r[10], "ts": r[11]}
+            for r in rows
+        ]
+
     def insert_live_equity(
         self, session_id: str, ts: int, equity: float, cash: float, unrealized_pnl: float,
     ) -> None:
