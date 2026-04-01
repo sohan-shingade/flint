@@ -685,6 +685,23 @@ def _download_range(market: str, resolution_s: int, start_ts: int, end_ts: int, 
         errors.append(f"CoinGecko: {e}")
         logger.warning("CoinGecko failed for %s: %s", market, e)
 
+    # Fallback to Hyperliquid (if market is a known Hyperliquid market)
+    try:
+        from ...providers.hyperliquid_candles import HyperliquidCandleProvider, _FLINT_TO_HL
+        if market in _FLINT_TO_HL:
+            provider = HyperliquidCandleProvider()
+            try:
+                _SEC_TO_INTERVAL = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d"}
+                interval = _SEC_TO_INTERVAL.get(resolution_s, "1h")
+                fetched = provider.fetch_candles(market, start_ts, end_ts, resolution=interval)
+            finally:
+                provider.close()
+            if fetched:
+                return fetched, None
+    except Exception as e:
+        errors.append(f"Hyperliquid: {e}")
+        logger.warning("Hyperliquid failed for %s: %s", market, e)
+
     # Fallback to CCXT (works for spot AND perp on any exchange)
     try:
         from ...providers.ccxt_provider import CCXTProvider
