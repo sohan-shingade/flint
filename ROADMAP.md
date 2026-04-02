@@ -414,6 +414,21 @@ What to build:
   - Per-market fill model comparison
   - Recommended fill model per market based on liquidity
 
+**Implemented (simplified model):**
+- [x] `VammCurve` constant-product AMM model with peg multiplier (`flint/execution/vamm.py`)
+- [x] `from_oracle_price()` factory for oracle-centered curve creation
+- [x] `fill_price()` and `impact_bps()` for order-size-dependent pricing
+- [x] Per-market `DEFAULT_SQRT_K` values for major Drift markets
+- [x] Tier 0 integration in `ImpactStage` — highest priority fill model
+- [x] `FillPipeline` pass-through via `vamm_configs` parameter
+- [x] `VammAccuracyReport` dataclass for fill model comparison (data-ready)
+- [x] Config: `vamm_enabled`, `vamm_default_sqrt_k`
+
+**Deferred to backlog:**
+- [ ] Full vAMM replication (dynamic K, inventory skew, 7-layer spread)
+- [ ] Historical AMM state snapshots
+- [ ] Fill model accuracy comparison (requires live fill data)
+
 ### 4.2 Concentrated Liquidity for Arb Detection
 
 **Extend**: `flint/providers/orca.py`, `flint/providers/raydium.py`
