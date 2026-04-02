@@ -284,6 +284,16 @@ CREATE TABLE IF NOT EXISTS live_equity_history (
 );
 """
 
+_CREATE_TICK_SNAPSHOTS = """
+CREATE TABLE IF NOT EXISTS tick_snapshots (
+    pool_address VARCHAR NOT NULL, ts BIGINT NOT NULL, dex VARCHAR NOT NULL,
+    token_a_mint VARCHAR NOT NULL, token_b_mint VARCHAR NOT NULL,
+    current_tick INTEGER NOT NULL, tick_spacing INTEGER NOT NULL,
+    fee_rate DOUBLE NOT NULL, sqrt_price DOUBLE NOT NULL,
+    tick_data VARCHAR NOT NULL, PRIMARY KEY (pool_address, ts)
+);
+"""
+
 
 class FlintStore:
     """Thread-safe DuckDB store.
@@ -374,6 +384,8 @@ class FlintStore:
         self._conn.execute(_CREATE_LIVE_ORDERS)
         self._conn.execute(_CREATE_LIVE_FILLS)
         self._conn.execute(_CREATE_LIVE_EQUITY_HISTORY)
+        # CLMM tick snapshots
+        self._conn.execute(_CREATE_TICK_SNAPSHOTS)
 
     # -- candles ---------------------------------------------------------------
 
@@ -1082,6 +1094,55 @@ class FlintStore:
         return [
             {"session_id": r[0], "ts": r[1], "equity": r[2],
              "cash": r[3], "unrealized_pnl": r[4]}
+            for r in rows
+        ]
+
+    # -- tick snapshots (CLMM) -------------------------------------------------
+
+    def upsert_tick_snapshot(
+        self, pool_address: str, ts: int, dex: str,
+        token_a_mint: str, token_b_mint: str,
+        current_tick: int, tick_spacing: int,
+        fee_rate: float, sqrt_price: float, tick_data_json: str,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO tick_snapshots "
+                "(pool_address, ts, dex, token_a_mint, token_b_mint, "
+                "current_tick, tick_spacing, fee_rate, sqrt_price, tick_data) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [pool_address, ts, dex, token_a_mint, token_b_mint,
+                 current_tick, tick_spacing, fee_rate, sqrt_price, tick_data_json],
+            )
+
+    def query_tick_snapshots(
+        self,
+        pool_address: str,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> list:
+        sql = (
+            "SELECT pool_address, ts, dex, token_a_mint, token_b_mint, "
+            "current_tick, tick_spacing, fee_rate, sqrt_price, tick_data "
+            "FROM tick_snapshots WHERE pool_address = ?"
+        )
+        params: list = [pool_address]
+        if start_ts is not None:
+            sql += " AND ts >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            sql += " AND ts <= ?"
+            params.append(end_ts)
+        sql += " ORDER BY ts ASC"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [
+            {
+                "pool_address": r[0], "ts": r[1], "dex": r[2],
+                "token_a_mint": r[3], "token_b_mint": r[4],
+                "current_tick": r[5], "tick_spacing": r[6],
+                "fee_rate": r[7], "sqrt_price": r[8], "tick_data": r[9],
+            }
             for r in rows
         ]
 
