@@ -15,6 +15,10 @@ from .atr_breakout import ATRBreakoutStrategy
 from .multi_venue_funding import MultiVenueFundingStrategy
 from .rsi_macd_combo import RSIMACDComboStrategy
 from .funding_arb import FundingArbStrategy
+from .momentum_breakout import MomentumBreakoutStrategy
+from .funding_mean_reversion import FundingMeanReversionStrategy
+from .mev_arb_monitor import MevArbMonitor
+from .basis_trade import BasisTradeStrategy
 
 __all__ = [
     "Strategy",
@@ -34,6 +38,10 @@ __all__ = [
     "MultiVenueFundingStrategy",
     "RSIMACDComboStrategy",
     "FundingArbStrategy",
+    "MomentumBreakoutStrategy",
+    "FundingMeanReversionStrategy",
+    "MevArbMonitor",
+    "BasisTradeStrategy",
 ]
 
 # Re-export ExecutionContext for convenience
