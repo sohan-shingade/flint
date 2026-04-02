@@ -152,6 +152,10 @@ class FlintConfig(BaseSettings):
     vamm_enabled: bool = False
     vamm_default_sqrt_k: str = ""
 
+    # --- CLMM ---
+    clmm_tick_fetch_enabled: bool = False
+    clmm_tick_persist_interval_s: int = 300
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""
