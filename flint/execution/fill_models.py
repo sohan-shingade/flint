@@ -204,6 +204,7 @@ class FillPipeline(FillModel):
         latency_jitter_s: float = 0.5,
         latency_seed: Optional[int] = None,
         latency_enabled: bool = True,
+        tx_cost_model=None,
     ):
         self._impact = ImpactStage(
             impact_coefficient=impact_coefficient,
@@ -218,6 +219,7 @@ class FillPipeline(FillModel):
         self._partial = PartialFillStage()
         self._current_book: Optional[OrderbookSnapshot] = None
         self._pending_resting: list = []
+        self._tx_cost_model = tx_cost_model
 
     def set_orderbook(self, book: Optional[OrderbookSnapshot]) -> None:
         """Called by the engine to set the current orderbook state."""
@@ -263,6 +265,11 @@ class FillPipeline(FillModel):
         if decision.resting_order is not None:
             self._pending_resting.append(decision.resting_order)
 
+        tx_cost = 0.0
+        if self._tx_cost_model:
+            cost_est = self._tx_cost_model.estimate(order.market, decision.fill_size, decision.fill_price)
+            tx_cost = cost_est.network_fee + cost_est.bundle_tip
+
         return Fill(
             market=order.market,
             side=order.side,
@@ -274,6 +281,7 @@ class FillPipeline(FillModel):
             is_partial=decision.is_partial,
             latency_ms=latency_ms,
             impact_bps=impact.impact_bps,
+            tx_cost=tx_cost,
         )
 
     def fill_limit(self, order: Order, candle: Candle) -> Optional[Fill]:

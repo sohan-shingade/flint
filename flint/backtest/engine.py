@@ -308,6 +308,8 @@ class BacktestEngine:
         if not per_venue_funding and ctx.total_funding:
             per_venue_funding["default"] = ctx.total_funding
 
+        total_tx_costs = sum(f.tx_cost for f in ctx.all_fills)
+
         return BacktestResult(
             total_pnl=ctx.account.equity - self.initial_capital,
             win_rate=win_rate,
@@ -321,6 +323,7 @@ class BacktestEngine:
             fills=ctx.all_fills,
             total_fees=ctx.total_fees,
             funding_paid=ctx.total_funding,
+            total_tx_costs=total_tx_costs,
             strategy_warnings=[m for m in ctx.log_messages
                                if "WARNING" in m or "LIQUIDATED" in m or "MARGIN REJECTED" in m],
             per_venue_pnl=per_venue_pnl,

@@ -92,6 +92,7 @@ class BacktestContext(ExecutionContext):
         self._fills: List[Fill] = []
         self._closed_positions: List[dict] = []  # for result building
         self._total_fees = 0.0
+        self._total_tx_costs = 0.0
         self._total_funding = 0.0
         self._log_messages: List[str] = []
 
@@ -602,6 +603,7 @@ class BacktestContext(ExecutionContext):
                     is_partial=fill.is_partial,
                     latency_ms=fill.latency_ms,
                     impact_bps=fill.impact_bps,
+                    tx_cost=fill.tx_cost,
                 )
                 self._apply_fill(fill)
                 fills.append(fill)
@@ -661,6 +663,7 @@ class BacktestContext(ExecutionContext):
                     is_partial=fill.is_partial,
                     latency_ms=fill.latency_ms,
                     impact_bps=fill.impact_bps,
+                    tx_cost=fill.tx_cost,
                 )
                 self._apply_fill(fill)
                 fills.append(fill)
@@ -692,6 +695,13 @@ class BacktestContext(ExecutionContext):
         self._fills.append(fill)
         self._debit_cash(fill.fee, fill.venue)
         self._total_fees += fill.fee
+
+        if fill.tx_cost > 0:
+            self._total_tx_costs += fill.tx_cost
+            if self._allocator:
+                self._allocator.debit(fill.venue or "default", fill.tx_cost)
+            else:
+                self._cash -= fill.tx_cost
 
         market = fill.market
         venue = fill.venue
@@ -785,6 +795,10 @@ class BacktestContext(ExecutionContext):
     @property
     def total_funding(self) -> float:
         return self._total_funding
+
+    @property
+    def total_tx_costs(self) -> float:
+        return self._total_tx_costs
 
     @property
     def log_messages(self) -> List[str]:
