@@ -443,6 +443,16 @@ What to build:
   - Current arb scanner uses constant-product → overestimates profit
   - Tick-range model accounts for concentrated liquidity zones
 
+**Implemented:**
+- [x] `CLMMPool` tick-range model with tick-walking `output_amount()` (`flint/mev/clmm.py`)
+- [x] `TickRange` dataclass for per-tick liquidity
+- [x] `OrcaTickFetcher` — on-chain Whirlpool tick data via Solana RPC (`flint/providers/orca_ticks.py`)
+- [x] Whirlpool + TickArray account deserialization (manual byte parsing)
+- [x] `ArbDetector` CLMM integration — tick-walking edges with constant-product fallback
+- [x] `tick_snapshots` table in FlintStore for historical replay
+- [x] Raydium CLMM falls back to constant-product (no tick fetcher)
+- [x] Config: `clmm_tick_fetch_enabled`, `clmm_tick_persist_interval_s`
+
 ### 4.3 Transaction Cost Model
 
 **New file**: `flint/execution/tx_costs.py`
