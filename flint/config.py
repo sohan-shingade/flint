@@ -148,6 +148,10 @@ class FlintConfig(BaseSettings):
     tx_cost_jito_tip_lamports: int = 10000
     tx_cost_sol_price_usd: float = 150.0
 
+    # --- vAMM ---
+    vamm_enabled: bool = False
+    vamm_default_sqrt_k: str = ""
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""
