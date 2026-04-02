@@ -566,6 +566,14 @@ Each template needs: code, README, backtest results, parameter ranges, known lim
   - Data flow diagrams
   - Extension points
 
+**Implemented:**
+- [x] Quickstart guide: install → first backtest in <5 min (`docs/guides/quickstart.md`)
+- [x] Strategy authoring guide: v1/v2, ExecutionContext API, Optuna (`docs/guides/strategy-authoring.md`)
+- [x] Data provider guide: 14 providers, API keys, custom providers (`docs/guides/data-providers.md`)
+- [x] Live deployment guide: wallet setup, risk config, devnet → mainnet (`docs/guides/live-deployment.md`)
+- [x] Architecture overview: components, data flow, extension points (`docs/guides/architecture.md`)
+- [x] Slippage models guide: 4-tier impact, vAMM math, calibration equations (`docs/guides/slippage-models.md`)
+
 ### 5.3 Web Dashboard Enhancements
 
 **Extend**: `ui/src/pages/`
