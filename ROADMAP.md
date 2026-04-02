@@ -538,6 +538,14 @@ Each template needs: code, README, backtest results, parameter ranges, known lim
 - [ ] MEV arb scanner (Raydium/Orca pool price discrepancies)
 - [ ] Cross-venue basis trade (spot vs perp, or venue A vs venue B)
 
+**Implemented:**
+- [x] FundingArbStrategy README (`docs/strategies/funding_arb.md`) — existing strategy from Phase 3
+- [x] `MomentumBreakoutStrategy` with Pyth oracle confirmation (`flint/strategy/momentum_breakout.py`)
+- [x] `FundingMeanReversionStrategy` with Bollinger bands on funding (`flint/strategy/funding_mean_reversion.py`)
+- [x] `MevArbMonitor` for DEX arb opportunity scanning (`flint/strategy/mev_arb_monitor.py`)
+- [x] `BasisTradeStrategy` for cross-venue basis arbitrage (`flint/strategy/basis_trade.py`)
+- [x] Strategy READMEs with parameters, backtest examples, known limitations (`docs/strategies/`)
+
 ### 5.2 Documentation
 
 - [ ] Quickstart: install → pull data → run first backtest in < 5 minutes
