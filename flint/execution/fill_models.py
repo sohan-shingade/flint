@@ -205,10 +205,12 @@ class FillPipeline(FillModel):
         latency_seed: Optional[int] = None,
         latency_enabled: bool = True,
         tx_cost_model=None,
+        vamm_configs=None,
     ):
         self._impact = ImpactStage(
             impact_coefficient=impact_coefficient,
             fallback_bps=fallback_bps,
+            vamm_configs=vamm_configs,
         )
         self._latency = LatencyStage(
             base_latency_s=base_latency_s,
