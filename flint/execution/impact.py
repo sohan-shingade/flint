@@ -1,11 +1,14 @@
-"""ImpactStage — computes fill price using orderbook, sqrt model, or flat bps."""
+"""ImpactStage — computes fill price using vAMM, orderbook, sqrt model, or flat bps."""
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from ..models import Candle, Order, OrderbookSnapshot, Side
+
+if TYPE_CHECKING:
+    from .vamm import VammCurve
 
 
 @dataclass
@@ -14,12 +17,13 @@ class ImpactResult:
     fill_price: float
     available_size: float
     impact_bps: float
-    tier: str  # "orderbook", "sqrt", "fallback"
+    tier: str  # "vamm", "orderbook", "sqrt", "fallback"
 
 
 class ImpactStage:
-    """Determines fill price via three-tier fallback.
+    """Determines fill price via four-tier fallback.
 
+    Tier 0: vAMM constant-product curve (when vamm_configs provided for market).
     Tier 1: Walk orderbook levels (when snapshot exists).
     Tier 2: Square-root participation model (when bar volume exists).
     Tier 3: Flat basis-point penalty (last resort).
@@ -29,9 +33,11 @@ class ImpactStage:
         self,
         impact_coefficient: float = 0.005,
         fallback_bps: float = 5.0,
+        vamm_configs: Optional[Dict[str, "VammCurve"]] = None,
     ):
         self._k = impact_coefficient
         self._fallback_bps = fallback_bps
+        self._vamm_configs = vamm_configs
 
     def compute(
         self,
@@ -40,6 +46,10 @@ class ImpactStage:
         book: Optional[OrderbookSnapshot],
     ) -> ImpactResult:
         """Compute fill price and available liquidity for an order."""
+        # Tier 0: vAMM constant-product fill
+        if self._vamm_configs and order.market in self._vamm_configs:
+            return self._vamm_fill(order, candle)
+
         # Tier 1: Orderbook walk
         if book is not None and order.market == book.market:
             levels = book.asks if order.side == Side.LONG else book.bids
@@ -52,6 +62,16 @@ class ImpactStage:
 
         # Tier 3: Flat bps fallback
         return self._flat_fallback(order, candle)
+
+    def _vamm_fill(self, order, candle):
+        from .vamm import VammCurve
+        stored_curve = self._vamm_configs[order.market]
+        curve = VammCurve.from_oracle_price(stored_curve._sqrt_k, candle.close)
+        direction = "long" if order.side == Side.LONG else "short"
+        fill_price = curve.fill_price(order.size, direction)
+        impact = curve.impact_bps(order.size, direction, candle.close)
+        return ImpactResult(fill_price=fill_price, available_size=order.size,
+                            impact_bps=impact, tier="vamm")
 
     def _walk_book(self, order, candle, levels):
         remaining = order.size
