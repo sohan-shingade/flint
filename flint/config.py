@@ -143,6 +143,11 @@ class FlintConfig(BaseSettings):
     calibration_drift_threshold_pct: float = 15.0
     calibration_min_fills: int = 100
 
+    # --- Transaction costs ---
+    tx_cost_priority_fee_lamports: int = 5000
+    tx_cost_jito_tip_lamports: int = 10000
+    tx_cost_sol_price_usd: float = 150.0
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""
