@@ -54,6 +54,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         tick_markets: Optional[List[str]] = None,
         dry_run: bool = False,
         notification_manager=None,
+        tx_cost_model=None,
     ):
         self._venue = venue
         self._initial_capital = initial_capital
@@ -61,6 +62,7 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         self._risk_manager = risk_manager
         self._store = store
         self._session_id = session_id or str(uuid.uuid4())[:8]
+        self._tx_cost_model = tx_cost_model
         self._tick_interval_s = tick_interval_s
         self._position_sync_interval = position_sync_interval
         self._limit_order_timeout_bars = limit_order_timeout_bars
@@ -624,6 +626,14 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
 
     def log(self, message: str) -> None:
         logger.info("[%s] %s", self._session_id, message)
+
+    def estimate_cost(self, market: str, size: float, venue: str = "default"):
+        if self._tx_cost_model is None:
+            return None
+        price = self._current_candle.close if self._current_candle else 0
+        if price <= 0:
+            return None
+        return self._tx_cost_model.estimate(market, size, price)
 
     def get_oracle_price(self, market: Optional[str] = None) -> Optional[Tuple[float, int]]:
         """Get latest oracle price. Returns (price, ts) or None."""

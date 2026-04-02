@@ -164,6 +164,13 @@ class MultiVenueLiveContext(ExecutionContext):
     def log(self, message: str) -> None:
         logger.info("[multi-venue] %s", message)
 
+    def estimate_cost(self, market: str, size: float, venue: str = "default"):
+        target = self._resolve_venue(venue)
+        ctx = self._contexts.get(target)
+        if ctx:
+            return ctx.estimate_cost(market, size, venue=target)
+        return None
+
     async def submit_leg_group(self, legs: List[OrderLeg]) -> LegGroupResult:
         """Submit a group of paired orders across venues.
 

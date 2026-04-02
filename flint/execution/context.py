@@ -248,3 +248,7 @@ class ExecutionContext(abc.ABC):
     def log(self, message: str) -> None:
         """Log a message from the strategy. Default: no-op. Override in subclasses."""
         pass
+
+    def estimate_cost(self, market: str, size: float, venue: str = "default"):
+        """Estimate total execution cost. Returns CostEstimate or None."""
+        return None
