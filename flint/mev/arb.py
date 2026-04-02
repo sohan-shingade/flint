@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from ..models import ArbRoute, PoolState
+
+if TYPE_CHECKING:
+    from ..mev.clmm import CLMMPool
 
 
 @dataclass
@@ -22,9 +25,13 @@ class _Edge:
     reserve_in: float
     reserve_out: float
     fee_rate: float
+    clmm_pool: Optional["CLMMPool"] = field(default=None, compare=False)
+    is_a_to_b: bool = True
 
     def output_amount(self, amount_in: float) -> float:
-        """Constant-product AMM: (x + dx)(y - dy) = xy, with fee."""
+        """Delegate to CLMM tick-walking if available, else constant-product AMM."""
+        if self.clmm_pool is not None:
+            return self.clmm_pool.output_amount(amount_in, self.is_a_to_b)
         effective_in = amount_in * (1 - self.fee_rate)
         return (self.reserve_out * effective_in) / (self.reserve_in + effective_in)
 
@@ -50,8 +57,14 @@ class ArbDetector:
         self._tokens: Set[str] = set()
         self._adjacency: Dict[str, List[_Edge]] = defaultdict(list)
 
-    def update_pools(self, pools: List[PoolState]) -> None:
-        """Rebuild the graph from current pool states."""
+    def update_pools(self, pools: List[PoolState], clmm_pools: Optional[Dict[str, "CLMMPool"]] = None) -> None:
+        """Rebuild the graph from current pool states.
+
+        Args:
+            pools: List of PoolState objects (constant-product or CLMM).
+            clmm_pools: Optional mapping of pool_address → CLMMPool. When provided,
+                edges for matching pools delegate output_amount() to the CLMM model.
+        """
         self._edges.clear()
         self._tokens.clear()
         self._adjacency.clear()
@@ -60,12 +73,16 @@ class ArbDetector:
             self._tokens.add(p.token_a_mint)
             self._tokens.add(p.token_b_mint)
 
+            clmm = clmm_pools.get(p.pool_address) if clmm_pools else None
+
             # Forward: A → B
             fwd = _Edge(p.pool_address, p.token_a_mint, p.token_b_mint,
-                        p.reserve_a, p.reserve_b, p.fee_rate)
+                        p.reserve_a, p.reserve_b, p.fee_rate,
+                        clmm_pool=clmm, is_a_to_b=True)
             # Reverse: B → A
             rev = _Edge(p.pool_address, p.token_b_mint, p.token_a_mint,
-                        p.reserve_b, p.reserve_a, p.fee_rate)
+                        p.reserve_b, p.reserve_a, p.fee_rate,
+                        clmm_pool=clmm, is_a_to_b=False)
 
             self._edges.extend([fwd, rev])
             self._adjacency[p.token_a_mint].append(fwd)
