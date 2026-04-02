@@ -119,6 +119,7 @@ class BacktestResult:
     per_venue_pnl: Dict[str, float] = field(default_factory=dict)
     per_venue_trades: Dict[str, int] = field(default_factory=dict)
     per_venue_funding_income: Dict[str, float] = field(default_factory=dict)
+    total_tx_costs: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +272,7 @@ class Fill:
     is_partial: bool = False
     latency_ms: float = 0.0
     impact_bps: float = 0.0
+    tx_cost: float = 0.0
 
 
 @dataclass(frozen=True)
