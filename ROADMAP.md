@@ -446,6 +446,19 @@ What to build:
   - Deduct total costs from PnL per trade
   - Show cost drag on equity curve
 
+**Implemented:**
+- [x] `TxCostModel` ABC with per-venue implementations (`flint/execution/tx_costs.py`)
+- [x] `SolanaTxCostModel` — priority fees + Jito tips with lamport→USD conversion
+- [x] `HyperliquidTxCostModel` — negligible L1 settlement cost
+- [x] `CexTxCostModel` — zero network costs for CEXes
+- [x] `CostEstimate` dataclass with typed breakdown and `.total` property
+- [x] `get_tx_cost_model()` factory for venue-based model selection
+- [x] `Fill.tx_cost` field for per-fill network cost tracking
+- [x] `BacktestResult.total_tx_costs` for aggregate cost reporting
+- [x] `FillPipeline` integration via optional `tx_cost_model` parameter
+- [x] `ctx.estimate_cost()` for pre-trade cost estimation on all context types
+- [x] Config: priority fee, Jito tip, SOL price defaults
+
 ### 4.4 Slippage Calibration
 
 **Requires**: Real execution data from Phase 1
