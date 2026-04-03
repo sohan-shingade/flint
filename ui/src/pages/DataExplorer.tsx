@@ -94,6 +94,16 @@ export default function DataExplorer() {
   const [dlEndDate, setDlEndDate] = useState('')
   const [downloadProgress, setDownloadProgress] = useState<{market: string, status: string}[]>([])
   const [isDownloading, setIsDownloading] = useState(false)
+  // Candle venue selection for downloads
+  const CANDLE_VENUES = [
+    { id: 'default', label: 'Auto (Drift → HL → CCXT)', color: '#888' },
+    { id: 'drift',        label: 'Drift',        color: '#e8a849' },
+    { id: 'hyperliquid',  label: 'Hyperliquid',  color: '#22d3ee' },
+    { id: 'binance',      label: 'Binance',      color: '#f0b90b' },
+    { id: 'okx',          label: 'OKX',          color: '#a78bfa' },
+    { id: 'bybit',        label: 'Bybit',        color: '#57c84d' },
+  ]
+  const [candleVenue, setCandleVenue] = useState('default')
   // Funding venue selection for downloads
   const ALL_VENUES = [
     { id: 'drift',       label: 'Drift',       freq: '1h',  color: '#e8a849' },
@@ -257,7 +267,14 @@ export default function DataExplorer() {
         const res = await fetch('/api/v1/data/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ market: mkt, resolution_s: 3600, start_ts: startTs, end_ts: endTs, funding_venues: selectedVenues }),
+          body: JSON.stringify({
+            market: mkt,
+            resolution_s: 3600,
+            start_ts: startTs,
+            end_ts: endTs,
+            funding_venues: selectedVenues,
+            ...(candleVenue && candleVenue !== 'default' ? { venue: candleVenue } : {}),
+          }),
         })
         const data = await res.json()
         if (data.downloaded > 0 || data.existing > 0) {
@@ -509,6 +526,31 @@ export default function DataExplorer() {
                   </div>
                 </>
               )}
+            </div>
+
+            {/* Candle source venue */}
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-[10px] text-ghost tracking-[0.15em]">CANDLE SOURCE</span>
+                <span className="text-[9px] text-ghost/40">venue to fetch OHLCV candle data from</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {CANDLE_VENUES.map(v => {
+                  const sel = candleVenue === v.id
+                  return (
+                    <button key={v.id}
+                      onClick={() => setCandleVenue(v.id)}
+                      className={`px-2.5 py-1.5 text-[9px] tracking-wider border transition-all flex items-center gap-1.5 ${
+                        sel ? 'text-white' : 'border-border text-ghost/40 hover:text-terminal'
+                      }`}
+                      style={sel ? { borderColor: v.color + '88', background: v.color + '15', color: v.color } : {}}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: sel ? v.color : '#555' }} />
+                      {v.label}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
 
             {/* Funding venues */}

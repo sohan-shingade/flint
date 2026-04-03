@@ -472,10 +472,11 @@ def get_correlation(
 
 @router.post("/download")
 def download_market_data(request: Request, body: dict):
-    """Download market data from Drift for a specific market and date range.
+    """Download market data for a specific market and date range.
 
-    Body: { "market": "SOL-PERP", "resolution_s": 3600, "start_ts": ..., "end_ts": ... }
-    Returns: { "market": ..., "downloaded": N, "cached": N, "source": "drift_api" | "drift_s3" }
+    Body: { "market": "SOL-PERP", "resolution_s": 3600, "start_ts": ..., "end_ts": ..., "venue": "drift" }
+    venue: optional — "drift" (default), "hyperliquid", "binance", "okx", "bybit"
+    Returns: { "market": ..., "downloaded": N, "cached": N, "source": "drift_api" | "drift_s3" | venue }
     """
     import logging
     logger = logging.getLogger("flint.api.data")
@@ -485,6 +486,7 @@ def download_market_data(request: Request, body: dict):
     start_ts = body.get("start_ts")
     end_ts = body.get("end_ts")
     funding_venues = body.get("funding_venues")  # optional list of venue IDs
+    venue = body.get("venue", "")  # optional venue filter (drift, hyperliquid, binance, okx, bybit)
 
     if not start_ts or not end_ts or start_ts >= end_ts:
         from fastapi import HTTPException
@@ -563,11 +565,15 @@ def download_market_data(request: Request, body: dict):
         errors: list = []
 
         for gap_start, gap_end in gaps:
-            fetched, err = _download_range(market, resolution_s, gap_start, gap_end, logger)
+            if venue:
+                fetched, err = _download_range_for_venue(market, resolution_s, gap_start, gap_end, venue, logger)
+                source = venue
+            else:
+                fetched, err = _download_range(market, resolution_s, gap_start, gap_end, logger)
+                source = "drift_api"
             if fetched:
                 total_fetched += len(fetched)
                 total_cached += store.upsert_candles(fetched)
-                source = "drift_api"
             if err:
                 errors.append(err)
 
@@ -735,6 +741,86 @@ def _download_range(market: str, resolution_s: int, start_ts: int, end_ts: int, 
         logger.warning("CCXT failed for %s: %s", market, e)
 
     return [], "; ".join(errors) if errors else "No provider found"
+
+
+def _download_range_for_venue(market: str, resolution_s: int, start_ts: int, end_ts: int, venue: str, logger):
+    """Download candles from a specific venue.
+
+    Returns (candles, error_message) tuple.
+    """
+    if venue == "drift":
+        # Drift API + S3 chain
+        try:
+            from ...providers.drift_candles import DriftCandleProvider
+            provider = DriftCandleProvider()
+            try:
+                fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+            finally:
+                provider.close()
+            if fetched:
+                return fetched, None
+        except Exception as e:
+            logger.warning("Drift API failed: %s", e)
+        # Try S3 fallback
+        try:
+            from ...providers.drift_s3 import DriftS3Provider
+            provider = DriftS3Provider()
+            try:
+                fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+            finally:
+                provider.close()
+            if fetched:
+                return fetched, None
+        except Exception as e:
+            logger.warning("Drift S3 failed: %s", e)
+        return [], "Drift data unavailable"
+
+    elif venue == "hyperliquid":
+        try:
+            from ...providers.hyperliquid_candles import HyperliquidCandleProvider, _FLINT_TO_HL
+            if market not in _FLINT_TO_HL:
+                return [], f"Market {market} not available on Hyperliquid"
+            provider = HyperliquidCandleProvider()
+            try:
+                _SEC_TO_INTERVAL = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d"}
+                interval = _SEC_TO_INTERVAL.get(resolution_s, "1h")
+                fetched = provider.fetch_candles(market, start_ts, end_ts, resolution=interval)
+            finally:
+                provider.close()
+            if fetched:
+                return fetched, None
+        except Exception as e:
+            return [], f"Hyperliquid: {e}"
+        return [], "Hyperliquid data unavailable"
+
+    elif venue in ("binance", "okx", "bybit"):
+        try:
+            from ...providers.ccxt_provider import CCXTProvider
+            from ...models import Candle
+            if market.endswith("-SPOT"):
+                base = market.replace("-SPOT", "")
+                ccxt_symbol = f"{base}/USDT"
+            else:
+                ccxt_symbol = market
+            provider = CCXTProvider(venue)
+            try:
+                fetched = provider.fetch_candles(ccxt_symbol, resolution_s, start_ts, end_ts)
+            finally:
+                provider.close()
+            if fetched:
+                # Re-tag with original market name and venue
+                tagged = [
+                    Candle(market=market, ts=c.ts, open=c.open, high=c.high,
+                           low=c.low, close=c.close, volume=c.volume,
+                           resolution_s=c.resolution_s, venue=venue)
+                    for c in fetched
+                ]
+                return tagged, None
+        except Exception as e:
+            return [], f"{venue}: {e}"
+        return [], f"{venue} data unavailable"
+
+    return [], f"Unknown venue: {venue}"
 
 
 FUNDING_VENUES = ["drift", "hyperliquid", "okx", "bybit", "gateio", "bitget", "dydx"]
