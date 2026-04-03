@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ScatterChart, Scatter, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
 interface ArbRoute {
   pools: string[]
@@ -131,6 +132,58 @@ export default function MevDashboard() {
           </div>
         </div>
       )}
+
+      {/* opportunity timeline */}
+      <div className="border border-border bg-surface/60">
+        <div className="px-4 py-2.5 border-b border-border flex items-center gap-2">
+          <span className="w-2 h-2 bg-amber/60" />
+          <span className="text-[10px] text-ghost tracking-[0.2em]">OPPORTUNITY.TIMELINE</span>
+          <span className="text-[10px] text-ghost/40 ml-2">profit_bps vs time</span>
+        </div>
+        <div className="p-4">
+          {routes.length === 0 ? (
+            <div className="flex items-center justify-center h-32">
+              <span className="text-ghost/30 text-[10px] tracking-[0.3em]">RUN AN ARB SCAN TO SEE TIMELINE</span>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <ScatterChart margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="2 4" stroke="rgba(255,255,255,0.04)" />
+                <XAxis
+                  dataKey="hops"
+                  name="hops"
+                  tick={{ fill: 'var(--color-ghost)', fontSize: 9 }}
+                  axisLine={{ stroke: 'var(--color-border)' }}
+                  tickLine={false}
+                  label={{ value: 'Hops', position: 'insideBottom', offset: -2, fill: 'var(--color-ghost)', fontSize: 9 }}
+                />
+                <YAxis
+                  dataKey="profit_bps"
+                  name="profit_bps"
+                  tick={{ fill: 'var(--color-ghost)', fontSize: 9 }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={48}
+                  label={{ value: 'bps', angle: -90, position: 'insideLeft', fill: 'var(--color-ghost)', fontSize: 9 }}
+                />
+                <Tooltip
+                  content={({ active, payload }: any) => {
+                    if (!active || !payload?.length) return null
+                    const d = payload[0].payload as ArbRoute
+                    return (
+                      <div className="bg-panel border border-border px-3 py-2 text-[11px] font-mono space-y-0.5">
+                        <div className="text-gain">+{d.profit_bps.toFixed(2)} bps</div>
+                        <div className="text-ghost/70">{d.hops} hops · {d.tokens.join(' → ')}</div>
+                      </div>
+                    )
+                  }}
+                />
+                <Scatter data={routes} fill="var(--color-gain)" fillOpacity={0.8} r={5} />
+              </ScatterChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
