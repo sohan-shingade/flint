@@ -433,6 +433,133 @@ function EmptyState() {
   )
 }
 
+/* ── deployment panel ────────────────────────────────────── */
+
+function DeployPanel() {
+  const [isOpen, setIsOpen] = useState(false)
+  const [strategies, setStrategies] = useState<string[]>([])
+  const [markets, setMarkets] = useState<string[]>([])
+  const [strategy, setStrategy] = useState('')
+  const [market, setMarket] = useState('')
+  const [venue, setVenue] = useState('paper')
+  const [capital, setCapital] = useState('10000')
+  const [deploying, setDeploying] = useState(false)
+  const [deployMsg, setDeployMsg] = useState('')
+
+  useEffect(() => {
+    if (!isOpen) return
+    fetch('/api/v1/strategies').then(r => r.json()).then(d => {
+      const names = (d.strategies || []).map((s: any) => s.name || s)
+      setStrategies(names)
+      if (names.length > 0 && !strategy) setStrategy(names[0])
+    }).catch(() => {})
+    fetch('/api/v1/data/markets').then(r => r.json()).then(d => {
+      const mkts = d.markets || []
+      setMarkets(mkts)
+      if (mkts.length > 0 && !market) setMarket(mkts[0])
+    }).catch(() => {})
+  }, [isOpen])
+
+  const venues = ['paper', 'drift', 'hyperliquid']
+
+  async function handleDeploy() {
+    setDeploying(true)
+    setDeployMsg('')
+    try {
+      const res = await fetch('/api/v1/paper/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strategy, market, venue, initial_capital: parseFloat(capital) }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setDeployMsg(`Deployed: ${data.session_id || 'ok'}`)
+        setIsOpen(false)
+      } else {
+        setDeployMsg(`Error: ${data.detail || 'deploy failed'}`)
+      }
+    } catch (e) {
+      setDeployMsg(`Error: ${String(e)}`)
+    }
+    setDeploying(false)
+  }
+
+  return (
+    <div className="border border-border bg-surface/60 mb-6">
+      <button
+        onClick={() => setIsOpen(o => !o)}
+        className="w-full px-4 py-2.5 flex items-center gap-2 hover:bg-amber-glow transition-colors"
+      >
+        <span className={`w-2 h-2 ${isOpen ? 'bg-amber' : 'bg-amber/40'} transition-colors`} />
+        <span className="text-[10px] text-ghost tracking-[0.2em]">DEPLOY.STRATEGY</span>
+        <span className="ml-auto text-[10px] text-ghost/40">{isOpen ? '▲ collapse' : '▼ expand'}</span>
+      </button>
+      {isOpen && (
+        <div className="border-t border-border p-4 space-y-4" style={{ animation: 'fadeUp 0.2s ease' }}>
+          <div className="flex flex-wrap gap-4">
+            <div className="flex flex-col gap-1">
+              <label className="text-[9px] text-ghost/50 tracking-[0.2em]">STRATEGY</label>
+              <select
+                value={strategy}
+                onChange={e => setStrategy(e.target.value)}
+                className="bg-panel border border-border text-terminal text-xs px-3 py-1.5 focus:outline-none focus:border-amber w-48"
+              >
+                {strategies.length === 0 && <option value="">Loading...</option>}
+                {strategies.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[9px] text-ghost/50 tracking-[0.2em]">MARKET</label>
+              <select
+                value={market}
+                onChange={e => setMarket(e.target.value)}
+                className="bg-panel border border-border text-terminal text-xs px-3 py-1.5 focus:outline-none focus:border-amber w-40"
+              >
+                {markets.length === 0 && <option value="">Loading...</option>}
+                {markets.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[9px] text-ghost/50 tracking-[0.2em]">VENUE</label>
+              <select
+                value={venue}
+                onChange={e => setVenue(e.target.value)}
+                className="bg-panel border border-border text-terminal text-xs px-3 py-1.5 focus:outline-none focus:border-amber w-36"
+              >
+                {venues.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[9px] text-ghost/50 tracking-[0.2em]">CAPITAL ($)</label>
+              <input
+                type="number"
+                value={capital}
+                onChange={e => setCapital(e.target.value)}
+                min="100"
+                className="bg-panel border border-border text-terminal text-xs px-3 py-1.5 focus:outline-none focus:border-amber w-28 tabular-nums"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={handleDeploy}
+              disabled={deploying || !strategy || !market}
+              className="px-6 py-2 bg-amber text-void text-xs font-semibold tracking-[0.15em] hover:bg-amber-dim disabled:bg-border disabled:text-ghost transition-all"
+            >
+              {deploying ? '> DEPLOYING...' : '> DEPLOY'}
+            </button>
+            {deployMsg && (
+              <span className={`text-[10px] tracking-wide ${deployMsg.startsWith('Error') ? 'text-loss' : 'text-phosphor'}`}>
+                {deployMsg}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ── main page ───────────────────────────────────────────── */
 
 export default function PaperTrading() {
@@ -493,6 +620,9 @@ export default function PaperTrading() {
 
       {/* ── main panel ── */}
       <main className="flex-1 px-6 py-6 overflow-y-auto">
+        {/* deployment panel */}
+        <DeployPanel />
+
         {/* page title */}
         <div className="flex items-baseline gap-4 mb-6">
           <h1 className="font-[var(--font-display)] text-2xl text-white/90 italic">Paper</h1>
