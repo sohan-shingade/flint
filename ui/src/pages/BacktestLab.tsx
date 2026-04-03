@@ -88,6 +88,49 @@ function extractMarketsFromCode(code: string): string[] {
   return markets
 }
 
+/* ── strategy profile detection ─────────────────────── */
+
+interface StrategyProfile {
+  type: 'single' | 'multi_venue' | 'multi_market' | 'cross_venue_multi_market'
+  venues: string[]           // Detected venues (empty = uses default/any)
+  markets: string[]          // Extra markets detected
+  needsFunding: boolean
+  needsCrossVenueFunding: boolean
+  needsOracle: boolean
+  needsOrderbook: boolean
+  usesAllVenues: boolean     // Uses get_funding_by_venue without specific venues
+}
+
+function detectStrategyProfile(code: string): StrategyProfile {
+  // Detect explicit venues from venue="xxx" patterns
+  const venueMatches = [...code.matchAll(/venue\s*=\s*["']([a-z_]+)["']/g)]
+  const venues = [...new Set(venueMatches.map(m => m[1]).filter(v => v !== 'default'))]
+
+  // Detect markets from get_candles calls
+  const marketMatches = [...code.matchAll(/get_candles\s*\(\s*["']([A-Z0-9]+-(?:PERP|[A-Z]+))["']/g)]
+  const markets = [...new Set(marketMatches.map(m => m[1]))]
+
+  // Detect data needs
+  const needsFunding = /get_funding_rates?\s*\(/.test(code)
+  const needsCrossVenueFunding = /get_funding_by_venue\s*\(/.test(code)
+  const needsOracle = /get_oracle_price\s*\(/.test(code)
+  const needsOrderbook = /get_orderbook\s*\(/.test(code)
+
+  // Detect if strategy uses venue-agnostic cross-venue data (get_funding_by_venue without specific venue= calls)
+  const usesAllVenues = needsCrossVenueFunding && venues.length === 0
+
+  // Classify
+  const isMultiVenue = venues.length > 1 || needsCrossVenueFunding
+  const isMultiMarket = markets.length > 0
+
+  let type: StrategyProfile['type'] = 'single'
+  if (isMultiVenue && isMultiMarket) type = 'cross_venue_multi_market'
+  else if (isMultiVenue) type = 'multi_venue'
+  else if (isMultiMarket) type = 'multi_market'
+
+  return { type, venues, markets, needsFunding, needsCrossVenueFunding, needsOracle, needsOrderbook, usesAllVenues }
+}
+
 /* ── date range presets ─────────────────────────────────── */
 
 type RangePreset = '1M' | '3M' | '6M' | '1Y' | '3Y' | 'CUSTOM'
@@ -171,6 +214,9 @@ export default function BacktestLab() {
   // Execution features
   const [marginTracking, setMarginTracking] = useState(false)
 
+  // Strategy profile detection
+  const [stratProfile, setStratProfile] = useState<StrategyProfile | null>(null)
+
   // Deploy to paper trading
   const [showDeploy, setShowDeploy] = useState(false)
   const [deployCapital, setDeployCapital] = useState(10000)
@@ -181,6 +227,19 @@ export default function BacktestLab() {
 
   const codeRef = useRef(code)
   codeRef.current = code
+
+  // Detect strategy profile when template changes
+  useEffect(() => {
+    const profile = detectStrategyProfile(codeRef.current)
+    setStratProfile(profile)
+  }, [activeTemplateKey])
+
+  // Auto-enable margin tracking for multi-venue strategies
+  useEffect(() => {
+    if (stratProfile && (stratProfile.type === 'multi_venue' || stratProfile.type === 'cross_venue_multi_market')) {
+      setMarginTracking(true)
+    }
+  }, [stratProfile])
 
   // Fetch available markets on mount + auto-detect best date range
   useEffect(() => {
@@ -356,6 +415,7 @@ export default function BacktestLab() {
     setDirty(false)
     setValidationError(null)
     setActiveTemplateKey(null)
+    setStratProfile(detectStrategyProfile(loaded))
   }, [load, dirty])
 
   const handleDeleteStrategy = useCallback(async (name: string, e: React.MouseEvent) => {
@@ -394,6 +454,9 @@ export default function BacktestLab() {
   }, [validate])
 
   const handleRun = useCallback(async () => {
+    // Re-detect strategy profile before submitting
+    setStratProfile(detectStrategyProfile(codeRef.current))
+
     setValidationError(null)
     const startTs = Math.floor(new Date(startDate + 'T00:00:00Z').getTime() / 1000)
     const endTs = Math.floor(new Date(endDate + 'T23:59:59Z').getTime() / 1000)
@@ -638,6 +701,7 @@ export default function BacktestLab() {
             setDirty(false)
             setActiveTemplateKey(null)
             setValidationError(null)
+            setStratProfile(detectStrategyProfile(TEMPLATES.blank.code))
           }}
           className={`px-3 py-1.5 text-[10px] tracking-[0.12em] border transition-all whitespace-nowrap ${
             currentName === null && !activeTemplateKey
@@ -727,6 +791,47 @@ export default function BacktestLab() {
               <span className="w-2 h-2 bg-amber/60" />
               <span className="text-[10px] text-ghost tracking-[0.2em]">CONFIG.PARAMS</span>
             </div>
+
+            {/* Strategy profile detection panel */}
+            {stratProfile && stratProfile.type !== 'single' && (
+              <div className="mx-3 mt-3 border border-amber/30 bg-amber/5 p-3 space-y-2" style={{ animation: 'fadeUp 0.3s ease' }}>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] tracking-wider text-amber">
+                    {stratProfile.type === 'multi_venue' ? 'MULTI-VENUE STRATEGY' :
+                     stratProfile.type === 'multi_market' ? 'MULTI-MARKET STRATEGY' :
+                     stratProfile.type === 'cross_venue_multi_market' ? 'CROSS-VENUE MULTI-MARKET' : ''}
+                  </span>
+                </div>
+
+                {stratProfile.venues.length > 0 && (
+                  <div className="text-[9px] text-ghost">
+                    Venues: {stratProfile.venues.map(v => v.toUpperCase()).join(', ')}
+                  </div>
+                )}
+                {stratProfile.usesAllVenues && (
+                  <div className="text-[9px] text-ghost">
+                    Uses cross-venue funding data (all downloaded venues)
+                  </div>
+                )}
+                {stratProfile.markets.length > 0 && (
+                  <div className="text-[9px] text-ghost">
+                    Extra markets: {stratProfile.markets.join(', ')}
+                  </div>
+                )}
+
+                {/* Data requirement warnings */}
+                {stratProfile.needsFunding && (
+                  <div className="text-[9px] text-amber/70">Requires funding rate data -- download in Data Explorer</div>
+                )}
+                {stratProfile.needsOracle && (
+                  <div className="text-[9px] text-amber/70">Uses oracle price (Drift only)</div>
+                )}
+                {stratProfile.needsOrderbook && (
+                  <div className="text-[9px] text-amber/70">Requires orderbook snapshots</div>
+                )}
+              </div>
+            )}
+
             <div className="p-3 grid grid-cols-2 gap-3">
               <div className="col-span-2 bg-panel/80 border border-border/50 px-3 py-2">
                 <div className="flex items-center gap-2 mb-1">
@@ -746,32 +851,53 @@ export default function BacktestLab() {
                     )}
                   </select>
                 </div>
-                <div className="mt-2 flex items-center gap-2">
-                  <label className="text-[9px] text-ghost tracking-wider">VENUE</label>
-                  <select value={venue} onChange={(e) => {
-                    setVenue(e.target.value)
-                    // Auto-select matching fee preset
-                    const presetMap: Record<string, string> = {
-                      'drift': 'drift_taker',
-                      'hyperliquid': 'hl_taker',
-                      'binance': 'binance_taker',
-                      'okx': 'okx_taker',
-                      'bybit': 'bybit_taker',
-                    }
-                    if (presetMap[e.target.value]) {
-                      setFeePreset(presetMap[e.target.value])
-                      setFeeRate(FEE_PRESETS[presetMap[e.target.value]].rate)
-                    }
-                  }}
-                    className="bg-void border border-border text-[11px] text-terminal px-2 py-0.5 w-36">
-                    <option value="default">Default</option>
-                    <option value="drift">Drift</option>
-                    <option value="hyperliquid">Hyperliquid</option>
-                    <option value="binance">Binance</option>
-                    <option value="okx">OKX</option>
-                    <option value="bybit">Bybit</option>
-                  </select>
-                </div>
+                {/* Single-venue strategy: show venue selector */}
+                {(!stratProfile || stratProfile.type === 'single' || stratProfile.type === 'multi_market') && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <label className="text-[9px] text-ghost tracking-wider">VENUE</label>
+                    <select value={venue} onChange={(e) => {
+                      setVenue(e.target.value)
+                      // Auto-select matching fee preset
+                      const presetMap: Record<string, string> = {
+                        'drift': 'drift_taker',
+                        'hyperliquid': 'hl_taker',
+                        'binance': 'binance_taker',
+                        'okx': 'okx_taker',
+                        'bybit': 'bybit_taker',
+                      }
+                      if (presetMap[e.target.value]) {
+                        setFeePreset(presetMap[e.target.value])
+                        setFeeRate(FEE_PRESETS[presetMap[e.target.value]].rate)
+                      }
+                    }}
+                      className="bg-void border border-border text-[11px] text-terminal px-2 py-0.5 w-36">
+                      <option value="default">Default</option>
+                      <option value="drift">Drift</option>
+                      <option value="hyperliquid">Hyperliquid</option>
+                      <option value="binance">Binance</option>
+                      <option value="okx">OKX</option>
+                      <option value="bybit">Bybit</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Multi-venue strategy: show per-venue fee info */}
+                {stratProfile && (stratProfile.type === 'multi_venue' || stratProfile.type === 'cross_venue_multi_market') && (
+                  <div className="mt-2 p-2 border border-border bg-surface/30">
+                    <div className="text-[9px] text-ghost tracking-wider mb-1">VENUE FEES (per venue config)</div>
+                    {(stratProfile.venues.length > 0 ? stratProfile.venues : ['drift', 'hyperliquid']).map(v => {
+                      const fees: Record<string, string> = {
+                        drift: '10 bps', hyperliquid: '3.5 bps', binance: '4.5 bps', okx: '5 bps', bybit: '5.5 bps'
+                      }
+                      return (
+                        <div key={v} className="text-[9px] text-terminal">
+                          {v.toUpperCase()}: {fees[v] || '5 bps'} taker
+                        </div>
+                      )
+                    })}
+                    <div className="text-[8px] text-ghost/50 mt-1">Multi-venue strategies use per-venue fee configs automatically</div>
+                  </div>
+                )}
               </div>
               <div>
                 <label className={labelClass}>TIMEFRAME</label>
