@@ -129,7 +129,7 @@ function SessionDetail({ sessionId, onStop, onKill }: {
     const startTs = eqHistory[0]?.ts || 0
     const endTs = eqHistory[eqHistory.length - 1]?.ts || 0
     if (!startTs) return
-    fetch(`/api/v1/data/ohlcv?market=${status.market}&resolution=3600&start_ts=${startTs}&end_ts=${endTs}`)
+    fetch(`/api/v1/data/ohlcv?market=${status.market}&resolution_s=3600&start_ts=${startTs}&end_ts=${endTs}`)
       .then(r => r.json())
       .then(d => {
         const candles = d.candles || []
@@ -584,10 +584,10 @@ function DeployPanel() {
             <div className="text-[9px] text-ghost/60 space-y-1">
               <div>{selectedStrat.description}</div>
               {isMultiVenue && (
-                <div className="text-amber/70">⚡ Multi-venue strategy — trades on {(selectedStrat.venues || []).join(' + ')}</div>
+                <div className="text-amber/70">Multi-venue strategy — trades on {(selectedStrat.venues || []).join(' + ')}</div>
               )}
               {isMonitor && (
-                <div className="text-amber/70">👁 Monitor only — no orders placed</div>
+                <div className="text-amber/70">Monitor only — no orders placed</div>
               )}
               {selectedStrat.needs_funding && (
                 <div className="text-amber/70">↳ Requires funding rate data — download in Data Explorer</div>
