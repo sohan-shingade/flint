@@ -438,9 +438,19 @@ function EmptyState() {
 
 /* ── deployment panel ────────────────────────────────────── */
 
+interface StrategyMeta {
+  name: string
+  display_name: string
+  description: string
+  type?: string
+  venues?: string[]
+  needs_funding?: boolean
+  params?: Record<string, any>
+}
+
 function DeployPanel() {
   const [isOpen, setIsOpen] = useState(false)
-  const [strategies, setStrategies] = useState<string[]>([])
+  const [strategies, setStrategies] = useState<StrategyMeta[]>([])
   const [markets, setMarkets] = useState<string[]>([])
   const [strategy, setStrategy] = useState('')
   const [market, setMarket] = useState('')
@@ -452,9 +462,9 @@ function DeployPanel() {
   useEffect(() => {
     if (!isOpen) return
     fetch('/api/v1/strategies').then(r => r.json()).then(d => {
-      const names = (d.strategies || []).map((s: any) => s.name || s)
-      setStrategies(names)
-      if (names.length > 0 && !strategy) setStrategy(names[0])
+      const strats = d.strategies || []
+      setStrategies(strats)
+      if (strats.length > 0 && !strategy) setStrategy(strats[0].name)
     }).catch(() => {})
     fetch('/api/v1/data/markets').then(r => r.json()).then(d => {
       const mkts = d.markets || []
@@ -463,7 +473,10 @@ function DeployPanel() {
     }).catch(() => {})
   }, [isOpen])
 
-  const venues = ['paper', 'drift', 'hyperliquid']
+  const selectedStrat = strategies.find(s => s.name === strategy)
+  const stratType = selectedStrat?.type || 'single_venue'
+  const isMultiVenue = stratType === 'multi_venue'
+  const isMonitor = stratType === 'monitor'
 
   async function handleDeploy() {
     setDeploying(true)
@@ -508,7 +521,7 @@ function DeployPanel() {
                 className="bg-panel border border-border text-terminal text-xs px-3 py-1.5 focus:outline-none focus:border-amber w-48"
               >
                 {strategies.length === 0 && <option value="">Loading...</option>}
-                {strategies.map(s => <option key={s} value={s}>{s}</option>)}
+                {strategies.map(s => <option key={s.name} value={s.name}>{s.display_name || s.name}</option>)}
               </select>
             </div>
             <div className="flex flex-col gap-1">
@@ -522,16 +535,25 @@ function DeployPanel() {
                 {markets.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[9px] text-ghost/50 tracking-[0.2em]">VENUE</label>
-              <select
-                value={venue}
-                onChange={e => setVenue(e.target.value)}
-                className="bg-panel border border-border text-terminal text-xs px-3 py-1.5 focus:outline-none focus:border-amber w-36"
-              >
-                {venues.map(v => <option key={v} value={v}>{v}</option>)}
-              </select>
-            </div>
+            {/* Venue selector — adaptive based on strategy type */}
+            {!isMonitor && (
+              <div className="flex flex-col gap-1">
+                <label className="text-[9px] text-ghost/50 tracking-[0.2em]">VENUE</label>
+                {isMultiVenue ? (
+                  <div className="text-[10px] text-terminal px-3 py-1.5 border border-border bg-panel">
+                    {(selectedStrat?.venues || ['drift', 'hyperliquid']).map(v => v.toUpperCase()).join(' + ')}
+                    <div className="text-[8px] text-ghost/40 mt-0.5">Fixed by strategy</div>
+                  </div>
+                ) : (
+                  <select value={venue} onChange={e => setVenue(e.target.value)}
+                    className="bg-panel border border-border text-terminal text-xs px-3 py-1.5 focus:outline-none focus:border-amber w-36">
+                    {['paper', 'drift', 'hyperliquid', 'binance', 'okx', 'bybit'].map(v =>
+                      <option key={v} value={v}>{v}</option>
+                    )}
+                  </select>
+                )}
+              </div>
+            )}
             <div className="flex flex-col gap-1">
               <label className="text-[9px] text-ghost/50 tracking-[0.2em]">CAPITAL ($)</label>
               <input
@@ -557,6 +579,21 @@ function DeployPanel() {
               </span>
             )}
           </div>
+          {/* Strategy info */}
+          {selectedStrat && (
+            <div className="text-[9px] text-ghost/60 space-y-1">
+              <div>{selectedStrat.description}</div>
+              {isMultiVenue && (
+                <div className="text-amber/70">⚡ Multi-venue strategy — trades on {(selectedStrat.venues || []).join(' + ')}</div>
+              )}
+              {isMonitor && (
+                <div className="text-amber/70">👁 Monitor only — no orders placed</div>
+              )}
+              {selectedStrat.needs_funding && (
+                <div className="text-amber/70">↳ Requires funding rate data — download in Data Explorer</div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
