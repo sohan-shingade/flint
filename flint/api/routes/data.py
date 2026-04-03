@@ -500,6 +500,8 @@ def download_market_data(request: Request, body: dict):
         from fastapi import HTTPException
         raise HTTPException(500, "Store not available")
 
+    download_warnings: list = []
+
     try:
         # Check what we already have
         existing = store.query_candles(market, resolution_s, start_ts, end_ts)
@@ -521,9 +523,14 @@ def download_market_data(request: Request, body: dict):
             funding_fetched = 0
             if "-PERP" in market:
                 try:
-                    funding_fetched = _download_funding_all_venues(store, market, start_ts, end_ts, logger, venues=funding_venues)
+                    funding_fetched = _download_funding_all_venues(
+                        store, market, start_ts, end_ts, logger,
+                        venues=funding_venues, warnings=download_warnings,
+                    )
                 except Exception as e:
+                    msg = f"Funding sync failed: {e}"
                     logger.warning("Funding sync failed for %s: %s", market, e)
+                    download_warnings.append(msg)
             # Update sync_metadata for freshness tracking
             try:
                 from ...models import SyncMetadata
@@ -559,6 +566,7 @@ def download_market_data(request: Request, body: dict):
                 "funding_fetched": funding_fetched,
                 "source": "local",
                 "skipped": True,
+                "warnings": download_warnings,
             }
 
         # Download only the missing gaps
@@ -579,6 +587,7 @@ def download_market_data(request: Request, body: dict):
                 total_cached += store.upsert_candles(fetched)
             if err:
                 errors.append(err)
+                download_warnings.append(f"Candle download ({source}): {err}")
 
         # Re-count total
         final_count = len(store.query_candles(market, resolution_s, start_ts, end_ts))
@@ -587,9 +596,14 @@ def download_market_data(request: Request, body: dict):
         funding_fetched = 0
         if "-PERP" in market:
             try:
-                funding_fetched = _download_funding_all_venues(store, market, start_ts, end_ts, logger)
+                funding_fetched = _download_funding_all_venues(
+                    store, market, start_ts, end_ts, logger,
+                    venues=funding_venues, warnings=download_warnings,
+                )
             except Exception as e:
+                msg = f"Funding sync failed: {e}"
                 logger.warning("Funding sync failed for %s: %s", market, e)
+                download_warnings.append(msg)
 
         # Update sync_metadata for freshness tracking
         try:
@@ -626,6 +640,7 @@ def download_market_data(request: Request, body: dict):
             "total": final_count,
             "funding_fetched": funding_fetched,
             "source": source,
+            "warnings": download_warnings,
         }
         if errors:
             result["error"] = "; ".join(errors)
@@ -633,6 +648,7 @@ def download_market_data(request: Request, body: dict):
 
     except Exception as e:
         logger.error("Download failed for %s: %s", market, e)
+        download_warnings.append(f"Fatal error: {e}")
         return {
             "market": market,
             "resolution_s": resolution_s,
@@ -641,6 +657,7 @@ def download_market_data(request: Request, body: dict):
             "existing": 0,
             "total": 0,
             "error": str(e),
+            "warnings": download_warnings,
         }
 
 
@@ -1128,12 +1145,13 @@ def _fetch_venue_open_interest(
     return 0
 
 
-def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int, logger, venues=None) -> int:
+def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int, logger, venues=None, warnings=None) -> int:
     """Download funding rates for a market from selected venues.
 
     Args:
         venues: Optional list of venue IDs to download from.
                 If None, downloads from all available venues.
+        warnings: Optional list to append provider failure messages to.
     """
     if "-PERP" not in market:
         return 0
@@ -1192,6 +1210,8 @@ def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int,
                             venue, len(snapshots), stored, market)
         except Exception as e:
             logger.warning("%s funding failed for %s: %s", venue, market, e)
+            if warnings is not None:
+                warnings.append(f"{venue} funding unavailable: {e}")
 
     # CCXT exchanges (mexc, phemex, bitmex, etc.)
     for exchange in ccxt_exchanges:
@@ -1211,6 +1231,8 @@ def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int,
                             exchange, len(snapshots), stored, market)
         except Exception as e:
             logger.warning("ccxt/%s funding failed for %s: %s", exchange, market, e)
+            if warnings is not None:
+                warnings.append(f"ccxt/{exchange} funding unavailable: {e}")
 
     # Also fetch per-venue open interest alongside funding
     OI_VENUES = {"binance", "okx", "bybit", "hyperliquid"}

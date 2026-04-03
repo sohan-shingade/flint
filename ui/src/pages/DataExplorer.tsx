@@ -93,6 +93,7 @@ export default function DataExplorer() {
   const [dlStartDate, setDlStartDate] = useState('')
   const [dlEndDate, setDlEndDate] = useState('')
   const [downloadProgress, setDownloadProgress] = useState<{market: string, status: string}[]>([])
+  const [downloadWarnings, setDownloadWarnings] = useState<string[]>([])
   const [isDownloading, setIsDownloading] = useState(false)
   // Candle venue selection for downloads (multi-select)
   const CANDLE_VENUES = [
@@ -278,6 +279,7 @@ export default function DataExplorer() {
   const handleBulkDownload = async () => {
     if (selectedDownloads.length === 0) return
     setIsDownloading(true)
+    setDownloadWarnings([])
 
     const now = Math.floor(Date.now() / 1000)
     let startTs: number, endTs: number
@@ -296,6 +298,7 @@ export default function DataExplorer() {
 
     // Determine which candle venues to download; fall back to default (auto) if none selected
     const candleVenuesToFetch = selectedCandleVenues.length > 0 ? selectedCandleVenues : ['default']
+    const allWarnings: string[] = []
 
     for (let i = 0; i < selectedDownloads.length; i++) {
       const mkt = selectedDownloads[i]
@@ -323,6 +326,12 @@ export default function DataExplorer() {
           const data = await res.json()
           totalCandles += (data.downloaded || 0) + (data.existing || 0)
           totalFunding += data.funding_fetched || 0
+          if (data.warnings && data.warnings.length > 0) {
+            for (const w of data.warnings) {
+              allWarnings.push(`[${mkt}] ${w}`)
+            }
+            setDownloadWarnings([...allWarnings])
+          }
         } catch {
           anyError = true
         }
@@ -753,6 +762,13 @@ export default function DataExplorer() {
                     </div>
                   ))}
                 </div>
+                {downloadWarnings.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {downloadWarnings.map((w, i) => (
+                      <div key={i} className="text-[9px] text-loss/80 font-mono">⚠ {w}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
