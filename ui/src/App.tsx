@@ -8,6 +8,9 @@ import Docs from './pages/Docs'
 import MevDashboard from './pages/MevDashboard'
 import PaperTrading from './pages/PaperTrading'
 import Setup from './pages/Setup'
+import LiveMonitor from './pages/LiveMonitor'
+import FillAnalysis from './pages/FillAnalysis'
+import FundingHeatmap from './pages/FundingHeatmap'
 
 const navItems = [
   { to: '/', label: 'HOME', key: '1' },
@@ -16,6 +19,9 @@ const navItems = [
   { to: '/docs', label: 'DOCS', key: '4' },
   { to: '/mev', label: 'MEV', key: '5' },
   { to: '/paper', label: 'PAPER', key: '6' },
+  { to: '/live', label: 'LIVE', key: '7' },
+  { to: '/fills', label: 'FILLS', key: '8' },
+  { to: '/funding', label: 'FUNDING', key: '9' },
 ]
 
 export default function App() {
@@ -107,6 +113,9 @@ export default function App() {
           <Route path="/docs" element={<Docs />} />
           <Route path="/mev" element={<MevDashboard />} />
           <Route path="/paper" element={<PaperTrading />} />
+          <Route path="/live" element={<LiveMonitor />} />
+          <Route path="/fills" element={<FillAnalysis />} />
+          <Route path="/funding" element={<FundingHeatmap />} />
           <Route path="/setup" element={<Setup />} />
         </Routes>
       </main>

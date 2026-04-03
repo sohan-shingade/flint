@@ -584,6 +584,15 @@ Each template needs: code, README, backtest results, parameter ranges, known lim
 - [ ] MEV opportunity timeline (from arb scanner)
 - [ ] Strategy deployment panel (select strategy → configure → deploy to venue)
 
+**Implemented:**
+- [x] Live trading monitor with equity curve and fill log (`ui/src/pages/LiveMonitor.tsx`)
+- [x] Fill analysis view with impact scatter plot (`ui/src/pages/FillAnalysis.tsx`)
+- [x] Cross-venue funding spread heatmap (`ui/src/pages/FundingHeatmap.tsx`)
+- [x] MEV opportunity timeline on MevDashboard
+- [x] Strategy deployment panel on PaperTrading page
+- [x] Live API endpoints: fills, equity, sessions (`flint/api/routes/live.py`)
+- [x] 3 new navigation routes (LIVE, FILLS, FUNDING)
+
 ### 5.4 Community Infrastructure
 
 - [ ] Discord server with channels: strategy-discussion, support, showcase
