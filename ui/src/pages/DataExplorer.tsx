@@ -863,7 +863,7 @@ export default function DataExplorer() {
                   <YAxis tick={TICK} domain={['auto', 'auto']} />
                   <Tooltip
                     contentStyle={tooltipStyle}
-                    labelFormatter={(ts: number) => fmtDate(ts)}
+                    labelFormatter={(ts: any) => fmtDate(Number(ts))}
                   />
                   {Object.entries(venueCandles).map(([venue, data]) => (
                     <Line
@@ -903,7 +903,7 @@ export default function DataExplorer() {
                       <CartesianGrid strokeDasharray="3 3" stroke="#1a1a24" />
                       <XAxis dataKey="ts" tickFormatter={fmtShort} tick={TICK} />
                       <YAxis tick={TICK} domain={['auto', 'auto']} />
-                      <Tooltip contentStyle={tooltipStyle} labelFormatter={(ts: number) => fmtDate(ts)} />
+                      <Tooltip contentStyle={tooltipStyle} labelFormatter={(ts: any) => fmtDate(Number(ts))} />
                       <Line dataKey="close" stroke={VENUE_COLORS[venue] || '#888'} dot={false} strokeWidth={1.5} isAnimationActive={false} />
                     </LineChart>
                   </ResponsiveContainer>
