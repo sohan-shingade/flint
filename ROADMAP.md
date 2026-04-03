@@ -614,6 +614,73 @@ Each template needs: code, README, backtest results, parameter ranges, known lim
 
 ---
 
+## Phase 6: Jupiter Perps Integration (Weeks 17-20)
+
+**Goal**: Add Jupiter Perpetual Exchange as a third live trading venue. Different from Drift/Hyperliquid — uses a borrow fee model (JLP pool) instead of traditional funding rates.
+
+**Difficulty**: Medium | **Risk**: Medium — borrow fee model is fundamentally different from funding rates
+
+### 6.1 Jupiter Borrow Rate Collector
+
+**New file**: `flint/providers/jupiter_borrow.py`
+
+- [ ] Poll 5 custody accounts via Solana RPC every hour
+  - SOL: `7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz`
+  - ETH: `AQCGyheWPLeo6Qp9WpYS9m3Qj479t7R636N9ey1rEjEn`
+  - BTC: `5Pv3gM9JrFFH883SWAhvJC9RPYmo8UNxuFtv5bMMALkm`
+  - USDC: `G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa`
+  - USDT: `4vkNeXiYEUizLdrpdPS1eC2mccyM4NUPRtERrk6ZETkk`
+- [ ] Deserialize custody accounts (Anchor IDL via anchorpy)
+  - Read `assets.locked / assets.owned` → utilization
+  - Read `jumpRateState` → min/target/max rates, target utilization
+  - Compute effective hourly borrow rate from jump rate model
+- [ ] Store in `jupiter_borrow_rates` table in FlintStore
+- [ ] Historical backfill via Helius historical account API or Dune SQL
+- [ ] Display in funding heatmap (labeled as "borrow rate", not "funding rate")
+
+### 6.2 Jupiter Perps Live Execution
+
+**New files**: `flint/execution/jupiter_live.py`, `flint/connectors/jupiter/perps_client.py`
+
+- [ ] `JupiterPerpsClient` — REST connector for Jupiter Perps
+  - Place market orders, limit orders
+  - Query positions, open orders
+  - Solana keypair signing (reuse existing `KeypairAdapter`)
+- [ ] `LiveJupiterContext(LiveExecutionContext)` — implement 7 abstract methods
+  - `connect()`, `disconnect()`, `place_order()`, `cancel_order()`
+  - `get_positions()`, `get_balance()`, `get_fills()`
+- [ ] `JupiterWebSocketFeed` — if Jupiter supports WS; otherwise poll-based
+- [ ] `VenueConfig` preset for Jupiter (borrow-fee-based, not funding-rate-based)
+- [ ] Integration with `MultiVenueLiveContext`
+
+### 6.3 Jupiter-Aware Strategy Support
+
+- [ ] Borrow cost modeling in `TxCostModel`
+  - `JupiterTxCostModel` — includes borrow fee as ongoing position cost
+  - Different from SolanaTxCostModel (priority fees) — borrow accrues hourly
+- [ ] Backtest support
+  - Use Pyth oracle prices as proxy for Jupiter perp prices (within ~1-5 bps)
+  - Apply borrow fees from stored rates during backtest
+  - `BacktestResult.jupiter_borrow_paid` field
+- [ ] Strategy template: JLP yield vs borrow cost analysis
+- [ ] Document key difference: Jupiter always charges (no negative funding)
+
+### 6.4 Historical Data Pipeline
+
+- [ ] `JupiterCandleProvider` — if Jupiter exposes historical OHLCV; else use Pyth prices
+- [ ] Dune SQL query for historical utilization reconstruction
+- [ ] Helius historical account API for custody state replay
+- [ ] Quick approximation mode: assume 65% utilization (~20% APR for SOL)
+
+### Phase 6 Deliverables
+
+1. Jupiter Perps borrow rates collected and displayed alongside venue funding rates
+2. Live execution on Jupiter Perps (same interface as Drift/Hyperliquid)
+3. Borrow cost integrated into backtest fee modeling
+4. Clear documentation of borrow fee vs funding rate difference
+
+---
+
 ## Timeline Summary
 
 | Phase | Scope | Estimate | Cumulative | Difficulty |
@@ -623,8 +690,9 @@ Each template needs: code, README, backtest results, parameter ranges, known lim
 | 3. Cross-Venue | Multi-venue strategies, funding arb | 2-3 weeks | Week 9 | Medium |
 | 4. Execution Fidelity | vAMM, tx costs, calibration | 4 weeks | Week 13 | Hard |
 | 5. Adoption | Templates, docs, dashboard, community | 3 weeks | Week 16 | Easy |
+| 6. Jupiter Perps | Borrow rates, live execution, cost modeling | 3-4 weeks | Week 20 | Medium |
 
-**Total: ~14-16 weeks for a solo developer.**
+**Total: ~18-20 weeks for a solo developer.**
 
 ### Dependencies
 
