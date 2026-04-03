@@ -119,6 +119,19 @@ export default function DataExplorer() {
   ]
   const DEFAULT_VENUES = ['drift', 'hyperliquid', 'okx', 'dydx', 'gateio', 'bitget']
   const [selectedVenues, setSelectedVenues] = useState<string[]>(DEFAULT_VENUES)
+  // Multi-venue price visualization
+  const VENUE_COLORS: Record<string, string> = {
+    default: '#e8a849',
+    drift: '#e8a849',
+    hyperliquid: '#22d3ee',
+    binance: '#a78bfa',
+    okx: '#57c84d',
+    bybit: '#f472b6',
+  }
+  const [priceVenues, setPriceVenues] = useState<string[]>(['default'])
+  const [priceViewMode, setPriceViewMode] = useState<'overlay' | 'separate'>('overlay')
+  const [venueCandles, setVenueCandles] = useState<Record<string, CandleData[]>>({})
+
   // Indicators
   const [showSMA, setShowSMA] = useState(false)
   const [smaPeriod, setSmaPeriod] = useState(20)
@@ -204,6 +217,29 @@ export default function DataExplorer() {
       return loaded
     })
 
+    // Fetch per-venue candles if multiple venues selected
+    if (priceVenues.length > 0 && priceVenues[0] !== 'default') {
+      const venueData: Record<string, CandleData[]> = {}
+      for (const v of priceVenues) {
+        try {
+          const vParams = new URLSearchParams({
+            market, resolution_s: String(resolution), limit: String(Math.floor(limit)),
+            venue: v,
+            ...(startTs > 0 ? { start_ts: String(startTs) } : {}),
+            ...(endTs < now ? { end_ts: String(endTs) } : {}),
+          })
+          const vRes = await fetch(`/api/v1/data/ohlcv?${vParams}`)
+          const vData = await vRes.json()
+          if (vData.candles?.length > 0) {
+            venueData[v] = vData.candles
+          }
+        } catch {}
+      }
+      setVenueCandles(venueData)
+    } else {
+      setVenueCandles({})
+    }
+
     // Query local funding data (grouped by venue)
     if (market.includes('-PERP') && loaded.length > 0) {
       try {
@@ -234,7 +270,7 @@ export default function DataExplorer() {
     }
 
     setLoading(false)
-  }, [market, resolution, horizon, startDate, endDate])
+  }, [market, resolution, horizon, startDate, endDate, priceVenues, priceViewMode])
 
   // Load data on mount and when market/settings change
   useEffect(() => { loadData() }, [loadData])
@@ -759,6 +795,35 @@ export default function DataExplorer() {
       {/* ── interactive price chart ── */}
       {activeTab === 'price' && candles.length > 0 && (
         <div className={loading ? 'opacity-50 pointer-events-none transition-opacity' : 'transition-opacity'} style={{ animation: 'fadeUp 0.3s ease' }}>
+          {/* Venue price selector */}
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-[9px] text-ghost tracking-wider">PRICE VENUES</span>
+            {['default', 'drift', 'hyperliquid', 'binance', 'okx', 'bybit'].map(v => (
+              <button key={v} onClick={() => {
+                setPriceVenues(prev =>
+                  prev.includes(v) ? prev.filter(x => x !== v) : [...prev.filter(x => x !== 'default'), v]
+                )
+              }}
+                className={`px-2 py-0.5 text-[9px] border transition-all ${
+                  priceVenues.includes(v)
+                    ? 'border-amber/50 bg-amber-glow text-amber'
+                    : 'border-border text-ghost/50 hover:text-ghost'
+                }`}
+              >{v === 'default' ? 'ALL' : v.toUpperCase()}</button>
+            ))}
+
+            {priceVenues.length > 1 && priceVenues[0] !== 'default' && (
+              <div className="flex gap-1 ml-4">
+                <button onClick={() => setPriceViewMode('overlay')}
+                  className={`px-2 py-0.5 text-[9px] border ${priceViewMode === 'overlay' ? 'border-amber/50 text-amber' : 'border-border text-ghost/50'}`}
+                >OVERLAY</button>
+                <button onClick={() => setPriceViewMode('separate')}
+                  className={`px-2 py-0.5 text-[9px] border ${priceViewMode === 'separate' ? 'border-amber/50 text-amber' : 'border-border text-ghost/50'}`}
+                >SEPARATE</button>
+              </div>
+            )}
+          </div>
+
           <InteractiveChart
             candles={candles}
             height={500}
@@ -780,6 +845,72 @@ export default function DataExplorer() {
               </div>
             ))}
           </div>
+
+          {/* Multi-venue overlay chart */}
+          {Object.keys(venueCandles).length > 1 && priceViewMode === 'overlay' && (
+            <div className="mt-4 border border-border bg-surface/30 p-4">
+              <div className="text-[9px] text-ghost tracking-wider mb-2">CLOSE PRICE OVERLAY — {Object.keys(venueCandles).length} VENUES</div>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a24" />
+                  <XAxis
+                    dataKey="ts"
+                    type="number"
+                    domain={['auto', 'auto']}
+                    tickFormatter={fmtShort}
+                    tick={TICK}
+                  />
+                  <YAxis tick={TICK} domain={['auto', 'auto']} />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    labelFormatter={(ts: number) => fmtDate(ts)}
+                  />
+                  {Object.entries(venueCandles).map(([venue, data]) => (
+                    <Line
+                      key={venue}
+                      data={data}
+                      dataKey="close"
+                      name={venue.toUpperCase()}
+                      stroke={VENUE_COLORS[venue] || '#888'}
+                      dot={false}
+                      strokeWidth={1.5}
+                      isAnimationActive={false}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+              <div className="flex gap-4 mt-2">
+                {Object.keys(venueCandles).map(v => (
+                  <span key={v} className="text-[9px] flex items-center gap-1">
+                    <span style={{ background: VENUE_COLORS[v] || '#888', width: 8, height: 8, display: 'inline-block', borderRadius: 2 }} />
+                    {v.toUpperCase()}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Multi-venue separate charts */}
+          {Object.keys(venueCandles).length > 1 && priceViewMode === 'separate' && (
+            <div className="mt-4 space-y-4">
+              {Object.entries(venueCandles).map(([venue, data]) => (
+                <div key={venue} className="border border-border bg-surface/30 p-4">
+                  <div className="text-[9px] tracking-wider mb-2" style={{ color: VENUE_COLORS[venue] || '#888' }}>
+                    {venue.toUpperCase()} — {data.length} candles
+                  </div>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={downsample(data, 500)}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1a1a24" />
+                      <XAxis dataKey="ts" tickFormatter={fmtShort} tick={TICK} />
+                      <YAxis tick={TICK} domain={['auto', 'auto']} />
+                      <Tooltip contentStyle={tooltipStyle} labelFormatter={(ts: number) => fmtDate(ts)} />
+                      <Line dataKey="close" stroke={VENUE_COLORS[venue] || '#888'} dot={false} strokeWidth={1.5} isAnimationActive={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

@@ -27,19 +27,22 @@ def get_ohlcv(
     start_ts: Optional[int] = Query(None),
     end_ts: Optional[int] = Query(None),
     limit: int = Query(1000, le=10000),
+    venue: Optional[str] = Query(None, description="Filter by venue"),
 ):
     store = _get_store(request)
     if store is None:
         return {"market": market, "resolution_s": resolution_s, "count": 0, "candles": []}
     try:
-        candles = store.query_candles(market, resolution_s, start_ts, end_ts, limit=limit)
+        candles = store.query_candles(market, resolution_s, start_ts, end_ts, limit=limit, venue=venue)
         return {
             "market": market,
             "resolution_s": resolution_s,
+            "venue": venue or "all",
             "count": len(candles),
             "candles": [
                 {"ts": c.ts, "open": c.open, "high": c.high,
-                 "low": c.low, "close": c.close, "volume": c.volume}
+                 "low": c.low, "close": c.close, "volume": c.volume,
+                 "venue": getattr(c, 'venue', 'default')}
                 for c in candles
             ],
         }
