@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-type Step = 'welcome' | 'markets' | 'keys' | 'downloading' | 'done'
+type Step = 'welcome' | 'markets' | 'venues' | 'keys' | 'downloading' | 'done'
 
 interface Market {
   market: string
@@ -23,6 +23,24 @@ const BACKFILL_OPTIONS = [
 
 const DEFAULT_MARKETS = ['SOL-PERP', 'BTC-PERP', 'ETH-PERP']
 
+const CANDLE_VENUES = [
+  { id: 'drift', label: 'Drift', color: '#e8a849' },
+  { id: 'hyperliquid', label: 'Hyperliquid', color: '#22d3ee' },
+  { id: 'binance', label: 'Binance', color: '#a78bfa' },
+  { id: 'okx', label: 'OKX', color: '#57c84d' },
+  { id: 'bybit', label: 'Bybit', color: '#f472b6' },
+]
+
+const FUNDING_VENUES = [
+  { id: 'drift', label: 'Drift', freq: '1h', color: '#e8a849' },
+  { id: 'hyperliquid', label: 'Hyperliquid', freq: '1h', color: '#22d3ee' },
+  { id: 'dydx', label: 'dYdX', freq: '1h', color: '#818cf8' },
+  { id: 'okx', label: 'OKX', freq: '8h', color: '#57c84d' },
+  { id: 'bybit', label: 'Bybit', freq: '8h', color: '#f472b6' },
+  { id: 'gateio', label: 'Gate.io', freq: '8h', color: '#fb923c' },
+  { id: 'bitget', label: 'Bitget', freq: '8h', color: '#f97316' },
+]
+
 export default function Setup() {
   const navigate = useNavigate()
   const [step, setStep] = useState<Step>('welcome')
@@ -32,6 +50,8 @@ export default function Setup() {
   const [birdeyeKey, setBirdeyeKey] = useState('')
   const [heliusKey, setHeliusKey] = useState('')
   const [showKeys, setShowKeys] = useState(false)
+  const [selectedCandleVenues, setSelectedCandleVenues] = useState<string[]>(['drift'])
+  const [selectedFundingVenues, setSelectedFundingVenues] = useState<string[]>(['drift', 'hyperliquid'])
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress[]>([])
   const [loadingMarkets, setLoadingMarkets] = useState(false)
   const [fetchError, setFetchError] = useState(false)
@@ -74,6 +94,7 @@ export default function Setup() {
 
   const startDownload = async () => {
     setStep('downloading')
+    // One progress entry per market (aggregate across venues)
     const progress: DownloadProgress[] = selectedMarkets.map(m => ({
       market: m, status: 'pending', detail: '',
     }))
@@ -86,27 +107,37 @@ export default function Setup() {
       progress[i].status = 'downloading'
       setDownloadProgress([...progress])
 
-      try {
-        const res = await fetch('/api/v1/data/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            market: selectedMarkets[i],
-            resolution_s: 3600,
-            start_ts: startTs,
-            end_ts: now,
-            funding_venues: [],
-          }),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        const total = (data.downloaded || 0) + (data.existing || 0)
-        progress[i].status = 'done'
-        progress[i].detail = total > 0 ? `${total.toLocaleString()} candles` : 'no data'
-      } catch {
-        progress[i].status = 'failed'
-        progress[i].detail = 'download failed'
+      let totalCandles = 0
+      const warnings: string[] = []
+
+      // Download candles from each selected venue
+      for (const venue of selectedCandleVenues) {
+        try {
+          const res = await fetch('/api/v1/data/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              market: selectedMarkets[i],
+              resolution_s: 3600,
+              start_ts: startTs,
+              end_ts: now,
+              venue,
+              funding_venues: selectedFundingVenues,
+            }),
+          })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const data = await res.json()
+          totalCandles += (data.downloaded || 0) + (data.existing || 0)
+          if (data.warnings) warnings.push(...data.warnings)
+        } catch {
+          warnings.push(`${venue}: download failed`)
+        }
       }
+
+      progress[i].status = totalCandles > 0 || warnings.length === 0 ? 'done' : 'failed'
+      progress[i].detail = totalCandles > 0
+        ? `${totalCandles.toLocaleString()} candles (${selectedCandleVenues.length} venue${selectedCandleVenues.length > 1 ? 's' : ''})`
+        : warnings.length > 0 ? warnings[0] : 'no data'
       setDownloadProgress([...progress])
     }
     setStep('done')
@@ -230,9 +261,82 @@ export default function Setup() {
         <div className="flex items-center justify-between mt-8 pt-4 border-t border-border">
           <span className="text-ghost text-[10px]">{selectedMarkets.length} market{selectedMarkets.length !== 1 ? 's' : ''} selected</span>
           <button
-            onClick={() => setStep('keys')}
+            onClick={() => setStep('venues')}
             disabled={selectedMarkets.length === 0}
             className="px-6 py-2 border border-amber text-amber text-xs tracking-[0.15em] hover:bg-amber-glow transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            NEXT
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // -- Venues --
+  if (step === 'venues') {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <h2 className="text-amber text-sm tracking-[0.2em] mb-1">SELECT VENUES</h2>
+        <p className="text-ghost text-xs mb-6">Choose which venues to download price and funding data from. More venues = more cross-venue analysis.</p>
+
+        <div className="mb-6">
+          <label className="text-ghost text-[10px] tracking-wider block mb-2">
+            CANDLE SOURCES <span className="text-ghost/40">— OHLCV price data</span>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {CANDLE_VENUES.map(v => (
+              <button
+                key={v.id}
+                onClick={() => setSelectedCandleVenues(prev =>
+                  prev.includes(v.id) ? prev.filter(x => x !== v.id) : [...prev, v.id]
+                )}
+                className={`px-3 py-1.5 text-[11px] border transition-colors ${
+                  selectedCandleVenues.includes(v.id)
+                    ? 'border-amber text-amber bg-amber-glow'
+                    : 'border-border text-ghost hover:border-border-bright'
+                }`}
+                style={selectedCandleVenues.includes(v.id) ? { borderColor: v.color, color: v.color } : {}}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-ghost/40 text-[9px] mt-1">{selectedCandleVenues.length} selected — candles stored per venue for comparison</p>
+        </div>
+
+        <div className="mb-6">
+          <label className="text-ghost text-[10px] tracking-wider block mb-2">
+            FUNDING VENUES <span className="text-ghost/40">— funding rate data for arb strategies</span>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {FUNDING_VENUES.map(v => (
+              <button
+                key={v.id}
+                onClick={() => setSelectedFundingVenues(prev =>
+                  prev.includes(v.id) ? prev.filter(x => x !== v.id) : [...prev, v.id]
+                )}
+                className={`px-3 py-1.5 text-[11px] border transition-colors ${
+                  selectedFundingVenues.includes(v.id)
+                    ? 'border-amber text-amber bg-amber-glow'
+                    : 'border-border text-ghost hover:border-border-bright'
+                }`}
+                style={selectedFundingVenues.includes(v.id) ? { borderColor: v.color, color: v.color } : {}}
+              >
+                {v.label} <span className="text-[9px] opacity-60">{v.freq}</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-ghost/40 text-[9px] mt-1">{selectedFundingVenues.length} selected — needed for funding arb and mean reversion strategies</p>
+        </div>
+
+        <div className="flex items-center justify-between mt-8 pt-4 border-t border-border">
+          <button onClick={() => setStep('markets')} className="text-ghost text-xs hover:text-terminal transition-colors">
+            BACK
+          </button>
+          <button
+            onClick={() => setStep('keys')}
+            disabled={selectedCandleVenues.length === 0}
+            className="px-6 py-2 border border-amber text-amber text-xs tracking-[0.15em] hover:bg-amber-glow transition-colors disabled:opacity-30"
           >
             NEXT
           </button>
@@ -284,7 +388,7 @@ export default function Setup() {
 
         <div className="flex items-center justify-between mt-8 pt-4 border-t border-border">
           <button
-            onClick={() => setStep('markets')}
+            onClick={() => setStep('venues')}
             className="text-ghost text-xs hover:text-terminal transition-colors"
           >
             BACK
