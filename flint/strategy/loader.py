@@ -14,6 +14,7 @@ from .base import Strategy
 APPROVED_MODULES = frozenset({
     "flint", "numpy", "math", "statistics", "collections", "dataclasses",
     "typing", "enum", "abc", "functools", "itertools", "operator",
+    "__future__",
 })
 
 # Builtins that must never appear in user strategy code
