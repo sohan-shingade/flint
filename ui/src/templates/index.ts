@@ -20,6 +20,10 @@ import { ORDERBOOK_MOMENTUM_TEMPLATE } from './orderbook-momentum'
 import { CROSS_VENUE_PAIRS_TEMPLATE } from './cross-venue-pairs'
 import { LEVERAGED_GRID_TEMPLATE } from './leveraged-grid'
 import { BETA_HEDGED_TEMPLATE } from './beta-hedged'
+import { FUNDING_ARB_TEMPLATE } from './funding-arb'
+import { MOMENTUM_BREAKOUT_TEMPLATE } from './momentum-breakout'
+import { FUNDING_MEAN_REVERSION_TEMPLATE } from './funding-mean-reversion'
+import { BASIS_TRADE_TEMPLATE } from './basis-trade'
 
 export interface TemplateInfo {
   label: string
@@ -72,4 +76,12 @@ export const TEMPLATES: Record<string, TemplateInfo> = {
     hint: 'DCA grid with leverage monitoring. Enable MARGIN TRACKING to see leverage limits + liquidation risk.' },
   beta_hedged: { label: 'Beta-Hedged MR',      code: BETA_HEDGED_TEMPLATE,        category: 'advanced',
     hint: 'SOL/BTC residual mean reversion. Needs BTC-PERP data. Uses rolling beta to hedge market risk.' },
+  funding_arb: { label: 'Funding Arb (Cross-Venue)', code: FUNDING_ARB_TEMPLATE, category: 'advanced',
+    hint: 'Drift + Hyperliquid. Delta-neutral funding arb. Needs funding data from both venues.' },
+  momentum_bk: { label: 'Momentum Breakout', code: MOMENTUM_BREAKOUT_TEMPLATE, category: 'trend',
+    hint: 'Any market, 1h. N-bar high/low breakout with optional Pyth oracle confirmation.' },
+  funding_mr:  { label: 'Funding Mean Reversion', code: FUNDING_MEAN_REVERSION_TEMPLATE, category: 'mean-rev',
+    hint: 'Any perp, 1h. Bollinger bands on funding rate. Needs funding data downloaded.' },
+  basis_trade: { label: 'Basis Trade (Cross-Venue)', code: BASIS_TRADE_TEMPLATE, category: 'advanced',
+    hint: 'Drift + Hyperliquid. Cross-venue price basis arbitrage. Needs data from both venues.' },
 }

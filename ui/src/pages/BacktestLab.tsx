@@ -128,6 +128,7 @@ export default function BacktestLab() {
 
   // Config state
   const [market, setMarket] = useState('SOL-PERP')
+  const [venue, setVenue] = useState('default')
   const [resolution, setResolution] = useState('1h')
   const [startDate, setStartDate] = useState('2025-01-01')
   const [endDate, setEndDate] = useState('2025-01-31')
@@ -742,6 +743,32 @@ export default function BacktestLab() {
                     {(availableMarkets.length > 0 ? availableMarkets : [...PERP_MARKETS, ...SPOT_MARKETS]).map(m =>
                       <option key={m}>{m}</option>
                     )}
+                  </select>
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="text-[9px] text-ghost tracking-wider">VENUE</label>
+                  <select value={venue} onChange={(e) => {
+                    setVenue(e.target.value)
+                    // Auto-select matching fee preset
+                    const presetMap: Record<string, string> = {
+                      'drift': 'drift_taker',
+                      'hyperliquid': 'hl_taker',
+                      'binance': 'binance_taker',
+                      'okx': 'okx_taker',
+                      'bybit': 'bybit_taker',
+                    }
+                    if (presetMap[e.target.value]) {
+                      setFeePreset(presetMap[e.target.value])
+                      setFeeRate(FEE_PRESETS[presetMap[e.target.value]].rate)
+                    }
+                  }}
+                    className="bg-void border border-border text-[11px] text-terminal px-2 py-0.5 w-36">
+                    <option value="default">Default</option>
+                    <option value="drift">Drift</option>
+                    <option value="hyperliquid">Hyperliquid</option>
+                    <option value="binance">Binance</option>
+                    <option value="okx">OKX</option>
+                    <option value="bybit">Bybit</option>
                   </select>
                 </div>
               </div>
