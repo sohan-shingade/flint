@@ -94,16 +94,16 @@ export default function DataExplorer() {
   const [dlEndDate, setDlEndDate] = useState('')
   const [downloadProgress, setDownloadProgress] = useState<{market: string, status: string}[]>([])
   const [isDownloading, setIsDownloading] = useState(false)
-  // Candle venue selection for downloads
+  // Candle venue selection for downloads (multi-select)
   const CANDLE_VENUES = [
-    { id: 'default', label: 'Auto (Drift → HL → CCXT)', color: '#888' },
     { id: 'drift',        label: 'Drift',        color: '#e8a849' },
     { id: 'hyperliquid',  label: 'Hyperliquid',  color: '#22d3ee' },
-    { id: 'binance',      label: 'Binance',      color: '#f0b90b' },
-    { id: 'okx',          label: 'OKX',          color: '#a78bfa' },
-    { id: 'bybit',        label: 'Bybit',        color: '#57c84d' },
+    { id: 'binance',      label: 'Binance',       color: '#f0b90b' },
+    { id: 'okx',          label: 'OKX',           color: '#a78bfa' },
+    { id: 'bybit',        label: 'Bybit',         color: '#57c84d' },
   ]
-  const [candleVenue, setCandleVenue] = useState('default')
+  const DEFAULT_CANDLE_VENUES = ['drift']
+  const [selectedCandleVenues, setSelectedCandleVenues] = useState<string[]>(DEFAULT_CANDLE_VENUES)
   // Funding venue selection for downloads
   const ALL_VENUES = [
     { id: 'drift',       label: 'Drift',       freq: '1h',  color: '#e8a849' },
@@ -258,33 +258,47 @@ export default function DataExplorer() {
     const progress: {market: string, status: string}[] = selectedDownloads.map(m => ({ market: m, status: 'pending' }))
     setDownloadProgress([...progress])
 
+    // Determine which candle venues to download; fall back to default (auto) if none selected
+    const candleVenuesToFetch = selectedCandleVenues.length > 0 ? selectedCandleVenues : ['default']
+
     for (let i = 0; i < selectedDownloads.length; i++) {
       const mkt = selectedDownloads[i]
       progress[i].status = 'downloading...'
       setDownloadProgress([...progress])
 
-      try {
-        const res = await fetch('/api/v1/data/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            market: mkt,
-            resolution_s: 3600,
-            start_ts: startTs,
-            end_ts: endTs,
-            funding_venues: selectedVenues,
-            ...(candleVenue && candleVenue !== 'default' ? { venue: candleVenue } : {}),
-          }),
-        })
-        const data = await res.json()
-        if (data.downloaded > 0 || data.existing > 0) {
-          const fundingInfo = data.funding_fetched > 0 ? ` + ${data.funding_fetched} funding` : ''
-          progress[i].status = `${(data.downloaded + data.existing).toLocaleString()} candles${fundingInfo}`
-        } else {
-          progress[i].status = 'no data found'
+      let totalCandles = 0
+      let totalFunding = 0
+      let anyError = false
+
+      for (const cv of candleVenuesToFetch) {
+        try {
+          const res = await fetch('/api/v1/data/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              market: mkt,
+              resolution_s: 3600,
+              start_ts: startTs,
+              end_ts: endTs,
+              funding_venues: selectedVenues,
+              venue: cv,
+            }),
+          })
+          const data = await res.json()
+          totalCandles += (data.downloaded || 0) + (data.existing || 0)
+          totalFunding += data.funding_fetched || 0
+        } catch {
+          anyError = true
         }
-      } catch {
+      }
+
+      if (anyError && totalCandles === 0) {
         progress[i].status = 'failed'
+      } else if (totalCandles === 0) {
+        progress[i].status = 'no data found'
+      } else {
+        const fundingInfo = totalFunding > 0 ? ` + ${totalFunding} funding` : ''
+        progress[i].status = `${totalCandles.toLocaleString()} candles${fundingInfo}`
       }
       setDownloadProgress([...progress])
     }
@@ -528,22 +542,30 @@ export default function DataExplorer() {
               )}
             </div>
 
-            {/* Candle source venue */}
+            {/* Candle source venues (multi-select) */}
             <div>
               <div className="flex items-center gap-3 mb-2">
                 <span className="text-[10px] text-ghost tracking-[0.15em]">CANDLE SOURCE</span>
-                <span className="text-[9px] text-ghost/40">venue to fetch OHLCV candle data from</span>
+                <span className="text-[9px] text-ghost/40">{selectedCandleVenues.length} selected — OHLCV venue(s) to download candle data from</span>
+                <button onClick={() => setSelectedCandleVenues(CANDLE_VENUES.map(v => v.id))}
+                  className="text-[9px] text-ghost/40 hover:text-amber ml-auto">All</button>
+                <button onClick={() => setSelectedCandleVenues(DEFAULT_CANDLE_VENUES)}
+                  className="text-[9px] text-ghost/40 hover:text-amber">Default</button>
+                <button onClick={() => setSelectedCandleVenues([])}
+                  className="text-[9px] text-ghost/40 hover:text-terminal">None</button>
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {CANDLE_VENUES.map(v => {
-                  const sel = candleVenue === v.id
+                  const sel = selectedCandleVenues.includes(v.id)
                   return (
                     <button key={v.id}
-                      onClick={() => setCandleVenue(v.id)}
+                      onClick={() => setSelectedCandleVenues(prev =>
+                        prev.includes(v.id) ? prev.filter(x => x !== v.id) : [...prev, v.id]
+                      )}
                       className={`px-2.5 py-1.5 text-[9px] tracking-wider border transition-all flex items-center gap-1.5 ${
                         sel ? 'text-white' : 'border-border text-ghost/40 hover:text-terminal'
                       }`}
-                      style={sel ? { borderColor: v.color + '88', background: v.color + '15', color: v.color } : {}}
+                      style={sel ? { borderColor: v.color + '66', background: v.color + '15', color: v.color } : {}}
                     >
                       <span className="w-1.5 h-1.5 rounded-full" style={{ background: sel ? v.color : '#555' }} />
                       {v.label}

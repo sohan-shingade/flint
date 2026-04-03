@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS candles (
     low         DOUBLE  NOT NULL,
     close       DOUBLE  NOT NULL,
     volume      DOUBLE  NOT NULL,
-    PRIMARY KEY (market, resolution_s, ts)
+    venue       VARCHAR NOT NULL DEFAULT 'default',
+    PRIMARY KEY (venue, market, resolution_s, ts)
 );
 """
 
@@ -319,6 +320,43 @@ class FlintStore:
         except Exception as e:
             _logger.debug("WAL pragma not supported: %s", e)
         self._conn.execute(_CREATE_CANDLES)
+        # Migration: add venue column to candles if missing (existing DBs)
+        try:
+            cols = {r[0] for r in self._conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='candles'"
+            ).fetchall()}
+            if cols and "venue" not in cols:
+                # DuckDB doesn't support ALTER PRIMARY KEY, so recreate the table
+                self._conn.execute("BEGIN TRANSACTION")
+                try:
+                    self._conn.execute("""
+                        CREATE TABLE candles_new (
+                            market       VARCHAR NOT NULL,
+                            resolution_s INTEGER NOT NULL,
+                            ts           BIGINT  NOT NULL,
+                            open         DOUBLE  NOT NULL,
+                            high         DOUBLE  NOT NULL,
+                            low          DOUBLE  NOT NULL,
+                            close        DOUBLE  NOT NULL,
+                            volume       DOUBLE  NOT NULL,
+                            venue        VARCHAR NOT NULL DEFAULT 'default',
+                            PRIMARY KEY (venue, market, resolution_s, ts)
+                        )
+                    """)
+                    self._conn.execute(
+                        "INSERT INTO candles_new "
+                        "SELECT market, resolution_s, ts, open, high, low, close, volume, 'default' "
+                        "FROM candles"
+                    )
+                    self._conn.execute("DROP TABLE candles")
+                    self._conn.execute("ALTER TABLE candles_new RENAME TO candles")
+                    self._conn.execute("COMMIT")
+                    _logger.info("Migrated candles table: added venue column")
+                except Exception as e:
+                    self._conn.execute("ROLLBACK")
+                    _logger.warning("Candles venue migration failed: %s", e)
+        except Exception as e:
+            _logger.debug("Candles migration check: %s", e)
         self._conn.execute(_CREATE_ORACLE_PRICES)
         self._conn.execute(_CREATE_ORDERBOOK_SNAPSHOTS)
         self._conn.execute(_CREATE_POOL_SNAPSHOTS)
@@ -393,7 +431,7 @@ class FlintStore:
         if not candles:
             return 0
         rows = [
-            (c.market, c.resolution_s, c.ts, c.open, c.high, c.low, c.close, c.volume)
+            (c.venue or "default", c.market, c.resolution_s, c.ts, c.open, c.high, c.low, c.close, c.volume)
             for c in candles
         ]
         batch_size = 2000
@@ -404,8 +442,8 @@ class FlintStore:
                     batch = rows[i:i + batch_size]
                     self._conn.executemany(
                         "INSERT OR REPLACE INTO candles "
-                        "(market, resolution_s, ts, open, high, low, close, volume) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "(venue, market, resolution_s, ts, open, high, low, close, volume) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         batch,
                     )
                 self._conn.execute("COMMIT")
@@ -421,9 +459,16 @@ class FlintStore:
         start_ts: Optional[int] = None,
         end_ts: Optional[int] = None,
         limit: Optional[int] = None,
+        venue: Optional[str] = None,
     ) -> List[Candle]:
-        sql = "SELECT market, resolution_s, ts, open, high, low, close, volume FROM candles WHERE market = ? AND resolution_s = ?"
+        sql = (
+            "SELECT market, resolution_s, ts, open, high, low, close, volume, venue "
+            "FROM candles WHERE market = ? AND resolution_s = ?"
+        )
         params: list = [market, resolution_s]
+        if venue is not None:
+            sql += " AND venue = ?"
+            params.append(venue)
         if start_ts is not None:
             sql += " AND ts >= ?"
             params.append(start_ts)
@@ -438,16 +483,19 @@ class FlintStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [
             Candle(market=r[0], resolution_s=r[1], ts=r[2], open=r[3],
-                   high=r[4], low=r[5], close=r[6], volume=r[7])
+                   high=r[4], low=r[5], close=r[6], volume=r[7],
+                   venue=r[8] if len(r) > 8 else "default")
             for r in rows
         ]
 
-    def count_candles(self, market: str, resolution_s: int) -> int:
+    def count_candles(self, market: str, resolution_s: int, venue: Optional[str] = None) -> int:
+        sql = "SELECT COUNT(*) FROM candles WHERE market = ? AND resolution_s = ?"
+        params: list = [market, resolution_s]
+        if venue is not None:
+            sql += " AND venue = ?"
+            params.append(venue)
         with self._lock:
-            row = self._conn.execute(
-                "SELECT COUNT(*) FROM candles WHERE market = ? AND resolution_s = ?",
-                [market, resolution_s],
-            ).fetchone()
+            row = self._conn.execute(sql, params).fetchone()
         return row[0] if row else 0
 
     def has_candles(self) -> bool:
