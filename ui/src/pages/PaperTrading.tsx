@@ -50,6 +50,7 @@ interface SidebarCardProps {
     session_id: string
     strategy_name: string
     market: string
+    venue?: string
     equity: number
     pnl: number
     status: string
@@ -81,7 +82,9 @@ function SidebarCard({ session, selected, onClick }: SidebarCardProps) {
         </span>
       </div>
       <div className="flex items-center justify-between pl-3.5">
-        <span className="text-[10px] text-ghost tracking-wider">{session.market}</span>
+        <span className="text-[10px] text-ghost tracking-wider">
+          {session.market}{session.venue && session.venue !== 'drift' ? ` @ ${session.venue}` : ''}
+        </span>
         <span className={`text-[11px] font-medium tabular-nums ${pnlPositive ? 'text-phosphor' : 'text-loss'}`}>
           {pnlPositive ? '+' : ''}{fmtUsd(session.pnl)}
         </span>

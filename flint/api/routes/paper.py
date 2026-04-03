@@ -27,6 +27,7 @@ class StartRequest(BaseModel):
     resolution_s: int = 3600
     initial_capital: float = 10_000.0
     params: Optional[dict] = None
+    venue: str = "drift"
 
 
 class StopRequest(BaseModel):
@@ -126,6 +127,7 @@ async def start_paper(req: StartRequest, request: Request):
         market=req.market,
         resolution_s=req.resolution_s,
         initial_capital=req.initial_capital,
+        venue=req.venue,
     )
     return {"session_id": session_id, "status": "running"}
 
@@ -209,6 +211,7 @@ def get_portfolio(request: Request):
             "session_id": s["session_id"],
             "strategy_name": s.get("strategy", ""),
             "market": s.get("market", ""),
+            "venue": s.get("venue", "drift"),
             "equity": round(equity, 2),
             "pnl": round(pnl, 2),
             "status": s.get("status", ""),
@@ -241,6 +244,7 @@ def deploy_strategy(body: dict, request: Request):
     risk_config = body.get("risk_config", {})
     resolution_s = body.get("resolution_s", 3600)
     capital_allocation = body.get("capital_allocation")
+    venue = body.get("venue", "drift")
 
     from ...strategy.loader import load_user_strategy, StrategyLoadError
     try:
@@ -259,6 +263,7 @@ def deploy_strategy(body: dict, request: Request):
             replay_start_ts=replay_start_ts,
             risk_config=risk_config,
             capital_allocation=capital_allocation,
+            venue=venue,
         )
     except Exception as e:
         raise HTTPException(500, f"Deploy failed: {e}")

@@ -66,13 +66,15 @@ class PaperSession:
     """Represents a single paper trading session."""
 
     def __init__(self, session_id: str, strategy: Strategy, market: str,
-                 resolution_s: int, broker: PaperBroker, ctx: LiveContext):
+                 resolution_s: int, broker: PaperBroker, ctx: LiveContext,
+                 venue: str = "drift"):
         self.session_id = session_id
         self.strategy = strategy
         self.market = market
         self.resolution_s = resolution_s
         self.broker = broker
         self.ctx = ctx
+        self.venue = venue
         self.started_at = int(time.time())
         self.status = "running"
         self.equity_history: List[dict] = []
@@ -93,6 +95,7 @@ class PaperSession:
             "session_id": self.session_id,
             "strategy": self.strategy.name,
             "market": self.market,
+            "venue": self.venue,
             "resolution_s": self.resolution_s,
             "status": self.status,
             "started_at": self.started_at,
@@ -147,10 +150,11 @@ class PaperTradingEngine:
         market: str = "SOL-PERP",
         resolution_s: int = 3600,
         initial_capital: float = 10_000.0,
+        venue: str = "drift",
     ) -> str:
         """Start a new paper trading session. Returns session_id."""
         session_id = uuid.uuid4().hex[:8]
-        broker = PaperBroker(initial_capital=initial_capital)
+        broker = PaperBroker(initial_capital=initial_capital, venue=venue)
         ctx = LiveContext(broker, store=self.store, resolution_s=resolution_s, session_id=session_id)
 
         session = PaperSession(
@@ -160,6 +164,7 @@ class PaperTradingEngine:
             resolution_s=resolution_s,
             broker=broker,
             ctx=ctx,
+            venue=venue,
         )
         strategy.reset()
         self.sessions[session_id] = session
@@ -257,8 +262,9 @@ class PaperTradingEngine:
                 cash = last_eq["equity"] if last_eq else full["initial_capital"]
                 last_ts = last_eq["ts"] if last_eq else 0
 
-                # Reconstruct broker with recovered cash
-                broker = PaperBroker(initial_capital=cash)
+                # Reconstruct broker with recovered cash (venue defaults to "drift" for backward compat)
+                resumed_venue = full.get("venue", "drift")
+                broker = PaperBroker(initial_capital=cash, venue=resumed_venue)
                 broker.equity_history = [cash]
 
                 # Restore positions from DB
@@ -291,6 +297,7 @@ class PaperTradingEngine:
                     resolution_s=3600,
                     broker=broker,
                     ctx=ctx,
+                    venue=resumed_venue,
                 )
                 session.last_candle_ts = last_ts
                 session.status = "live"
@@ -346,6 +353,7 @@ class PaperTradingEngine:
         replay_start_ts: int = 0,
         risk_config: Optional[dict] = None,
         capital_allocation: Optional[dict] = None,
+        venue: str = "drift",
     ) -> str:
         """Deploy a strategy with replay-forward execution."""
         session_id = uuid.uuid4().hex[:8]
@@ -409,14 +417,14 @@ class PaperTradingEngine:
                 ss.save_trades(session_id, replay_trades)
 
         # Set up live session
-        broker = PaperBroker(initial_capital=final_cash, capital_allocation=capital_allocation)
+        broker = PaperBroker(initial_capital=final_cash, capital_allocation=capital_allocation, venue=venue)
         # RiskGuard.check() reads broker.equity_history for peak tracking
         broker.equity_history = [final_cash]
         ctx = LiveContext(broker, store=self.store, resolution_s=resolution_s, session_id=session_id)
 
         session = PaperSession(
             session_id=session_id, strategy=strategy, market=market,
-            resolution_s=resolution_s, broker=broker, ctx=ctx,
+            resolution_s=resolution_s, broker=broker, ctx=ctx, venue=venue,
         )
         session.last_candle_ts = candles[-1].ts if candles else 0
         session.status = "live"

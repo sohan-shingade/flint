@@ -176,6 +176,7 @@ export default function BacktestLab() {
   const [deployCapital, setDeployCapital] = useState(10000)
   const [deployMaxDD, setDeployMaxDD] = useState(15)
   const [deployDailyLoss, setDeployDailyLoss] = useState(500)
+  const [deployVenue, setDeployVenue] = useState('drift')
   const [deploying, setDeploying] = useState(false)
 
   const codeRef = useRef(code)
@@ -1508,6 +1509,15 @@ export default function BacktestLab() {
                 <input type="number" value={deployDailyLoss} onChange={e => setDeployDailyLoss(Number(e.target.value))}
                        className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm" />
               </div>
+              <div>
+                <label className="text-xs text-zinc-400 block mb-1">Venue</label>
+                <select value={deployVenue} onChange={e => setDeployVenue(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm">
+                  {['drift', 'hyperliquid', 'binance', 'okx', 'bybit', 'dydx'].map(v => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="flex gap-3 pt-2">
@@ -1531,6 +1541,7 @@ export default function BacktestLab() {
                         market: market,
                         initial_capital: deployCapital,
                         replay_start_ts: startTs,
+                        venue: deployVenue,
                         risk_config: {
                           max_drawdown_pct: deployMaxDD / 100,
                           daily_loss_limit: deployDailyLoss,

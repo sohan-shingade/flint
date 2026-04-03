@@ -32,8 +32,16 @@ class PaperBroker:
     ):
         self.initial_capital = initial_capital
         self.cash = initial_capital
-        self.fee_model = fee_model or DriftFeeModel()
         self.venue = venue
+        if fee_model:
+            self.fee_model = fee_model
+        else:
+            try:
+                from .venue_config import get_venue_config
+                vc = get_venue_config(venue)
+                self.fee_model = FlatFeeModel(fee_bps=vc.taker_fee_bps)
+            except Exception:
+                self.fee_model = DriftFeeModel()
 
         self.positions: Dict[str, dict] = {}  # market -> position dict
         self.pending_orders: List[Order] = []
