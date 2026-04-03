@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal, system
+from .routes.live import router as live_router
 from .routes.backtest import configure_concurrency
 from ..config import FlintConfig, load_config
 from ..store import FlintStore
@@ -120,6 +121,7 @@ app.include_router(paper.router, prefix="/api/v1/paper", tags=["paper"])
 app.include_router(optimization.router, prefix="/api/v1/optimize", tags=["optimize"])
 app.include_router(journal.router, prefix="/api/v1/journal", tags=["journal"])
 app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
+app.include_router(live_router)
 
 
 @app.get("/api/v1/health")
