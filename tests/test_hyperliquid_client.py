@@ -3,6 +3,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
+pytest.importorskip("eth_account", reason="eth_account not installed (optional dep)")
+
 from flint.connectors.hyperliquid import HyperliquidClient
 
 
