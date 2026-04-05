@@ -69,6 +69,7 @@ class BacktestEngine:
         funding_rates: Optional[List[FundingRate]] = None,
         orderbook_snapshots: Optional[list] = None,
         open_interest: Optional[list] = None,
+        borrow_snapshots: Optional[list] = None,
         risk_manager=None,
         margin_engine=None,
         capital_allocator=None,
@@ -83,6 +84,7 @@ class BacktestEngine:
         self._funding_rates = funding_rates or []
         self._orderbook_snapshots = orderbook_snapshots or []
         self._open_interest = open_interest or []
+        self._borrow_snapshots = borrow_snapshots or []
         self._margin_engine = margin_engine
         self._capital_allocator = capital_allocator
         self._risk_manager = risk_manager
@@ -168,6 +170,10 @@ class BacktestEngine:
         sorted_oi = sorted(self._open_interest, key=lambda o: o.ts)
         oi_cursor = 0
 
+        # Pre-sort borrow snapshots (Jupiter Perps) for cursor-based feeding
+        sorted_borrow = sorted(self._borrow_snapshots, key=lambda b: b.ts)
+        borrow_cursor = 0
+
         # Pre-sort extra market candles for efficient sync
         extra_sorted: dict = {}
         extra_cursors: dict = {}
@@ -226,6 +232,11 @@ class BacktestEngine:
             while oi_cursor < len(sorted_oi) and sorted_oi[oi_cursor].ts <= candle.ts:
                 ctx.add_open_interest(sorted_oi[oi_cursor])
                 oi_cursor += 1
+
+            # 3b3. Feed borrow snapshots (Jupiter Perps) up to current timestamp
+            while borrow_cursor < len(sorted_borrow) and sorted_borrow[borrow_cursor].ts <= candle.ts:
+                ctx.add_borrow_rate(sorted_borrow[borrow_cursor])
+                borrow_cursor += 1
 
             # 3c. Process pending capital transfers
             ctx.process_transfers(candle.ts)
@@ -329,6 +340,8 @@ class BacktestEngine:
             per_venue_pnl=per_venue_pnl,
             per_venue_trades=per_venue_trades_count,
             per_venue_funding_income=per_venue_funding,
+            jupiter_borrow_paid=ctx.total_borrow_paid,
+            borrow_payments=ctx._borrow_payments,
         )
 
 

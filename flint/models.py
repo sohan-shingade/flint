@@ -120,6 +120,8 @@ class BacktestResult:
     per_venue_trades: Dict[str, int] = field(default_factory=dict)
     per_venue_funding_income: Dict[str, float] = field(default_factory=dict)
     total_tx_costs: float = 0.0
+    jupiter_borrow_paid: float = 0.0
+    borrow_payments: List = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

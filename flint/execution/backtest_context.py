@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 
 from ..models import (
     AccountState,
+    BorrowSnapshot,
     Candle,
     Fill,
     FundingRate,
@@ -31,7 +32,7 @@ class _Position:
     """Internal mutable position tracker."""
 
     __slots__ = ("market", "venue", "side", "size", "entry_price", "entry_ts",
-                 "unrealized_pnl", "funding_paid")
+                 "unrealized_pnl", "funding_paid", "borrow_cumulative_at_entry")
 
     def __init__(self, market: str, side: Side, size: float,
                  entry_price: float, entry_ts: int, venue: str = "default"):
@@ -43,6 +44,7 @@ class _Position:
         self.entry_ts = entry_ts
         self.unrealized_pnl = 0.0
         self.funding_paid = 0.0
+        self.borrow_cumulative_at_entry = 0.0
 
     def update_pnl(self, current_price: float) -> None:
         if self.side == Side.LONG:
@@ -103,6 +105,11 @@ class BacktestContext(ExecutionContext):
         # Funding rate data for strategy access
         self._funding_history: Dict[str, List[FundingRate]] = {}  # market -> [FundingRate]
         self._venue_funding: Dict[str, Dict[str, List[FundingRate]]] = {}  # market -> {venue -> [FundingRate]}
+
+        # Borrow rate data for Jupiter Perps
+        self._borrow_history: Dict[str, List[BorrowSnapshot]] = {}  # market -> [BorrowSnapshot]
+        self._total_borrow_paid: float = 0.0
+        self._borrow_payments: list = []
 
         # Orderbook data for strategy access and fill models
         self._orderbook_history: Dict[str, List] = {}  # market -> [OrderbookSnapshot]
@@ -351,6 +358,45 @@ class BacktestContext(ExecutionContext):
             venue: list(rates[-lookback:])
             for venue, rates in venues.items()
         }
+
+    # --- Borrow rate data (Jupiter Perps) ---
+
+    def add_borrow_rate(self, bs: BorrowSnapshot) -> None:
+        """Record a borrow rate snapshot for strategy access."""
+        mkt = bs.market
+        if mkt not in self._borrow_history:
+            self._borrow_history[mkt] = []
+        self._borrow_history[mkt].append(bs)
+
+    def get_borrow_rate(self, market: str = None, venue: str = None) -> Optional[float]:
+        """Get the most recent hourly borrow rate for a market."""
+        mkt = market or (self._current_candle.market if self._current_candle else None)
+        if not mkt:
+            return None
+        history = self._borrow_history.get(mkt)
+        if not history:
+            return None
+        return history[-1].rate_hourly
+
+    def get_borrow_rates(self, market: str = None, venue: str = None, lookback: int = 24) -> list:
+        """Get recent borrow rate history as [(ts, rate_hourly), ...]."""
+        mkt = market or (self._current_candle.market if self._current_candle else None)
+        if not mkt:
+            return []
+        history = self._borrow_history.get(mkt, [])
+        sliced = history[-lookback:] if lookback < len(history) else history
+        return [(bs.ts, bs.rate_hourly) for bs in sliced]
+
+    def get_borrow_cumulative_at(self, market: str, ts: int) -> Optional[float]:
+        """Get the cumulative borrow rate at or before a timestamp. Returns None if no data."""
+        history = self._borrow_history.get(market, [])
+        result = None
+        for bs in history:
+            if bs.ts <= ts:
+                result = bs.cumulative_rate
+            else:
+                break
+        return result
 
     def add_orderbook_snapshot(self, snapshot) -> None:
         """Record an orderbook snapshot. Called by engine."""
@@ -710,7 +756,7 @@ class BacktestContext(ExecutionContext):
 
         if pos is None:
             # Opening a new position
-            self._positions[key] = _Position(
+            new_pos = _Position(
                 market=market,
                 side=fill.side,
                 size=fill.size,
@@ -718,6 +764,13 @@ class BacktestContext(ExecutionContext):
                 entry_ts=fill.ts,
                 venue=venue,
             )
+            # Snapshot cumulative borrow rate for Jupiter Perps positions
+            if venue == "jupiter":
+                cum = self.get_borrow_cumulative_at(
+                    market, self._current_candle.ts if self._current_candle else 0)
+                if cum is not None:
+                    new_pos.borrow_cumulative_at_entry = cum
+            self._positions[key] = new_pos
         elif pos.side == fill.side:
             # Adding to position (DCA)
             total_cost = pos.entry_price * pos.size + fill.price * fill.size
@@ -731,6 +784,25 @@ class BacktestContext(ExecutionContext):
                     pnl = round((fill.price - pos.entry_price) * pos.size, 8)
                 else:
                     pnl = round((pos.entry_price - fill.price) * pos.size, 8)
+
+                # Realize Jupiter borrow cost on close
+                borrow_cost = 0.0
+                if venue == "jupiter" and pos.borrow_cumulative_at_entry > 0:
+                    cum_now = self.get_borrow_cumulative_at(
+                        market, self._current_candle.ts if self._current_candle else 0)
+                    if cum_now is not None:
+                        size_usd = abs(pos.size * fill.price)
+                        borrow_cost = (cum_now - pos.borrow_cumulative_at_entry) * size_usd
+                        self._total_borrow_paid += borrow_cost
+                        self._borrow_payments.append({
+                            "market": market,
+                            "ts": fill.ts,
+                            "cost": borrow_cost,
+                            "cum_entry": pos.borrow_cumulative_at_entry,
+                            "cum_exit": cum_now,
+                        })
+                        self._cash -= borrow_cost
+
                 self._credit_cash(pnl, venue)
                 self._closed_positions.append({
                     "market": market,
@@ -743,12 +815,13 @@ class BacktestContext(ExecutionContext):
                     "exit_ts": fill.ts,
                     "pnl": pnl,
                     "funding_paid": pos.funding_paid,
+                    "borrow_paid": borrow_cost,
                 })
                 remainder = fill.size - pos.size
                 del self._positions[key]
                 if remainder > 0.0001:  # ignore dust positions from float rounding
                     # Flip: open opposite position with remainder
-                    self._positions[key] = _Position(
+                    new_pos = _Position(
                         market=market,
                         side=fill.side,
                         size=remainder,
@@ -756,12 +829,38 @@ class BacktestContext(ExecutionContext):
                         entry_ts=fill.ts,
                         venue=venue,
                     )
+                    # Snapshot cumulative borrow for the new flipped position
+                    if venue == "jupiter":
+                        cum = self.get_borrow_cumulative_at(
+                            market, self._current_candle.ts if self._current_candle else 0)
+                        if cum is not None:
+                            new_pos.borrow_cumulative_at_entry = cum
+                    self._positions[key] = new_pos
             else:
                 # Partial close
                 if pos.side == Side.LONG:
                     pnl = round((fill.price - pos.entry_price) * fill.size, 8)
                 else:
                     pnl = round((pos.entry_price - fill.price) * fill.size, 8)
+
+                # Proportional Jupiter borrow cost on partial close
+                borrow_cost = 0.0
+                if venue == "jupiter" and pos.borrow_cumulative_at_entry > 0:
+                    cum_now = self.get_borrow_cumulative_at(
+                        market, self._current_candle.ts if self._current_candle else 0)
+                    if cum_now is not None:
+                        size_usd = abs(fill.size * fill.price)
+                        borrow_cost = (cum_now - pos.borrow_cumulative_at_entry) * size_usd
+                        self._total_borrow_paid += borrow_cost
+                        self._borrow_payments.append({
+                            "market": market,
+                            "ts": fill.ts,
+                            "cost": borrow_cost,
+                            "cum_entry": pos.borrow_cumulative_at_entry,
+                            "cum_exit": cum_now,
+                        })
+                        self._cash -= borrow_cost
+
                 self._credit_cash(pnl, venue)
                 self._closed_positions.append({
                     "market": market,
@@ -774,6 +873,7 @@ class BacktestContext(ExecutionContext):
                     "exit_ts": fill.ts,
                     "pnl": pnl,
                     "funding_paid": 0.0,
+                    "borrow_paid": borrow_cost,
                     "partial": True,
                 })
                 pos.size -= fill.size
@@ -799,6 +899,10 @@ class BacktestContext(ExecutionContext):
     @property
     def total_tx_costs(self) -> float:
         return self._total_tx_costs
+
+    @property
+    def total_borrow_paid(self) -> float:
+        return self._total_borrow_paid
 
     @property
     def log_messages(self) -> List[str]:
