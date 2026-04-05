@@ -39,6 +39,7 @@ const FUNDING_VENUES = [
   { id: 'bybit', label: 'Bybit', freq: '8h', color: '#f472b6' },
   { id: 'gateio', label: 'Gate.io', freq: '8h', color: '#fb923c' },
   { id: 'bitget', label: 'Bitget', freq: '8h', color: '#f97316' },
+  { id: 'jupiter', label: 'Jupiter', freq: 'borrow', color: '#c4b5fd' },
 ]
 
 export default function Setup() {
