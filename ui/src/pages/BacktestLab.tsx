@@ -51,6 +51,8 @@ const FEE_PRESETS: Record<string, { label: string; rate: number; venue: string }
   // Bybit
   'bybit_taker':     { label: 'Bybit Taker (5.5bps)',   rate: 0.00055, venue: 'bybit' },
   'bybit_maker':     { label: 'Bybit Maker (2bps)',      rate: 0.0002,  venue: 'bybit' },
+  // Jupiter Perps
+  'jupiter':         { label: 'Jupiter Perps (6bps)',    rate: 0.0006,  venue: 'jupiter' },
   // Generic
   'flat_5bps':       { label: 'Flat 5bps',              rate: 0.0005,  venue: 'generic' },
   'flat_1bps':       { label: 'Flat 1bps',              rate: 0.0001,  venue: 'generic' },
@@ -887,7 +889,7 @@ export default function BacktestLab() {
                     <div className="text-[9px] text-ghost tracking-wider mb-1">VENUE FEES (per venue config)</div>
                     {(stratProfile.venues.length > 0 ? stratProfile.venues : ['drift', 'hyperliquid']).map(v => {
                       const fees: Record<string, string> = {
-                        drift: '10 bps', hyperliquid: '3.5 bps', binance: '4.5 bps', okx: '5 bps', bybit: '5.5 bps'
+                        drift: '10 bps', hyperliquid: '3.5 bps', binance: '4.5 bps', okx: '5 bps', bybit: '5.5 bps', jupiter: '6 bps'
                       }
                       return (
                         <div key={v} className="text-[9px] text-terminal">
@@ -934,6 +936,11 @@ export default function BacktestLab() {
                   </optgroup>
                   <optgroup label="Bybit">
                     {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'bybit').map(([key, p]) => (
+                      <option key={key} value={key}>{p.label}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Jupiter Perps">
+                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'jupiter').map(([key, p]) => (
                       <option key={key} value={key}>{p.label}</option>
                     ))}
                   </optgroup>
@@ -1639,7 +1646,7 @@ export default function BacktestLab() {
                 <label className="text-xs text-zinc-400 block mb-1">Venue</label>
                 <select value={deployVenue} onChange={e => setDeployVenue(e.target.value)}
                         className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm">
-                  {['drift', 'hyperliquid', 'binance', 'okx', 'bybit', 'dydx'].map(v => (
+                  {['drift', 'hyperliquid', 'binance', 'okx', 'bybit', 'dydx', 'jupiter'].map(v => (
                     <option key={v} value={v}>{v}</option>
                   ))}
                 </select>

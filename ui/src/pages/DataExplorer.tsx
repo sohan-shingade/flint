@@ -117,8 +117,9 @@ export default function DataExplorer() {
     { id: 'mexc',        label: 'MEXC',         freq: '8h',  color: '#34d399' },
     { id: 'phemex',      label: 'Phemex',       freq: '8h',  color: '#f87171' },
     { id: 'bitmex',      label: 'BitMEX',       freq: '8h',  color: '#fbbf24' },
+    { id: 'jupiter',     label: 'Jupiter',      freq: 'borrow', color: '#c4b5fd' },
   ]
-  const DEFAULT_VENUES = ['drift', 'hyperliquid', 'okx', 'dydx', 'gateio', 'bitget']
+  const DEFAULT_VENUES = ['drift', 'hyperliquid', 'okx', 'dydx', 'gateio', 'bitget', 'jupiter']
   const [selectedVenues, setSelectedVenues] = useState<string[]>(DEFAULT_VENUES)
   // Multi-venue price visualization
   const VENUE_COLORS: Record<string, string> = {
