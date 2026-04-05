@@ -195,6 +195,23 @@ class FundingRate:
 
 
 @dataclass(frozen=True)
+class BorrowSnapshot:
+    """Jupiter Perps borrow rate snapshot.
+
+    Unlike FundingRate (periodic, can be negative), borrow rates are
+    continuous and always positive. The cumulative_rate field tracks
+    the monotonically increasing on-chain counter used to compute
+    position borrow costs.
+    """
+    market: str
+    ts: int
+    rate_hourly: float
+    utilization: float
+    cumulative_rate: float
+    source: str = "rpc"
+
+
+@dataclass(frozen=True)
 class OrderbookLevel:
     price: float
     size: float

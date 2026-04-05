@@ -12,7 +12,7 @@ from typing import List, Optional
 
 import duckdb
 
-from .models import Candle, FundingRate, OraclePrice
+from .models import BorrowSnapshot, Candle, FundingRate, OraclePrice
 
 _logger = logging.getLogger("flint.store")
 
@@ -295,6 +295,18 @@ CREATE TABLE IF NOT EXISTS tick_snapshots (
 );
 """
 
+_CREATE_JUPITER_BORROW_RATES = """
+CREATE TABLE IF NOT EXISTS jupiter_borrow_rates (
+    market          VARCHAR NOT NULL,
+    ts              BIGINT  NOT NULL,
+    rate_hourly     DOUBLE  NOT NULL,
+    utilization     DOUBLE  NOT NULL,
+    cumulative_rate DOUBLE  NOT NULL,
+    source          VARCHAR NOT NULL DEFAULT 'rpc',
+    PRIMARY KEY (market, ts)
+);
+"""
+
 
 class FlintStore:
     """Thread-safe DuckDB store.
@@ -424,6 +436,8 @@ class FlintStore:
         self._conn.execute(_CREATE_LIVE_EQUITY_HISTORY)
         # CLMM tick snapshots
         self._conn.execute(_CREATE_TICK_SNAPSHOTS)
+        # Jupiter Perps borrow rates
+        self._conn.execute(_CREATE_JUPITER_BORROW_RATES)
 
     # -- candles ---------------------------------------------------------------
 
@@ -597,6 +611,76 @@ class FlintStore:
                 result[venue] = []
             result[venue].append({"ts": r[1], "rate": r[2], "mark_price": r[3], "index_price": r[4]})
         return result
+
+    # -- Jupiter borrow rates --------------------------------------------------
+
+    def upsert_borrow_rates(self, snapshots: List[BorrowSnapshot]) -> int:
+        """Upsert Jupiter Perps borrow rate snapshots.
+
+        Uses the same lock+transaction pattern as upsert_funding_rates.
+        On conflict (market, ts), the row is replaced with the new data.
+        """
+        if not snapshots:
+            return 0
+        rows = [
+            (s.market, s.ts, s.rate_hourly, s.utilization, s.cumulative_rate, s.source)
+            for s in snapshots
+        ]
+        batch_size = 2000
+        with self._lock:
+            self._conn.execute("BEGIN TRANSACTION")
+            try:
+                for i in range(0, len(rows), batch_size):
+                    batch = rows[i:i + batch_size]
+                    self._conn.executemany(
+                        "INSERT OR REPLACE INTO jupiter_borrow_rates "
+                        "(market, ts, rate_hourly, utilization, cumulative_rate, source) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        batch,
+                    )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return len(rows)
+
+    def query_borrow_rates(
+        self,
+        market: str,
+        start_ts: int,
+        end_ts: int,
+    ) -> List[BorrowSnapshot]:
+        """Query borrow rate snapshots for a market within [start_ts, end_ts]."""
+        sql = (
+            "SELECT market, ts, rate_hourly, utilization, cumulative_rate, source "
+            "FROM jupiter_borrow_rates "
+            "WHERE market = ? AND ts >= ? AND ts <= ? "
+            "ORDER BY ts ASC"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, [market, start_ts, end_ts]).fetchall()
+        return [
+            BorrowSnapshot(
+                market=r[0], ts=r[1], rate_hourly=r[2],
+                utilization=r[3], cumulative_rate=r[4], source=r[5],
+            )
+            for r in rows
+        ]
+
+    def query_borrow_cumulative(
+        self,
+        market: str,
+        ts: int,
+    ) -> Optional[float]:
+        """Return the cumulative_rate at or before ts, or None if no data exists."""
+        sql = (
+            "SELECT cumulative_rate FROM jupiter_borrow_rates "
+            "WHERE market = ? AND ts <= ? "
+            "ORDER BY ts DESC LIMIT 1"
+        )
+        with self._lock:
+            row = self._conn.execute(sql, [market, ts]).fetchone()
+        return row[0] if row else None
 
     # -- oracle prices ---------------------------------------------------------
 
