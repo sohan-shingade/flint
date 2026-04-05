@@ -69,6 +69,32 @@ def get_funding(
         return {"market": market, "venues": {}, "count": 0, "error": str(e)}
 
 
+@router.get("/borrow-rates")
+def get_borrow_rates(
+    request: Request,
+    market: str = Query("SOL-PERP"),
+    start_ts: Optional[int] = Query(None),
+    end_ts: Optional[int] = Query(None),
+):
+    """Get Jupiter borrow rate history for a market."""
+    store = _get_store(request)
+    if store is None:
+        return {"market": market, "rates": [], "count": 0}
+    try:
+        import time as _time
+        start = start_ts or 0
+        end = end_ts or int(_time.time())
+        snapshots = store.query_borrow_rates(market, start, end)
+        rates = [
+            {"ts": s.ts, "rate_hourly": s.rate_hourly, "utilization": s.utilization,
+             "cumulative_rate": s.cumulative_rate, "source": s.source}
+            for s in snapshots
+        ]
+        return {"market": market, "rates": rates, "count": len(rates)}
+    except Exception as e:
+        return {"market": market, "rates": [], "count": 0, "error": str(e)}
+
+
 @router.delete("/market/{market}")
 def delete_market_data(market: str, request: Request):
     """Delete all data for a specific market (candles, funding, OI, etc.).
