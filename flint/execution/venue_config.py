@@ -68,6 +68,18 @@ VENUE_DEFAULTS: Dict[str, VenueConfig] = {
         initial_margin=0.05, maintenance_margin=0.03, max_leverage=20,
         impact_coefficient=0.006, base_latency_s=2.0, latency_jitter_s=1.0,
     ),
+    "jupiter": VenueConfig(
+        name="jupiter",
+        taker_fee_bps=6.0,
+        maker_fee_bps=6.0,
+        initial_margin=0.01,
+        maintenance_margin=0.002,
+        max_leverage=100.0,
+        liquidation_penalty=0.0,
+        impact_coefficient=0.03,
+        base_latency_s=12.0,
+        latency_jitter_s=8.0,
+    ),
     # Default venue (used when no venue specified) — Drift-like defaults
     "default": VenueConfig(
         name="default", taker_fee_bps=5, maker_fee_bps=0,
