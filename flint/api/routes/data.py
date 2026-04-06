@@ -218,7 +218,7 @@ def check_data(
 
         # Expected candle count for coverage calculation
         expected_count = max(1, (end_ts - start_ts) // resolution_s)
-        coverage_pct = round(len(candles) / expected_count * 100, 1) if expected_count else 0
+        coverage_pct = min(round(len(candles) / expected_count * 100, 1), 100.0) if expected_count else 0
 
         # Check if local data covers the full requested range
         covers_range = False

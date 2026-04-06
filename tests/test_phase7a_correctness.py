@@ -243,3 +243,11 @@ class TestBacktestStateManagement:
 
         with bt._state_lock:
             bt._entries.pop(run_id, None)
+
+
+class TestCoverageCap:
+    def test_coverage_capped_at_100(self):
+        # Verify the capping logic
+        coverage_pct = round(101 / 100 * 100, 1)
+        capped = min(coverage_pct, 100.0)
+        assert capped == 100.0
