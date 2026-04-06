@@ -193,20 +193,18 @@ def list_markets(request: Request):
         return {"markets": [], "error": str(e)}
 
 
-@router.get("/check")
-def check_data(
-    request: Request,
-    market: str = Query(...),
-    resolution_s: int = Query(3600),
-    start_ts: int = Query(...),
-    end_ts: int = Query(...),
-):
-    """Check if data exists for a given market/timeframe/date range."""
+def _check_single_market(
+    store: Optional[FlintStore],
+    market: str,
+    resolution_s: int,
+    start_ts: int,
+    end_ts: int,
+) -> dict:
+    """Check data availability for a single market. Returns a dict."""
     if start_ts < 0 or end_ts < 0 or start_ts >= end_ts:
         return {"market": market, "resolution_s": resolution_s, "has_data": False,
                 "covers_range": False, "will_download": True, "candle_count": 0,
                 "total_in_db": 0, "first_ts": None, "last_ts": None}
-    store = _get_store(request)
     if store is None:
         return {
             "market": market, "resolution_s": resolution_s,
@@ -299,6 +297,45 @@ def check_data(
             "open_interest": {"available": False, "count": 0},
             "error": str(e),
         }
+
+
+@router.get("/check")
+def check_data(
+    request: Request,
+    market: Optional[str] = Query(None),
+    markets: Optional[str] = Query(None),
+    resolution_s: int = Query(3600),
+    start_ts: int = Query(...),
+    end_ts: int = Query(...),
+):
+    """Check if data exists for a given market/timeframe/date range.
+
+    Accepts either ``market`` (single) or ``markets`` (comma-separated).
+    Single-market requests return the flat dict (backward compatible).
+    Multi-market requests return ``{"results": [...]}``.
+    """
+    # Build market list from either param
+    if markets:
+        market_list = [m.strip() for m in markets.split(",") if m.strip()]
+    elif market:
+        market_list = [market]
+    else:
+        from fastapi import HTTPException
+        raise HTTPException(400, "Provide 'market' or 'markets' query parameter")
+
+    store = _get_store(request)
+
+    # Single market — preserve original response shape
+    if len(market_list) == 1:
+        return _check_single_market(store, market_list[0], resolution_s, start_ts, end_ts)
+
+    # Multiple markets — wrap in results list
+    return {
+        "results": [
+            _check_single_market(store, m, resolution_s, start_ts, end_ts)
+            for m in market_list
+        ]
+    }
 
 
 @router.post("/check-markets")
