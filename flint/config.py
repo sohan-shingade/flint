@@ -165,6 +165,13 @@ class FlintConfig(BaseSettings):
     # --- Dune Analytics (for borrow rate backfill) ---
     dune_api_key: str = ""
 
+    # --- Price source ---
+    price_source: str = "pyth"
+
+    # --- Tardis.dev (for CEX orderbook data) ---
+    tardis_api_key: str = ""
+    tardis_max_gb_per_request: float = 1.0
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""
