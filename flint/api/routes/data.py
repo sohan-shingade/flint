@@ -683,38 +683,41 @@ def download_market_data(request: Request, body: dict):
         # Download Jupiter borrow rates if Jupiter is in execution_venues
         if execution_venues and "jupiter" in execution_venues and "-PERP" in market:
             try:
-                from ...providers.jupiter_borrow import DuneBorrowBackfill
-                from ...config import load_config
-                config = load_config()
-                if config.dune_api_key:
-                    backfill = DuneBorrowBackfill(api_key=config.dune_api_key)
-                    try:
-                        snapshots = backfill.fetch(market, start_ts, end_ts)
-                        if snapshots:
-                            stored = store.upsert_borrow_rates(snapshots)
-                            logger.info("Jupiter borrow rates: %d snapshots for %s", stored, market)
-                        else:
-                            download_warnings.append(f"Jupiter borrow rates: no data from Dune for {market}")
-                    finally:
-                        backfill.close()
+                from ...models import BorrowSnapshot
+                _JUPITER_MINTS = {
+                    "SOL-PERP": "So11111111111111111111111111111111111111112",
+                    "ETH-PERP": "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+                    "BTC-PERP": "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",
+                }
+                mint = _JUPITER_MINTS.get(market)
+                if mint:
+                    import httpx as _httpx
+                    resp = _httpx.get(
+                        f"https://perps-api.jup.ag/v1/pool-info?mint={mint}",
+                        timeout=15,
+                    )
+                    resp.raise_for_status()
+                    pool = resp.json()
+                    # Average long/short borrow rate as hourly rate
+                    long_rate = float(pool.get("longBorrowRatePercent", 0)) / 100
+                    short_rate = float(pool.get("shortBorrowRatePercent", 0)) / 100
+                    avg_rate = (long_rate + short_rate) / 2
+                    utilization = (
+                        float(pool.get("longUtilizationPercent", 0))
+                        + float(pool.get("shortUtilizationPercent", 0))
+                    ) / 200  # average of both sides, normalized to 0-1
+                    now_ts = int(time.time())
+                    snapshot = BorrowSnapshot(
+                        market=market, ts=now_ts, rate_hourly=avg_rate,
+                        utilization=utilization, cumulative_rate=0.0, source="jupiter_api",
+                    )
+                    store.upsert_borrow_rates([snapshot])
+                    logger.info("Jupiter borrow rate for %s: %.6f hourly (util %.1f%%)",
+                                market, avg_rate, utilization * 100)
                 else:
-                    # No Dune key — try RPC collector for recent data
-                    from ...providers.jupiter_borrow import JupiterBorrowCollector
-                    rpc_url = config.jupiter_perps_rpc_url or "https://api.mainnet-beta.solana.com"
-                    collector = JupiterBorrowCollector(rpc_url=rpc_url)
-                    try:
-                        snapshots = collector.collect()
-                        if snapshots:
-                            market_snapshots = [s for s in snapshots if s.market == market]
-                            if market_snapshots:
-                                store.upsert_borrow_rates(market_snapshots)
-                                logger.info("Jupiter borrow rates (RPC): %d for %s", len(market_snapshots), market)
-                        else:
-                            download_warnings.append(f"Jupiter borrow rates: RPC collection returned no data (custody addresses not configured)")
-                    finally:
-                        collector.close()
+                    download_warnings.append(f"Jupiter borrow rates: {market} not supported (only SOL/ETH/BTC)")
             except Exception as e:
-                logger.warning("Jupiter borrow rate download failed for %s: %s", market, e)
+                logger.warning("Jupiter borrow rate failed for %s: %s", market, e)
                 download_warnings.append(f"Jupiter borrow rates: {e}")
 
         # Update sync_metadata for freshness tracking
