@@ -514,8 +514,10 @@ def download_market_data(request: Request, body: dict):
     resolution_s = body.get("resolution_s", 3600)
     start_ts = body.get("start_ts")
     end_ts = body.get("end_ts")
-    funding_venues = body.get("funding_venues")  # optional list of venue IDs
-    venue = body.get("venue", "")  # optional venue filter (drift, hyperliquid, binance, okx, bybit)
+    # execution_venues controls which venues supply supplementary data (funding, borrow rates).
+    # funding_venues is accepted as an alias for backward compatibility.
+    execution_venues = body.get("execution_venues") or body.get("funding_venues")
+    venue = body.get("venue", "")  # deprecated — candles always come from Pyth now
 
     if not start_ts or not end_ts or start_ts >= end_ts:
         from fastapi import HTTPException
@@ -551,7 +553,7 @@ def download_market_data(request: Request, body: dict):
                 try:
                     funding_fetched = _download_funding_all_venues(
                         store, market, start_ts, end_ts, logger,
-                        venues=funding_venues, warnings=download_warnings,
+                        venues=execution_venues, warnings=download_warnings,
                     )
                 except Exception as e:
                     msg = f"Funding sync failed: {e}"
@@ -601,13 +603,16 @@ def download_market_data(request: Request, body: dict):
         source = "none"
         errors: list = []
 
+        if venue:
+            logger.warning(
+                "download: 'venue' param is deprecated for candle source selection; "
+                "candles now always come from Pyth. Use 'execution_venues' to control "
+                "which venues supply supplementary data (funding, borrow rates)."
+            )
+
         for gap_start, gap_end in gaps:
-            if venue:
-                fetched, err = _download_range_for_venue(market, resolution_s, gap_start, gap_end, venue, logger)
-                source = venue
-            else:
-                fetched, err = _download_range(market, resolution_s, gap_start, gap_end, logger)
-                source = "drift_api"
+            fetched, err = _download_pyth_candles(market, resolution_s, gap_start, gap_end)
+            source = "pyth"
             if fetched:
                 total_fetched += len(fetched)
                 total_cached += store.upsert_candles(fetched)
@@ -624,7 +629,7 @@ def download_market_data(request: Request, body: dict):
             try:
                 funding_fetched = _download_funding_all_venues(
                     store, market, start_ts, end_ts, logger,
-                    venues=funding_venues, warnings=download_warnings,
+                    venues=execution_venues, warnings=download_warnings,
                 )
             except Exception as e:
                 msg = f"Funding sync failed: {e}"
@@ -685,6 +690,22 @@ def download_market_data(request: Request, body: dict):
             "error": str(e),
             "warnings": download_warnings,
         }
+
+
+def _download_pyth_candles(market: str, resolution_s: int, start_ts: int, end_ts: int):
+    """Download candles from Pyth Benchmarks API.
+
+    Returns (List[Candle], Optional[error_msg])
+    """
+    from ...providers.pyth_candles import PythCandleProvider
+    provider = PythCandleProvider()
+    try:
+        candles = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+        return candles, None
+    except Exception as e:
+        return [], str(e)
+    finally:
+        provider.close()
 
 
 def _download_range(market: str, resolution_s: int, start_ts: int, end_ts: int, logger):
