@@ -1,4 +1,9 @@
 """Tests for Phase 7c analytics additions."""
+from __future__ import annotations
+
+import pytest
+from flint.models import Candle, Signal
+from flint.strategy.base import Strategy
 
 
 class TestAnnualizedVolatility:
@@ -50,3 +55,41 @@ class TestStrategyErrorMessages:
         error_detail = "ZeroDivisionError: division by zero"
         assert "ZeroDivisionError" in error_detail
         assert "division by zero" in error_detail
+
+
+class _HoldStrategy(Strategy):
+    @property
+    def name(self):
+        return "Hold"
+
+    def reset(self):
+        pass
+
+    def on_candle(self, candle, history, ctx=None):
+        return Signal.HOLD
+
+
+class TestVolumeWarning:
+    def test_zero_volume_candles_produce_warning(self):
+        from flint.backtest.engine import BacktestEngine
+        candles = [
+            Candle(ts=1000 + i * 3600, open=100, high=101, low=99,
+                   close=100, volume=0.0, market="SOL-PERP", resolution_s=3600)
+            for i in range(50)
+        ]
+        engine = BacktestEngine(_HoldStrategy(), 10000, 0.0005)
+        result = engine.run(candles)
+        assert any("volume" in w.lower() for w in result.strategy_warnings), (
+            f"Expected volume warning, got: {result.strategy_warnings}"
+        )
+
+    def test_nonzero_volume_no_warning(self):
+        from flint.backtest.engine import BacktestEngine
+        candles = [
+            Candle(ts=1000 + i * 3600, open=100, high=101, low=99,
+                   close=100, volume=100.0, market="SOL-PERP", resolution_s=3600)
+            for i in range(50)
+        ]
+        engine = BacktestEngine(_HoldStrategy(), 10000, 0.0005)
+        result = engine.run(candles)
+        assert not any("volume" in w.lower() for w in result.strategy_warnings)

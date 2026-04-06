@@ -186,6 +186,15 @@ class BacktestEngine:
                 extra_cursors[mkt] = 0
         extra_histories: dict = {m: [] for m in (extra_markets or {})}
 
+        # Warn if all candle volumes are zero (Pyth price-only data)
+        volume_warnings = []
+        sample = candles[:min(100, len(candles))]
+        if sample and all(c.volume == 0 for c in sample):
+            volume_warnings.append(
+                "All candles have zero volume (Pyth price-only data). "
+                "Volume-dependent indicators (VWAP, volume breakout) will be unreliable."
+            )
+
         _deadline = _time.monotonic() + self._max_runtime_s if self._max_runtime_s > 0 else float('inf')
 
         for _ci, candle in enumerate(candles):
@@ -286,10 +295,11 @@ class BacktestEngine:
             equity_curve[-1] = ctx.account.equity
 
         res_s = candles[0].resolution_s if candles else 3600
-        return self._build_result(ctx, equity_curve, res_s)
+        return self._build_result(ctx, equity_curve, res_s, volume_warnings=volume_warnings)
 
-    def _build_result(self, ctx: BacktestContext, equity_curve: List[float], resolution_s: int = 3600) -> BacktestResult:
+    def _build_result(self, ctx: BacktestContext, equity_curve: List[float], resolution_s: int = 3600, volume_warnings: Optional[List[str]] = None) -> BacktestResult:
         """Build BacktestResult from context state."""
+        volume_warnings = volume_warnings or []
         trades = ctx.closed_trades
         positions = []
         for t in trades:
@@ -345,7 +355,7 @@ class BacktestEngine:
             total_fees=ctx.total_fees,
             funding_paid=ctx.total_funding,
             total_tx_costs=total_tx_costs,
-            strategy_warnings=[m for m in ctx.log_messages
+            strategy_warnings=volume_warnings + [m for m in ctx.log_messages
                                if "WARNING" in m or "LIQUIDATED" in m or "MARGIN REJECTED" in m],
             per_venue_pnl=per_venue_pnl,
             per_venue_trades=per_venue_trades_count,
