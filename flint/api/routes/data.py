@@ -226,9 +226,13 @@ def _check_single_market(
         coverage_pct = min(round(len(candles) / expected_count * 100, 1), 100.0) if expected_count else 0
 
         # Check if local data covers the full requested range
+        # Must check BOTH ends: first candle near start AND last candle near end
+        # AND coverage must be at least 80%
         covers_range = False
         if candles:
-            covers_range = candles[-1].ts >= end_ts - 86400  # within 1 day of end
+            end_ok = candles[-1].ts >= end_ts - 86400  # within 1 day of end
+            start_ok = candles[0].ts <= start_ts + 86400  # within 1 day of start
+            covers_range = end_ok and start_ok and coverage_pct >= 80
 
         will_download = not covers_range
 
@@ -368,7 +372,14 @@ def check_markets_data(
         try:
             candles = store.query_candles(m, resolution_s, start_ts, end_ts)
             has_data = len(candles) > 0
-            covers = candles[-1].ts >= end_ts - 86400 if candles else False
+            if candles:
+                expected = max(1, (end_ts - start_ts) // resolution_s)
+                cov = len(candles) / expected * 100
+                covers = (candles[-1].ts >= end_ts - 86400 and
+                          candles[0].ts <= start_ts + 86400 and
+                          cov >= 80)
+            else:
+                covers = False
             result[m] = {
                 "has_data": has_data,
                 "covers_range": covers,
