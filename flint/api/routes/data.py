@@ -653,11 +653,11 @@ def download_market_data(request: Request, body: dict):
                     logger.warning("Funding sync failed for %s: %s", market, e)
                     download_warnings.append(msg)
 
-            # Merge volume from Hyperliquid if candles have zero volume
+            # Merge volume from CEXes if many candles have zero volume
             volume_merged = 0
-            has_zero_vol = existing and all(c.volume == 0 for c in existing[:50])
-            if has_zero_vol:
-                volume_merged = _merge_hyperliquid_volume(
+            zero_vol_count = sum(1 for c in existing if c.volume == 0)
+            if zero_vol_count > len(existing) * 0.1:  # >10% missing volume
+                volume_merged = _merge_volume_from_cex(
                     store, market, resolution_s, start_ts, end_ts, logger, download_warnings
                 )
 
@@ -725,7 +725,7 @@ def download_market_data(request: Request, body: dict):
                 download_warnings.append(f"Candle download ({source}): {err}")
 
         # Merge volume from Hyperliquid into Pyth candles (Pyth has price-only, volume=0)
-        venue_candle_count = _merge_hyperliquid_volume(
+        venue_candle_count = _merge_volume_from_cex(
             store, market, resolution_s, start_ts, end_ts, logger, download_warnings
         )
 
@@ -854,62 +854,32 @@ def download_market_data(request: Request, body: dict):
         }
 
 
-def _fetch_okx_volume(market: str, resolution_s: int, start_ts: int, end_ts: int, logger) -> dict:
-    """Fetch volume from OKX. Returns {ts: volume} dict. Free, no key, full history."""
-    import httpx
-    _FLINT_TO_OKX = {
-        "SOL-PERP": "SOL-USDT-SWAP", "BTC-PERP": "BTC-USDT-SWAP", "ETH-PERP": "ETH-USDT-SWAP",
-        "DOGE-PERP": "DOGE-USDT-SWAP", "ARB-PERP": "ARB-USDT-SWAP", "SUI-PERP": "SUI-USDT-SWAP",
-        "OP-PERP": "OP-USDT-SWAP", "LINK-PERP": "LINK-USDT-SWAP", "AVAX-PERP": "AVAX-USDT-SWAP",
-        "XRP-PERP": "XRP-USDT-SWAP", "BNB-PERP": "BNB-USDT-SWAP", "WIF-PERP": "WIF-USDT-SWAP",
-        "JUP-PERP": "JUP-USDT-SWAP", "RENDER-PERP": "RENDER-USDT-SWAP",
-    }
-    _BAR_MAP = {60: "1m", 300: "5m", 900: "15m", 3600: "1H", 14400: "4H", 86400: "1D"}
-
-    inst = _FLINT_TO_OKX.get(market)
-    if not inst:
-        return {}
-    bar = _BAR_MAP.get(resolution_s, "1H")
-    vol_by_ts: dict = {}
-    # OKX returns max 100 candles per request, paginate backward
-    cursor = end_ts * 1000
-    client = httpx.Client(timeout=15)
+def _fetch_ccxt_volume(market: str, resolution_s: int, start_ts: int, end_ts: int,
+                       exchange_name: str, logger) -> dict:
+    """Fetch volume from any CCXT exchange. Returns {ts: volume} dict."""
     try:
-        for _ in range(200):  # safety limit
-            url = "https://www.okx.com/api/v5/market/history-candles"
-            params = {"instId": inst, "bar": bar, "limit": "100", "after": str(cursor)}
-            try:
-                resp = client.get(url, params=params)
-                if resp.status_code != 200:
-                    break
-                data = resp.json().get("data", [])
-                if not data:
-                    break
-                for c in data:
-                    ts_ms = int(c[0])
-                    ts_s = ts_ms // 1000
-                    if start_ts <= ts_s <= end_ts:
-                        vol = float(c[5]) if len(c) > 5 else 0
-                        if vol > 0:
-                            vol_by_ts[ts_s] = vol
-                oldest_ms = min(int(c[0]) for c in data)
-                if oldest_ms // 1000 <= start_ts:
-                    break
-                cursor = oldest_ms
-                import time as _t
-                _t.sleep(0.05)  # rate limit
-            except Exception as e:
-                logger.debug("OKX volume page failed: %s", e)
-                break
-    finally:
-        client.close()
-    return vol_by_ts
+        from ...providers.ccxt_provider import CCXTProvider
+        provider = CCXTProvider(exchange=exchange_name)
+        try:
+            candles = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+            return {c.ts: c.volume for c in candles if c.volume > 0}
+        finally:
+            provider.close()
+    except Exception as e:
+        logger.debug("CCXT %s volume fetch failed for %s: %s", exchange_name, market, e)
+        return {}
 
 
-def _merge_hyperliquid_volume(store, market, resolution_s, start_ts, end_ts, logger, warnings):
-    """Fetch volume from Hyperliquid + OKX and merge into zero-volume Pyth candles.
+# Exchanges to try for volume data, in priority order.
+# All free, no key needed. Ordered by: liquidity, reliability, geo-availability.
+_VOLUME_EXCHANGES = ["okx", "gate", "binanceus"]
 
-    Waterfall: Hyperliquid (recent ~7mo) → OKX (backfill older, full history).
+
+def _merge_volume_from_cex(store, market, resolution_s, start_ts, end_ts, logger, warnings):
+    """Fetch volume from CEXes via CCXT and merge into zero-volume Pyth candles.
+
+    Waterfall: Hyperliquid (DeFi, recent ~7mo) → OKX → Gate.io → Binance US.
+    Each exchange only fetches timestamps the previous ones didn't cover.
     """
     vol_by_ts: dict = {}
 
@@ -932,23 +902,21 @@ def _merge_hyperliquid_volume(store, market, resolution_s, start_ts, end_ts, log
     except Exception as e:
         logger.debug("Hyperliquid volume fetch failed: %s", e)
 
-    # 2. OKX — backfill timestamps that Hyperliquid missed (full history)
+    # 2. CCXT exchanges — backfill timestamps Hyperliquid missed
     all_candles = store.query_candles(market, resolution_s, start_ts, end_ts)
-    zero_vol_count = sum(1 for c in all_candles if c.volume == 0 and c.ts not in vol_by_ts)
-    if zero_vol_count > 0:
+    for exchange_name in _VOLUME_EXCHANGES:
+        missing_ts = [c.ts for c in all_candles if c.volume == 0 and c.ts not in vol_by_ts]
+        if not missing_ts:
+            break  # all covered
+        gap_start = min(missing_ts)
+        gap_end = max(missing_ts)
         try:
-            # Only fetch the range that Hyperliquid didn't cover
-            covered_ts = set(vol_by_ts.keys())
-            missing_ts = [c.ts for c in all_candles if c.volume == 0 and c.ts not in covered_ts]
-            if missing_ts:
-                okx_start = min(missing_ts)
-                okx_end = max(missing_ts)
-                okx_vol = _fetch_okx_volume(market, resolution_s, okx_start, okx_end, logger)
-                vol_by_ts.update(okx_vol)
-                if okx_vol:
-                    logger.info("OKX: %d volume values backfilled for %s", len(okx_vol), market)
+            cex_vol = _fetch_ccxt_volume(market, resolution_s, gap_start, gap_end, exchange_name, logger)
+            if cex_vol:
+                vol_by_ts.update(cex_vol)
+                logger.info("CCXT/%s: %d volume values for %s", exchange_name, len(cex_vol), market)
         except Exception as e:
-            logger.debug("OKX volume backfill failed: %s", e)
+            logger.debug("CCXT/%s volume failed: %s", exchange_name, e)
 
     if not vol_by_ts:
         return 0
