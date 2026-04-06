@@ -27,7 +27,11 @@ interface OptResult {
   best_value: number
   metric: string
   n_trials: number
-  trials: Trial[]
+  trials?: Trial[]
+  top_trials?: Trial[]
+  convergence?: [number, number | null][]
+  param_importance?: Record<string, number> | null
+  best_backtest_metrics?: Record<string, any> | null
   strategy_name: string
   market: string
   candles: number
