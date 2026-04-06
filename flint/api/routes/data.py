@@ -680,6 +680,43 @@ def download_market_data(request: Request, body: dict):
                 logger.warning("Funding sync failed for %s: %s", market, e)
                 download_warnings.append(msg)
 
+        # Download Jupiter borrow rates if Jupiter is in execution_venues
+        if execution_venues and "jupiter" in execution_venues and "-PERP" in market:
+            try:
+                from ...providers.jupiter_borrow import DuneBorrowBackfill
+                from ...config import load_config
+                config = load_config()
+                if config.dune_api_key:
+                    backfill = DuneBorrowBackfill(api_key=config.dune_api_key)
+                    try:
+                        snapshots = backfill.fetch(market, start_ts, end_ts)
+                        if snapshots:
+                            stored = store.upsert_borrow_rates(snapshots)
+                            logger.info("Jupiter borrow rates: %d snapshots for %s", stored, market)
+                        else:
+                            download_warnings.append(f"Jupiter borrow rates: no data from Dune for {market}")
+                    finally:
+                        backfill.close()
+                else:
+                    # No Dune key — try RPC collector for recent data
+                    from ...providers.jupiter_borrow import JupiterBorrowCollector
+                    rpc_url = config.jupiter_perps_rpc_url or "https://api.mainnet-beta.solana.com"
+                    collector = JupiterBorrowCollector(rpc_url=rpc_url)
+                    try:
+                        snapshots = collector.collect()
+                        if snapshots:
+                            market_snapshots = [s for s in snapshots if s.market == market]
+                            if market_snapshots:
+                                store.upsert_borrow_rates(market_snapshots)
+                                logger.info("Jupiter borrow rates (RPC): %d for %s", len(market_snapshots), market)
+                        else:
+                            download_warnings.append(f"Jupiter borrow rates: RPC collection returned no data (custody addresses not configured)")
+                    finally:
+                        collector.close()
+            except Exception as e:
+                logger.warning("Jupiter borrow rate download failed for %s: %s", market, e)
+                download_warnings.append(f"Jupiter borrow rates: {e}")
+
         # Update sync_metadata for freshness tracking
         try:
             from ...models import SyncMetadata
