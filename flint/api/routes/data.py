@@ -674,10 +674,20 @@ def download_market_data(request: Request, body: dict):
                     logger.warning("Funding sync failed for %s: %s", market, e)
                     download_warnings.append(msg)
 
-            # Merge volume from CEXes if many candles have zero volume
+            # Download per-venue candles (volume data) if not already populated
             volume_merged = 0
-            zero_vol_count = sum(1 for c in existing if c.volume == 0)
-            if zero_vol_count > len(existing) * 0.1:  # >10% missing volume
+            has_venue_data = False
+            try:
+                with store._lock:
+                    vc = store._conn.execute(
+                        "SELECT COUNT(*) FROM candles WHERE market = ? AND venue NOT IN ('pyth', 'default') "
+                        "AND ts >= ? AND ts <= ?",
+                        [market, start_ts, end_ts],
+                    ).fetchone()
+                has_venue_data = vc and vc[0] > 100
+            except Exception:
+                pass
+            if not has_venue_data:
                 volume_merged = _download_venue_volume(
                     store, market, resolution_s, start_ts, end_ts, logger, download_warnings
                 )
