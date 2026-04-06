@@ -518,6 +518,44 @@ class FlintStore:
             row = self._conn.execute("SELECT 1 FROM candles LIMIT 1").fetchone()
             return row is not None
 
+    def get_markets_needing_pyth_migration(self) -> list:
+        """Return market names that have non-Pyth candles but no Pyth candles.
+
+        These are candidates for back-filling with Pyth oracle price data.
+        """
+        with self._lock:
+            rows = self._conn.execute("""
+                SELECT DISTINCT market FROM candles
+                WHERE venue != 'pyth'
+                AND market NOT IN (
+                    SELECT DISTINCT market FROM candles WHERE venue = 'pyth'
+                )
+            """).fetchall()
+        return [r[0] for r in rows]
+
+    def get_market_date_range(self, market: str):
+        """Return (min_ts, max_ts) for all candles of a market, or None if no data."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT MIN(ts), MAX(ts) FROM candles WHERE market = ?", [market]
+            ).fetchall()
+        if rows and rows[0][0] is not None:
+            return (rows[0][0], rows[0][1])
+        return None
+
+    def query_candles_with_fallback(
+        self,
+        market: str,
+        resolution_s: int,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> List[Candle]:
+        """Query candles preferring venue='pyth'; falls back to any venue if none found."""
+        candles = self.query_candles(market, resolution_s, start_ts, end_ts, venue="pyth")
+        if candles:
+            return candles
+        return self.query_candles(market, resolution_s, start_ts, end_ts)
+
     # -- funding rates ---------------------------------------------------------
 
     def upsert_funding_rates(self, rates: List[FundingRate]) -> int:
