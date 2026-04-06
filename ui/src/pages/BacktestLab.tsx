@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { EXECUTION_VENUES, getVenue } from '../constants/venues'
 import { useBacktest } from '../hooks/useBacktest'
 import { useStrategies } from '../hooks/useStrategies'
 import { useOptimize } from '../hooks/useOptimize'
@@ -173,7 +174,7 @@ export default function BacktestLab() {
 
   // Config state
   const [market, setMarket] = useState('SOL-PERP')
-  const [venue, setVenue] = useState('default')
+  const [venue, setVenue] = useState('drift')
   const [resolution, setResolution] = useState('1h')
   const [startDate, setStartDate] = useState('2025-01-01')
   const [endDate, setEndDate] = useState('2025-01-31')
@@ -888,12 +889,10 @@ export default function BacktestLab() {
                   <div className="mt-2 p-2 border border-border bg-surface/30">
                     <div className="text-[9px] text-ghost tracking-wider mb-1">VENUE FEES (per venue config)</div>
                     {(stratProfile.venues.length > 0 ? stratProfile.venues : ['drift', 'hyperliquid']).map(v => {
-                      const fees: Record<string, string> = {
-                        drift: '10 bps', hyperliquid: '3.5 bps', binance: '4.5 bps', okx: '5 bps', bybit: '5.5 bps', jupiter: '6 bps'
-                      }
+                      const info = getVenue(v)
                       return (
-                        <div key={v} className="text-[9px] text-terminal">
-                          {v.toUpperCase()}: {fees[v] || '5 bps'} taker
+                        <div key={v} className="text-[9px] text-ghost/50">
+                          {v.toUpperCase()}: {info?.takerFee || '?'} taker / {info?.fillModel || 'default'}
                         </div>
                       )
                     })}
@@ -912,45 +911,93 @@ export default function BacktestLab() {
                 <input type="number" value={capital} onChange={(e) => setCapital(+e.target.value)} className={inputClass} />
               </div>
               <div>
-                <label className={labelClass}>FEE.MODEL</label>
-                <select value={feePreset} onChange={(e) => setFeePreset(e.target.value)} className={inputClass}>
-                  <optgroup label="Drift Protocol">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'drift').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
+                <label className="text-[9px] text-ghost tracking-wider">EXECUTION VENUE</label>
+                <select
+                  value={venue}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setVenue(v)
+                    const venueInfo = getVenue(v)
+                    if (venueInfo) {
+                      const bps = parseFloat(venueInfo.takerFee)
+                      if (!isNaN(bps)) setFeeRate(bps / 10000)
+                    }
+                  }}
+                  className={inputClass}
+                >
+                  <optgroup label="DEX">
+                    {EXECUTION_VENUES.filter(v => v.type === 'dex').map(v => (
+                      <option key={v.id} value={v.id}>{v.label}</option>
                     ))}
                   </optgroup>
-                  <optgroup label="Hyperliquid">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'hyperliquid').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Binance Futures">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'binance').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="OKX">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'okx').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Bybit">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'bybit').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Jupiter Perps">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'jupiter').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Generic">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'generic').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
+                  <optgroup label="CEX">
+                    {EXECUTION_VENUES.filter(v => v.type === 'cex').map(v => (
+                      <option key={v.id} value={v.id}>{v.label}</option>
                     ))}
                   </optgroup>
                 </select>
               </div>
+              {(() => {
+                const venueInfo = getVenue(venue)
+                if (!venueInfo) return null
+                return (
+                  <div className="col-span-2 p-2 border border-border/30 bg-panel/50 text-[9px]">
+                    <div className="text-ghost/60 mb-1">EXECUTION PROFILE</div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-ghost/40">
+                      <span>Fill Model:</span><span className="text-ghost/70">{venueInfo.fillModel}</span>
+                      <span>Taker Fee:</span><span className="text-ghost/70">{venueInfo.takerFee}</span>
+                      <span>Maker Fee:</span><span className="text-ghost/70">{venueInfo.makerFee}</span>
+                      <span>Latency:</span><span className="text-ghost/70">{venueInfo.latency}</span>
+                      <span>Depth:</span><span className="text-ghost/70">{venueInfo.dataSource}</span>
+                      <span>Funding:</span><span className="text-ghost/70">{venueInfo.fundingType === 'borrow' ? 'Borrow fees (continuous)' : `Funding rates (${venueInfo.fundingType})`}</span>
+                    </div>
+                  </div>
+                )
+              })()}
+              <details className="col-span-2">
+                <summary className="text-[9px] text-ghost/40 cursor-pointer hover:text-ghost/60">
+                  Advanced: Override fee rate manually
+                </summary>
+                <div className="mt-2">
+                  <select value={feePreset} onChange={(e) => setFeePreset(e.target.value)} className={inputClass}>
+                    <optgroup label="Drift Protocol">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'drift').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Hyperliquid">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'hyperliquid').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Binance Futures">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'binance').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="OKX">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'okx').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Bybit">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'bybit').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Jupiter Perps">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'jupiter').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Generic">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'generic').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+              </details>
               <div className="col-span-2 flex items-center gap-4 bg-panel/80 border border-border/50 px-3 py-2">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -1646,8 +1693,8 @@ export default function BacktestLab() {
                 <label className="text-xs text-zinc-400 block mb-1">Venue</label>
                 <select value={deployVenue} onChange={e => setDeployVenue(e.target.value)}
                         className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm">
-                  {['drift', 'hyperliquid', 'binance', 'okx', 'bybit', 'dydx', 'jupiter'].map(v => (
-                    <option key={v} value={v}>{v}</option>
+                  {EXECUTION_VENUES.map(v => (
+                    <option key={v.id} value={v.id}>{v.label}</option>
                   ))}
                 </select>
               </div>
