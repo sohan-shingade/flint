@@ -285,11 +285,13 @@ class DuneBorrowBackfill:
             return []
 
         sql = self._build_query(market, start_ts, end_ts)
+        headers = {"X-Dune-Api-Key": self._api_key}
         try:
-            # Submit query execution
+            # Submit query execution via SQL API
             exec_resp = self._client.post(
-                f"{_DUNE_API}/query/execute",
-                json={"query_sql": sql},
+                f"{_DUNE_API}/sql/execute",
+                headers=headers,
+                json={"sql": sql, "performance": "medium"},
             )
             exec_resp.raise_for_status()
             execution_id = exec_resp.json().get("execution_id", "")
@@ -297,10 +299,11 @@ class DuneBorrowBackfill:
                 logger.warning("Dune: no execution_id in response")
                 return []
 
-            # Poll for results (simple retry — production code should use backoff)
+            # Poll for results
             for _ in range(30):
                 result_resp = self._client.get(
-                    f"{_DUNE_API}/execution/{execution_id}/results"
+                    f"{_DUNE_API}/execution/{execution_id}/results",
+                    headers=headers,
                 )
                 result_resp.raise_for_status()
                 body = result_resp.json()
@@ -321,6 +324,136 @@ class DuneBorrowBackfill:
 
     def close(self) -> None:
         """Release the underlying HTTP client if we own it."""
+        if self._owns_client:
+            self._client.close()
+
+
+# ---------------------------------------------------------------------------
+# Class 2b: DuneVolumeBackfill — historical Jupiter Perps volume via Dune
+# ---------------------------------------------------------------------------
+
+class DuneVolumeBackfill:
+    """Queries Dune Analytics for hourly Jupiter Perps trade volume.
+
+    Returns Candle objects with volume data (OHLC set to 0 — volume-only).
+    Store with ``venue="jupiter"`` alongside CEX volume venues.
+
+    Requires a Dune API key (free tier: 1000 credits / month).
+    """
+
+    def __init__(self, api_key: str, client: Optional[httpx.Client] = None) -> None:
+        self._api_key = api_key
+        self._client = client or httpx.Client(
+            timeout=120,
+            headers={"X-Dune-API-Key": api_key} if api_key else {},
+        )
+        self._owns_client = client is None
+
+    def is_available(self) -> bool:
+        return bool(self._api_key)
+
+    def _build_query(self, market: str, start_ts: int, end_ts: int) -> str:
+        custody_name = _MARKET_CUSTODY_NAMES.get(market, market.replace("-PERP", ""))
+        # jupiter_perps.trades has: block_time, market, side, size_usd, price, etc.
+        # Group by hour to get hourly volume
+        return (
+            f"SELECT "
+            f"  '{market}' AS market, "
+            f"  date_trunc('hour', block_time) AS hour, "
+            f"  SUM(size_usd) AS volume_usd, "
+            f"  COUNT(*) AS trade_count, "
+            f"  MIN(price) AS low_price, "
+            f"  MAX(price) AS high_price, "
+            f"  (array_agg(price ORDER BY block_time ASC))[1] AS open_price, "
+            f"  (array_agg(price ORDER BY block_time DESC))[1] AS close_price "
+            f"FROM jupiter_perps.trades "
+            f"WHERE market = '{custody_name}' "
+            f"  AND block_time >= from_unixtime({start_ts}) "
+            f"  AND block_time <= from_unixtime({end_ts}) "
+            f"GROUP BY 1, 2 "
+            f"ORDER BY 2 ASC"
+        )
+
+    def fetch(self, market: str, start_ts: int, end_ts: int) -> list:
+        """Execute Dune query and return Candle objects with Jupiter volume.
+
+        Returns list of Candle objects with venue="jupiter".
+        OHLC prices are from Jupiter's own trade data (may differ from oracle).
+        """
+        from ..models import Candle
+
+        if not self.is_available():
+            logger.warning("DuneVolumeBackfill: no API key configured")
+            return []
+
+        sql = self._build_query(market, start_ts, end_ts)
+        headers = {"X-Dune-Api-Key": self._api_key}
+        try:
+            exec_resp = self._client.post(
+                f"{_DUNE_API}/sql/execute",
+                headers=headers,
+                json={"sql": sql, "performance": "medium"},
+            )
+            exec_resp.raise_for_status()
+            execution_id = exec_resp.json().get("execution_id", "")
+            if not execution_id:
+                return []
+
+            for _ in range(30):
+                result_resp = self._client.get(
+                    f"{_DUNE_API}/execution/{execution_id}/results",
+                    headers=headers,
+                )
+                result_resp.raise_for_status()
+                body = result_resp.json()
+                state = body.get("state", "")
+                if state == "QUERY_STATE_COMPLETED":
+                    return self._parse_volume(body, market)
+                if state in ("QUERY_STATE_FAILED", "QUERY_STATE_CANCELLED"):
+                    logger.warning("Dune volume query failed: %s", state)
+                    return []
+                time.sleep(2)
+
+            logger.warning("Dune volume query timed out for %s", market)
+            return []
+
+        except Exception as exc:
+            logger.warning("DuneVolumeBackfill.fetch error: %s", exc)
+            return []
+
+    def _parse_volume(self, response: dict, market: str) -> list:
+        from ..models import Candle
+
+        rows = response.get("result", {}).get("rows", [])
+        candles = []
+        for row in rows:
+            try:
+                hour_str = row["hour"]
+                dt = datetime.fromisoformat(hour_str.replace("Z", "+00:00"))
+                ts = int(dt.timestamp())
+
+                volume = float(row.get("volume_usd", 0))
+                open_p = float(row.get("open_price", 0) or 0)
+                high_p = float(row.get("high_price", 0) or 0)
+                low_p = float(row.get("low_price", 0) or 0)
+                close_p = float(row.get("close_price", 0) or 0)
+
+                candles.append(Candle(
+                    ts=ts,
+                    open=open_p,
+                    high=high_p,
+                    low=low_p,
+                    close=close_p,
+                    volume=volume,
+                    market=market,
+                    resolution_s=3600,
+                    venue="jupiter",
+                ))
+            except Exception as exc:
+                logger.warning("Failed to parse Dune volume row: %s", exc)
+        return candles
+
+    def close(self) -> None:
         if self._owns_client:
             self._client.close()
 

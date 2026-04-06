@@ -886,9 +886,10 @@ def download_market_data(request: Request, body: dict):
 
 
 # Venues to download volume from, in priority order.
-# All free, no key needed. Each stores candles under its own venue tag.
+# Each stores candles under its own venue tag.
 _VOLUME_VENUES = [
     ("hyperliquid", "native"),  # native = use HyperliquidCandleProvider directly
+    ("jupiter", "dune"),        # dune = use DuneVolumeBackfill (requires FLINT_DUNE_API_KEY)
     ("okx", "ccxt"),
     ("gate", "ccxt"),
     ("binanceus", "ccxt"),
@@ -922,6 +923,17 @@ def _download_venue_volume(store, market, resolution_s, start_ts, end_ts, logger
                     venue_candles = hl.fetch_candles(market, start_ts, end_ts, resolution=interval)
                 finally:
                     hl._client.close()
+
+            elif provider_type == "dune" and venue_name == "jupiter":
+                import os
+                dune_key = os.environ.get("FLINT_DUNE_API_KEY", "")
+                if dune_key and "-PERP" in market:
+                    from ...providers.jupiter_borrow import DuneVolumeBackfill
+                    dune = DuneVolumeBackfill(dune_key)
+                    try:
+                        venue_candles = dune.fetch(market, start_ts, end_ts)
+                    finally:
+                        dune.close()
 
             elif provider_type == "ccxt":
                 from ...providers.ccxt_provider import CCXTProvider
