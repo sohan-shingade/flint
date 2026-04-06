@@ -48,6 +48,7 @@ def run_monte_carlo(
     initial_capital: float = 10_000.0,
     n_simulations: int = 1000,
     ruin_threshold: float = 0.50,
+    period_seconds: int = 0,
 ) -> MonteCarloResult:
     """Run Monte Carlo analysis by shuffling trade sequence.
 
@@ -59,12 +60,23 @@ def run_monte_carlo(
         initial_capital: Starting capital
         n_simulations: Number of shuffle iterations
         ruin_threshold: Drawdown level considered "ruin" (default 50%)
+        period_seconds: Total backtest period in seconds (used to compute
+            trade frequency for Sharpe annualization). When 0, assumes
+            1 year as fallback.
     """
     if not trade_pnls or len(trade_pnls) < 3:
         return MonteCarloResult(n_simulations=0)
 
     pnls = np.array(trade_pnls)
     n_trades = len(pnls)
+
+    # Compute annualization factor based on trade frequency
+    if period_seconds > 0 and n_trades > 0:
+        period_years = period_seconds / (365.25 * 86400)
+        trades_per_year = n_trades / period_years
+    else:
+        trades_per_year = float(n_trades)  # fallback: assume 1 year
+    annualization = np.sqrt(trades_per_year)
 
     # Run simulations
     sharpes = []
@@ -92,7 +104,7 @@ def run_monte_carlo(
 
         std = float(np.std(returns, ddof=1)) if len(returns) > 1 else 0.0
         if std > 1e-12:
-            sharpe = float(np.mean(returns) / std * np.sqrt(8760))
+            sharpe = float(np.mean(returns) / std * annualization)
         else:
             sharpe = 0.0
         sharpes.append(sharpe)

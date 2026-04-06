@@ -632,7 +632,8 @@ def run_backtest(req: BacktestRequest, request: Request):
             # Run Monte Carlo if enough trades
             if result.total_trades >= 5:
                 trade_pnls = [p.pnl for p in result.positions]
-                mc = run_monte_carlo(trade_pnls, req.initial_capital, n_simulations=500)
+                mc = run_monte_carlo(trade_pnls, req.initial_capital, n_simulations=500,
+                                     period_seconds=req.end_ts - req.start_ts)
                 ts_dict["monte_carlo"] = {
                     "n_simulations": mc.n_simulations,
                     "sharpe_ci": [round(mc.sharpe_ci_lower, 2), round(mc.sharpe_ci_upper, 2)],

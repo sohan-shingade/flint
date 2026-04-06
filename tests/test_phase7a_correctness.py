@@ -5,6 +5,7 @@ import pytest
 
 from flint.api.routes.backtest import _build_strategy, _DEFAULTS
 from flint.api.routes.strategies import list_strategies
+from flint.analytics.monte_carlo import run_monte_carlo
 
 
 class TestStrategyCatalogMatchesBuilders:
@@ -53,3 +54,51 @@ class TestStrategyCatalogMatchesBuilders:
             assert strat is not None, (
                 f"Strategy '{name}' has _DEFAULTS but _build_strategy fails"
             )
+
+
+class TestMonteCarloAnnualization:
+    """Monte Carlo Sharpe CI must use trade frequency, not sqrt(8760)."""
+
+    def test_sharpe_ci_contains_reasonable_range(self):
+        """30 trades over 90 days — Sharpe CI should be within 10x of the mean."""
+        pnls = [100, -50, 80, -30, 120, -60, 90, -40, 110, -70,
+                60, -20, 150, -80, 40, -10, 130, -50, 70, -30]
+        # 30 trades total
+        pnls = pnls + [50, -25, 75, -35, 95, -45, 85, -55, 65, -15]
+        period_90d = 90 * 86400
+        result = run_monte_carlo(pnls, initial_capital=10000,
+                                 n_simulations=500, period_seconds=period_90d)
+        sharpe_mean = result.sharpe_mean
+        # CI should be within 10x of the mean (not 43-46 for a mean of ~6)
+        assert abs(result.sharpe_ci_lower) < abs(sharpe_mean) * 10, (
+            f"CI lower {result.sharpe_ci_lower} is not within 10x of mean {sharpe_mean}"
+        )
+        assert abs(result.sharpe_ci_upper) < abs(sharpe_mean) * 10, (
+            f"CI upper {result.sharpe_ci_upper} is not within 10x of mean {sharpe_mean}"
+        )
+        # And the CI should be sane — not in the 40s
+        assert result.sharpe_ci_upper < 20, (
+            f"Sharpe CI upper {result.sharpe_ci_upper} is unreasonably high"
+        )
+
+    def test_annualization_uses_trade_frequency(self):
+        """Same trades over 1yr vs 1mo should give different Sharpe."""
+        pnls = [100, -50, 80, -30, 120, -60, 90, -40, 110, -70,
+                60, -20, 150, -80, 40, -10, 130, -50, 70, -30]
+        period_1yr = 365 * 86400
+        period_1mo = 30 * 86400
+        result_1yr = run_monte_carlo(pnls, initial_capital=10000,
+                                     n_simulations=200, period_seconds=period_1yr)
+        result_1mo = run_monte_carlo(pnls, initial_capital=10000,
+                                     n_simulations=200, period_seconds=period_1mo)
+        # More trades per year (1mo period) should amplify Sharpe via annualization
+        assert result_1mo.sharpe_mean != result_1yr.sharpe_mean, (
+            "Sharpe should differ when period changes (different trade frequency)"
+        )
+
+    def test_backward_compat_no_period(self):
+        """Calling without period_seconds still works (backward compat)."""
+        pnls = [100, -50, 80, -30, 120, -60, 90, -40, 110, -70]
+        result = run_monte_carlo(pnls, initial_capital=10000, n_simulations=100)
+        assert result.n_simulations == 100
+        assert result.sharpe_mean != 0
