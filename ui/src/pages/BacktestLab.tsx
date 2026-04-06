@@ -284,12 +284,20 @@ export default function BacktestLab() {
         const vData = await vRes.json()
         const volumeVenues = Object.keys(vData.venues || {})
 
+        // Check Jupiter borrow rate data
+        let hasBorrowData = false
+        try {
+          const bRes = await fetch(`/api/v1/data/borrow-rates?market=${encodeURIComponent(market)}`)
+          const bData = await bRes.json()
+          hasBorrowData = (bData.count || 0) > 0
+        } catch {}
+
         const status: Record<string, { has_candles: boolean; has_funding: boolean; has_orderbook: boolean }> = {}
         for (const v of EXECUTION_VENUES) {
           status[v.id] = {
             has_candles: volumeVenues.includes(v.id),
-            has_funding: fundingVenues.includes(v.id),
-            has_orderbook: volumeVenues.includes(v.id), // approximation for now
+            has_funding: v.id === 'jupiter' ? hasBorrowData : fundingVenues.includes(v.id),
+            has_orderbook: volumeVenues.includes(v.id),
           }
         }
         setVenueDataStatus(status)
@@ -1084,7 +1092,9 @@ export default function BacktestLab() {
                         venueDataStatus[venue]?.has_candles || venueDataStatus[venue]?.has_funding
                           ? 'text-green-400' : 'text-amber/60'
                       }`}>
-                        {venueDataStatus[venue]?.has_funding ? 'Funding data available' : 'No venue data — will use synthetic depth'}
+                        {venueDataStatus[venue]?.has_funding
+                          ? (venue === 'jupiter' ? 'Borrow rate data available' : 'Funding data available')
+                          : (venue === 'jupiter' ? 'No borrow rate data — download from Data Explorer' : 'No venue data — will use synthetic depth')}
                       </span>
                     </div>
                   </div>
