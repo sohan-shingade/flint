@@ -404,7 +404,7 @@ class TestFundingEndpoint:
         ]
         store.upsert_venue_funding(snapshots)
 
-        resp = app_client.get("/api/v1/data/funding?market=SOL-PERP")
+        resp = app_client.get("/api/v1/data/funding?market=SOL-PERP&start_ts=1699900000&end_ts=1700100000")
         data = resp.json()
         assert data["count"] == 2
         assert "drift" in data["venues"]
