@@ -36,6 +36,11 @@ from ...strategy import (
     ATRBreakoutStrategy,
     MultiVenueFundingStrategy,
     RSIMACDComboStrategy,
+    FundingMeanReversionStrategy,
+    MomentumBreakoutStrategy,
+    FundingArbStrategy,
+    BasisTradeStrategy,
+    MevArbMonitor,
 )
 from ...strategy.loader import load_user_strategy, StrategyLoadError
 
@@ -196,6 +201,40 @@ def _build_strategy(name: str, params: Dict, code: str = None):
             rsi_oversold=float(p.get("rsi_oversold", 30)),
             rsi_overbought=float(p.get("rsi_overbought", 70)),
         ),
+        "funding_mean_reversion": lambda p: FundingMeanReversionStrategy(
+            bb_lookback=int(p.get("bb_lookback", 24)),
+            bb_std=float(p.get("bb_std", 2.0)),
+            max_hold_hours=int(p.get("max_hold_hours", 12)),
+            position_size_pct=float(p.get("position_size_pct", 0.5)),
+            candle_resolution_s=int(p.get("candle_resolution_s", 3600)),
+        ),
+        "momentum_breakout": lambda p: MomentumBreakoutStrategy(
+            breakout_lookback=int(p.get("breakout_lookback", 20)),
+            trailing_stop_pct=float(p.get("trailing_stop_pct", 0.02)),
+            oracle_confirmation=int(p.get("oracle_confirmation", 1)),
+            candle_resolution_s=int(p.get("candle_resolution_s", 3600)),
+        ),
+        "funding_arb": lambda p: FundingArbStrategy(
+            min_spread_bps=float(p.get("min_spread_bps", 5.0)),
+            exit_spread_bps=float(p.get("exit_spread_bps", 1.0)),
+            max_hold_hours=int(p.get("max_hold_hours", 24)),
+            position_size_usd=float(p.get("position_size_usd", 1000.0)),
+            min_spread_duration=int(p.get("min_spread_duration", 1)),
+            candle_resolution_s=int(p.get("candle_resolution_s", 60)),
+        ),
+        "basis_trade": lambda p: BasisTradeStrategy(
+            entry_basis_bps=float(p.get("entry_basis_bps", 30.0)),
+            exit_basis_bps=float(p.get("exit_basis_bps", 5.0)),
+            max_hold_hours=int(p.get("max_hold_hours", 12)),
+            position_size_usd=float(p.get("position_size_usd", 1000.0)),
+            candle_resolution_s=int(p.get("candle_resolution_s", 3600)),
+        ),
+        "mev_arb_monitor": lambda p: MevArbMonitor(
+            min_profit_bps=float(p.get("min_profit_bps", 10.0)),
+            max_hops=int(p.get("max_hops", 3)),
+            alert_enabled=int(p.get("alert_enabled", 0)),
+            candle_resolution_s=int(p.get("candle_resolution_s", 60)),
+        ),
     }
     builder = builders.get(name)
     return builder(params) if builder else None
@@ -217,6 +256,11 @@ _DEFAULTS = {
     "atr_breakout": {"period": 20, "atr_period": 14, "multiplier": 2.0},
     "multi_venue_funding": {"entry_threshold": 0.00003, "exit_threshold": 0.000005, "lookback": 12},
     "rsi_macd_combo": {"rsi_period": 14, "macd_fast": 12, "macd_slow": 26, "macd_signal": 9, "rsi_oversold": 30, "rsi_overbought": 70},
+    "funding_mean_reversion": {"bb_lookback": 24, "bb_std": 2.0, "max_hold_hours": 12, "position_size_pct": 0.5, "candle_resolution_s": 3600},
+    "momentum_breakout": {"breakout_lookback": 20, "trailing_stop_pct": 0.02, "oracle_confirmation": 1, "candle_resolution_s": 3600},
+    "funding_arb": {"min_spread_bps": 5.0, "exit_spread_bps": 1.0, "max_hold_hours": 24, "position_size_usd": 1000.0, "min_spread_duration": 1, "candle_resolution_s": 60},
+    "basis_trade": {"entry_basis_bps": 30.0, "exit_basis_bps": 5.0, "max_hold_hours": 12, "position_size_usd": 1000.0, "candle_resolution_s": 3600},
+    "mev_arb_monitor": {"min_profit_bps": 10.0, "max_hops": 3, "alert_enabled": 0, "candle_resolution_s": 60},
 }
 
 
