@@ -50,6 +50,37 @@ def get_ohlcv(
         return {"market": market, "resolution_s": resolution_s, "count": 0, "candles": [], "error": str(e)}
 
 
+@router.get("/volume")
+def get_volume(
+    request: Request,
+    market: str = Query("SOL-PERP"),
+    resolution_s: int = Query(3600),
+    start_ts: Optional[int] = Query(None),
+    end_ts: Optional[int] = Query(None),
+):
+    """Get per-venue volume data for a market."""
+    store = _get_store(request)
+    if store is None:
+        return {"market": market, "venues": {}, "count": 0}
+    try:
+        # Get all venues that have candle data for this market (exclude pyth — no volume)
+        result: Dict[str, list] = {}
+        with store._lock:
+            venues_rows = store._conn.execute(
+                "SELECT DISTINCT venue FROM candles WHERE market = ? AND venue != 'pyth'",
+                [market]
+            ).fetchall()
+
+        for (venue_name,) in venues_rows:
+            candles = store.query_candles(market, resolution_s, start_ts, end_ts, venue=venue_name)
+            result[venue_name] = [{"ts": c.ts, "volume": c.volume} for c in candles]
+
+        total = sum(len(v) for v in result.values())
+        return {"market": market, "venues": result, "count": total}
+    except Exception as e:
+        return {"market": market, "venues": {}, "count": 0, "error": str(e)}
+
+
 @router.get("/funding")
 def get_funding(
     request: Request,
@@ -620,6 +651,19 @@ def download_market_data(request: Request, body: dict):
                 errors.append(err)
                 download_warnings.append(f"Candle download ({source}): {err}")
 
+        # Download venue candles for volume data
+        venue_candle_count = 0
+        for ev in (execution_venues or []):
+            if ev in ("jupiter",):  # Jupiter has no candle provider
+                continue
+            try:
+                venue_candles, _ = _download_range_for_venue(market, resolution_s, start_ts, end_ts, ev, logger)
+                if venue_candles:
+                    store.upsert_candles(venue_candles)
+                    venue_candle_count += len(venue_candles)
+            except Exception as e:
+                download_warnings.append(f"{ev} volume: {e}")
+
         # Re-count total
         final_count = len(store.query_candles(market, resolution_s, start_ts, end_ts))
 
@@ -670,6 +714,7 @@ def download_market_data(request: Request, body: dict):
             "existing": existing_count,
             "total": final_count,
             "funding_fetched": funding_fetched,
+            "venue_candle_count": venue_candle_count,
             "source": source,
             "warnings": download_warnings,
         }

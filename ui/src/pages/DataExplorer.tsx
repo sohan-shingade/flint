@@ -109,7 +109,8 @@ export default function DataExplorer() {
   const [bbPeriod, setBbPeriod] = useState(20)
   const [showRSI, setShowRSI] = useState(false)
   const [rsiPeriod, setRsiPeriod] = useState(14)
-  const [showVolume, setShowVolume] = useState(false)
+  const [showVolume, setShowVolume] = useState(true)
+  const [venueVolume, setVenueVolume] = useState<Record<string, {ts: number, volume: number}[]>>({})
   const [showFunding, setShowFunding] = useState(false)
 
   const refreshInventory = useCallback(() => {
@@ -205,6 +206,24 @@ export default function DataExplorer() {
       } catch { setFundingByVenue({}) }
     } else {
       setFundingByVenue({})
+    }
+
+    // Fetch per-venue volume data
+    if (loaded.length > 0) {
+      try {
+        const candleStart = loaded[0].ts
+        const candleEnd = loaded[loaded.length - 1].ts
+        const vParams = new URLSearchParams({
+          market, resolution_s: String(resolution),
+          start_ts: String(candleStart),
+          end_ts: String(candleEnd),
+        })
+        const vr = await fetch(`/api/v1/data/volume?${vParams}`)
+        const vd = await vr.json()
+        setVenueVolume(vd.venues || {})
+      } catch { setVenueVolume({}) }
+    } else {
+      setVenueVolume({})
     }
 
     if (loaded.length > 0) {
@@ -746,6 +765,64 @@ export default function DataExplorer() {
             indicators={chartIndicators}
             fundingRates={chartFundingRates}
           />
+
+          {/* Per-Venue Volume */}
+          {Object.keys(venueVolume).length > 0 && showVolume && (() => {
+            // Pre-compute max total volume across all bars once
+            const maxVol = Math.max(...candles.map(cc => {
+              let sum = 0
+              for (const data of Object.values(venueVolume)) {
+                const m = data.find(d => d.ts === cc.ts)
+                if (m) sum += m.volume
+              }
+              return sum
+            }), 1)
+
+            return (
+              <div className="mt-2 border border-border bg-surface/60 px-3 py-2">
+                <div className="text-[9px] text-ghost/40 tracking-[0.15em] mb-1">VOLUME BY VENUE</div>
+                <div className="flex items-end gap-[1px] h-16 border-b border-border/30">
+                  {candles.map((c) => {
+                    const venueVols: {venue: string, vol: number, color: string}[] = []
+                    for (const [venue, data] of Object.entries(venueVolume)) {
+                      const match = data.find(d => d.ts === c.ts)
+                      if (match && match.volume > 0) {
+                        const color = EXECUTION_VENUES.find(v => v.id === venue)?.color || '#666'
+                        venueVols.push({ venue, vol: match.volume, color })
+                      }
+                    }
+
+                    return (
+                      <div key={c.ts} className="flex-1 flex flex-col justify-end" style={{ height: '100%' }}>
+                        {venueVols.map(({ venue, vol, color }) => (
+                          <div
+                            key={venue}
+                            style={{
+                              height: `${(vol / maxVol) * 100}%`,
+                              backgroundColor: color,
+                              opacity: 0.6,
+                              minHeight: vol > 0 ? '1px' : 0,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="flex gap-3 mt-1">
+                  {Object.keys(venueVolume).map(venue => {
+                    const color = EXECUTION_VENUES.find(v => v.id === venue)?.color || '#666'
+                    return (
+                      <div key={venue} className="flex items-center gap-1 text-[8px] text-ghost/40">
+                        <div className="w-2 h-2" style={{ backgroundColor: color, opacity: 0.6 }} />
+                        {venue}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })()}
 
           {/* stats bar */}
           <div className="mt-4 grid grid-cols-4 gap-3">
