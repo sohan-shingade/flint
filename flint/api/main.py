@@ -45,6 +45,14 @@ async def lifespan(app: FastAPI):
 
         configure_concurrency(config.max_concurrent_backtests)
 
+        from flint.migration import run_pyth_migration
+        try:
+            migration_result = run_pyth_migration(store)
+            if migration_result["markets_migrated"]:
+                logger.info(f"Pyth migration complete: {migration_result}")
+        except Exception as e:
+            logger.warning(f"Pyth migration failed (non-fatal): {e}")
+
         if config.collector_enabled:
             collector_svc = CollectorService(store, config=config)
             app.state.collector = collector_svc
