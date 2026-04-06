@@ -183,3 +183,63 @@ class TestOHLCVLimitReturnsNewest:
         # With start_ts, should return from the start in ascending order (old behavior)
         assert result[0].ts == candles[0].ts
         store.close()
+
+
+class TestBacktestStateManagement:
+    """In-memory backtest state should be atomic and error-safe."""
+
+    def test_eviction_is_atomic(self):
+        """Eviction removes entries completely — no orphan state."""
+        from flint.api.routes import backtest as bt
+
+        # Save originals
+        old_max = bt._MAX_ENTRIES
+        old_entries = bt._entries.copy()
+        bt._MAX_ENTRIES = 5
+        try:
+            for i in range(10):
+                rid = f"evict_test_{i}"
+                with bt._state_lock:
+                    bt._entries[rid] = bt._BacktestEntry(
+                        status="complete",
+                        result={"pnl": i},
+                        progress={"phase": "complete"},
+                    )
+                    bt._evict_old()
+
+            with bt._state_lock:
+                assert len(bt._entries) <= 5
+        finally:
+            bt._MAX_ENTRIES = old_max
+            with bt._state_lock:
+                # Remove test entries, restore originals
+                for i in range(10):
+                    bt._entries.pop(f"evict_test_{i}", None)
+                bt._entries.update(old_entries)
+
+    def test_get_results_returns_json_on_error(self):
+        """get_results must return JSON error, not bare 500."""
+        from flint.api.routes import backtest as bt
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        run_id = "test_error_result"
+        with bt._state_lock:
+            bt._entries[run_id] = bt._BacktestEntry(
+                status="complete",
+                result={"data": object()},  # non-serializable
+                progress={"phase": "complete", "pct": 100},
+            )
+
+        app = FastAPI()
+        app.include_router(bt.router, prefix="/backtest")
+        client = TestClient(app)
+        resp = client.get(f"/backtest/{run_id}/results")
+        # Must return JSON, not bare 500 text
+        assert resp.headers.get("content-type", "").startswith("application/json"), \
+            f"Expected JSON response, got {resp.headers.get('content-type')}"
+        data = resp.json()
+        assert "error" in str(data).lower() or "status" in data
+
+        with bt._state_lock:
+            bt._entries.pop(run_id, None)
