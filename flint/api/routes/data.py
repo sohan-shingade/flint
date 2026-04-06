@@ -555,9 +555,16 @@ def download_market_data(request: Request, body: dict):
     execution_venues = body.get("execution_venues") or body.get("funding_venues")
     venue = body.get("venue", "")  # deprecated — candles always come from Pyth now
 
+    # Convenience: accept 'days' as alternative to start_ts/end_ts
+    days = body.get("days")
+    if days and (not start_ts or not end_ts):
+        import time as _time
+        end_ts = int(_time.time())
+        start_ts = end_ts - int(days) * 86400
+
     if not start_ts or not end_ts or start_ts >= end_ts:
         from fastapi import HTTPException
-        raise HTTPException(400, "Invalid date range — start_ts and end_ts required, start < end")
+        raise HTTPException(400, "Invalid date range — provide days (e.g. 90) or start_ts + end_ts with start < end")
 
     store = _get_store(request)
     if store is None:
