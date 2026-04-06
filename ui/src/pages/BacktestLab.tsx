@@ -1087,15 +1087,22 @@ export default function BacktestLab() {
                       <span>Latency:</span><span className="text-ghost/70">{venueInfo.latency}</span>
                       <span>Depth:</span><span className="text-ghost/70">{venueInfo.dataSource}</span>
                       <span>Funding:</span><span className="text-ghost/70">{venueInfo.fundingType === 'borrow' ? 'Borrow fees (continuous)' : `Funding rates (${venueInfo.fundingType})`}</span>
-                      <span>Data Status:</span>
-                      <span className={`${
-                        venueDataStatus[venue]?.has_candles || venueDataStatus[venue]?.has_funding
-                          ? 'text-green-400' : 'text-amber/60'
-                      }`}>
+                      <span>{venue === 'jupiter' ? 'Borrow Rates:' : 'Funding:'}</span>
+                      <span className={venueDataStatus[venue]?.has_funding ? 'text-green-400' : 'text-amber/60'}>
                         {venueDataStatus[venue]?.has_funding
                           ? (venue === 'jupiter' ? 'Borrow rate data available' : 'Funding data available')
-                          : (venue === 'jupiter' ? 'No borrow rate data — download from Data Explorer' : 'No venue data — will use synthetic depth')}
+                          : (venue === 'jupiter' ? 'No data — set FLINT_DUNE_API_KEY to backfill' : 'No data — download from Data Explorer')}
                       </span>
+                      {venue !== 'jupiter' && (
+                        <>
+                          <span>Orderbook:</span>
+                          <span className={venueDataStatus[venue]?.has_orderbook ? 'text-green-400' : 'text-ghost/50'}>
+                            {venueDataStatus[venue]?.has_orderbook
+                              ? 'Real orderbook data'
+                              : (venueInfo.type === 'cex' ? 'Synthetic depth (set FLINT_TARDIS_API_KEY for real data)' : 'Synthetic depth')}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 )
