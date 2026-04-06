@@ -653,6 +653,124 @@ class RpcBorrowBackfill:
 
 
 # ---------------------------------------------------------------------------
+# Class 4: HeliusJupiterVolume — historical volume via Helius Enhanced Txs
+# ---------------------------------------------------------------------------
+
+class HeliusJupiterVolume:
+    """Fetches Jupiter Perps historical volume by summing USDC token transfers
+    from Enhanced Transaction data via Helius API.
+
+    This is a proxy for actual trade volume — it sums USDC collateral
+    movements to/from the Jupiter Perps program. Not exact (doesn't account
+    for leverage) but directionally accurate for relative volume comparison.
+
+    Requires: HELIUS_API_KEY in .env
+    """
+
+    USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    PERPS_PROGRAM = "PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu"
+
+    # Jupiter Perps custody accounts — transfers to/from these = trades
+    _CUSTODY_ACCOUNTS = {
+        "7xS2gz2bTp3fwCC7knpjKGZZ9xQzCDdMaDEGKR8RkYFz": "SOL-PERP",
+        "4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8": "ETH-PERP",
+        "AQCGyheWPLeo6Qp9WpYS9m3Simy7T1K7yCFbOHMXjjQY": "BTC-PERP",
+    }
+
+    def __init__(self, api_key: str, client: Optional[httpx.Client] = None) -> None:
+        self._api_key = api_key
+        self._client = client or httpx.Client(timeout=30)
+        self._owns_client = client is None
+        self._base = f"https://api-mainnet.helius-rpc.com/v0"
+
+    def is_available(self) -> bool:
+        return bool(self._api_key)
+
+    def fetch_hourly_volume(self, market: str, start_ts: int, end_ts: int) -> list:
+        """Fetch hourly volume for a Jupiter Perps market.
+
+        Returns list of Candle objects with venue="jupiter" and volume in USD.
+        OHLC prices are set to 0 (volume-only data).
+        """
+        from ..models import Candle
+
+        if not self.is_available():
+            logger.warning("HeliusJupiterVolume: no API key configured")
+            return []
+
+        # Paginate through transactions for this program
+        url = f"{self._base}/addresses/{self.PERPS_PROGRAM}/transactions"
+        hourly_volume: dict = {}  # hour_ts -> volume_usd
+        last_sig = None
+        total_txs = 0
+        max_pages = 100  # safety limit
+
+        for page in range(max_pages):
+            params = {"api-key": self._api_key, "limit": 100}
+            if last_sig:
+                params["before"] = last_sig
+
+            try:
+                resp = self._client.get(url, params=params)
+                if resp.status_code != 200:
+                    logger.warning("Helius API returned %d", resp.status_code)
+                    break
+                txs = resp.json()
+                if not txs:
+                    break
+            except Exception as e:
+                logger.warning("Helius fetch error: %s", e)
+                break
+
+            for tx in txs:
+                ts = tx.get("timestamp", 0)
+                if ts < start_ts:
+                    # Past our range, stop paginating
+                    return self._to_candles(hourly_volume, market)
+                if ts > end_ts:
+                    continue
+
+                # Sum USDC transfers as volume proxy
+                vol = 0.0
+                for tt in tx.get("tokenTransfers", []):
+                    if tt.get("mint") == self.USDC_MINT:
+                        vol += abs(float(tt.get("tokenAmount", 0)))
+
+                if vol > 0:
+                    hour_ts = (ts // 3600) * 3600
+                    hourly_volume[hour_ts] = hourly_volume.get(hour_ts, 0) + vol
+
+            total_txs += len(txs)
+            last_sig = txs[-1].get("signature")
+
+            # Check if we've gone past the start
+            oldest_ts = min(tx.get("timestamp", 0) for tx in txs)
+            if oldest_ts < start_ts:
+                break
+
+            time.sleep(0.1)  # rate limit
+
+        logger.info("HeliusJupiterVolume: processed %d txs, %d hourly buckets for %s",
+                    total_txs, len(hourly_volume), market)
+        return self._to_candles(hourly_volume, market)
+
+    def _to_candles(self, hourly_volume: dict, market: str) -> list:
+        from ..models import Candle
+        candles = []
+        for ts in sorted(hourly_volume.keys()):
+            candles.append(Candle(
+                ts=ts, open=0, high=0, low=0, close=0,
+                volume=hourly_volume[ts],
+                market=market, resolution_s=3600, venue="jupiter",
+            ))
+        return candles
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+
+# ---------------------------------------------------------------------------
 # Provider registration
 # ---------------------------------------------------------------------------
 

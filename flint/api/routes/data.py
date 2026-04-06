@@ -926,14 +926,25 @@ def _download_venue_volume(store, market, resolution_s, start_ts, end_ts, logger
 
             elif provider_type == "dune" and venue_name == "jupiter":
                 import os
-                dune_key = os.environ.get("FLINT_DUNE_API_KEY", "")
-                if dune_key and "-PERP" in market:
-                    from ...providers.jupiter_borrow import DuneVolumeBackfill
-                    dune = DuneVolumeBackfill(dune_key)
+                # Try Helius first (faster, more reliable), fall back to Dune
+                helius_key = os.environ.get("HELIUS_API_KEY", "")
+                if helius_key and "-PERP" in market:
+                    from ...providers.jupiter_borrow import HeliusJupiterVolume
+                    hv = HeliusJupiterVolume(helius_key)
                     try:
-                        venue_candles = dune.fetch(market, start_ts, end_ts)
+                        venue_candles = hv.fetch_hourly_volume(market, start_ts, end_ts)
                     finally:
-                        dune.close()
+                        hv.close()
+                elif not helius_key:
+                    # Fall back to Dune if available
+                    dune_key = os.environ.get("FLINT_DUNE_API_KEY", "")
+                    if dune_key and "-PERP" in market:
+                        from ...providers.jupiter_borrow import DuneVolumeBackfill
+                        dune = DuneVolumeBackfill(dune_key)
+                        try:
+                            venue_candles = dune.fetch(market, start_ts, end_ts)
+                        finally:
+                            dune.close()
 
             elif provider_type == "ccxt":
                 from ...providers.ccxt_provider import CCXTProvider
