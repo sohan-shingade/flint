@@ -239,7 +239,7 @@ def run_optimization(req: OptimizeRequest, request: Request):
                 mm_metric_key = f"best_{req.multi_market_objective.replace('_ratio', '').replace('total_', '')}"
                 mm_result_dict[mm_metric_key] = round(best.value, 4)
                 _set(run_id, status="complete", progress={
-                    "phase": "done", "pct": 100,
+                    "phase": "complete", "pct": 100,
                     "detail": f"Best {req.multi_market_objective}: {best.value:.4f}",
                 }, result=mm_result_dict)
                 return
@@ -300,7 +300,7 @@ def run_optimization(req: OptimizeRequest, request: Request):
             result_dict[metric_key] = best_val
 
             _set(run_id, status="complete", progress={
-                "phase": "done", "pct": 100,
+                "phase": "complete", "pct": 100,
                 "detail": f"Best {req.metric}: {best_val}",
             }, result=result_dict)
 
@@ -369,7 +369,7 @@ def run_walk_forward_analysis(req: WalkForwardRequest, request: Request):
                     "out_of_sample_trades": w.out_of_sample_trades,
                 })
 
-            _set(run_id, status="complete", progress={"phase": "done", "pct": 100,
+            _set(run_id, status="complete", progress={"phase": "complete", "pct": 100,
                  "detail": f"OOS Sharpe: {wf_result.avg_oos_sharpe:.2f}, Overfit ratio: {wf_result.overfitting_ratio:.2f}"
             }, result={
                 "strategy_name": wf_result.strategy_name,

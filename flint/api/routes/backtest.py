@@ -629,7 +629,7 @@ def run_backtest(req: BacktestRequest, request: Request):
                 all_candles=tearsheet_candles,
             )
 
-            _set_progress(run_id, phase="done", pct=100,
+            _set_progress(run_id, phase="complete", pct=100,
                           detail=f"Complete — {result.total_trades} trades, PnL ${result.total_pnl:+,.2f}")
 
             # Embed data quality and Monte Carlo into tearsheet
