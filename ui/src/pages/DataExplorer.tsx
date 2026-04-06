@@ -109,7 +109,7 @@ export default function DataExplorer() {
   const [bbPeriod, setBbPeriod] = useState(20)
   const [showRSI, setShowRSI] = useState(false)
   const [rsiPeriod, setRsiPeriod] = useState(14)
-  const [showVolume, setShowVolume] = useState(true)
+  const [showVolume, setShowVolume] = useState(false)
   const [showFunding, setShowFunding] = useState(false)
 
   const refreshInventory = useCallback(() => {
@@ -281,7 +281,8 @@ export default function DataExplorer() {
         progress[i].status = 'no data found'
       } else {
         const fundingInfo = totalFunding > 0 ? ` + ${totalFunding} funding` : ''
-        progress[i].status = `${totalCandles.toLocaleString()} candles${fundingInfo}`
+        const venueList = selectedExecutionVenues.map(v => v.charAt(0).toUpperCase() + v.slice(1)).join(', ')
+        progress[i].status = `${totalCandles.toLocaleString()} candles${fundingInfo} — venues: ${venueList}`
       }
       setDownloadProgress([...progress])
     }
