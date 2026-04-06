@@ -657,7 +657,7 @@ def download_market_data(request: Request, body: dict):
             volume_merged = 0
             zero_vol_count = sum(1 for c in existing if c.volume == 0)
             if zero_vol_count > len(existing) * 0.1:  # >10% missing volume
-                volume_merged = _merge_volume_from_cex(
+                volume_merged = _download_venue_volume(
                     store, market, resolution_s, start_ts, end_ts, logger, download_warnings
                 )
 
@@ -725,7 +725,7 @@ def download_market_data(request: Request, body: dict):
                 download_warnings.append(f"Candle download ({source}): {err}")
 
         # Merge volume from Hyperliquid into Pyth candles (Pyth has price-only, volume=0)
-        venue_candle_count = _merge_volume_from_cex(
+        venue_candle_count = _download_venue_volume(
             store, market, resolution_s, start_ts, end_ts, logger, download_warnings
         )
 
@@ -854,88 +854,105 @@ def download_market_data(request: Request, body: dict):
         }
 
 
-def _fetch_ccxt_volume(market: str, resolution_s: int, start_ts: int, end_ts: int,
-                       exchange_name: str, logger) -> dict:
-    """Fetch volume from any CCXT exchange. Returns {ts: volume} dict."""
-    try:
-        from ...providers.ccxt_provider import CCXTProvider
-        provider = CCXTProvider(exchange=exchange_name)
-        try:
-            candles = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
-            return {c.ts: c.volume for c in candles if c.volume > 0}
-        finally:
-            provider.close()
-    except Exception as e:
-        logger.debug("CCXT %s volume fetch failed for %s: %s", exchange_name, market, e)
-        return {}
+# Venues to download volume from, in priority order.
+# All free, no key needed. Each stores candles under its own venue tag.
+_VOLUME_VENUES = [
+    ("hyperliquid", "native"),  # native = use HyperliquidCandleProvider directly
+    ("okx", "ccxt"),
+    ("gate", "ccxt"),
+    ("binanceus", "ccxt"),
+]
 
 
-# Exchanges to try for volume data, in priority order.
-# All free, no key needed. Ordered by: liquidity, reliability, geo-availability.
-_VOLUME_EXCHANGES = ["okx", "gate", "binanceus"]
+def _download_venue_volume(store, market, resolution_s, start_ts, end_ts, logger, warnings):
+    """Download candles from multiple venues and store per-venue.
 
+    Like funding rates, volume is stored per-venue so you can compare
+    Drift vs Hyperliquid vs OKX volume. Also merges the best available
+    volume into zero-volume Pyth candles.
 
-def _merge_volume_from_cex(store, market, resolution_s, start_ts, end_ts, logger, warnings):
-    """Fetch volume from CEXes via CCXT and merge into zero-volume Pyth candles.
-
-    Waterfall: Hyperliquid (DeFi, recent ~7mo) → OKX → Gate.io → Binance US.
-    Each exchange only fetches timestamps the previous ones didn't cover.
+    Returns total number of venue candles stored.
     """
-    vol_by_ts: dict = {}
-
-    # 1. Hyperliquid — recent data, best for DeFi-native volume
-    try:
-        from ...providers.hyperliquid_candles import HyperliquidCandleProvider, _FLINT_TO_HL
-        if market in _FLINT_TO_HL:
-            hl = HyperliquidCandleProvider()
-            try:
-                interval_map = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d"}
-                interval = interval_map.get(resolution_s, "1h")
-                hl_candles = hl.fetch_candles(market, start_ts, end_ts, resolution=interval)
-                for c in hl_candles:
-                    if c.volume > 0:
-                        vol_by_ts[c.ts] = c.volume
-                if vol_by_ts:
-                    logger.info("Hyperliquid: %d volume values for %s", len(vol_by_ts), market)
-            finally:
-                hl._client.close()
-    except Exception as e:
-        logger.debug("Hyperliquid volume fetch failed: %s", e)
-
-    # 2. CCXT exchanges — backfill timestamps Hyperliquid missed
-    all_candles = store.query_candles(market, resolution_s, start_ts, end_ts)
-    for exchange_name in _VOLUME_EXCHANGES:
-        missing_ts = [c.ts for c in all_candles if c.volume == 0 and c.ts not in vol_by_ts]
-        if not missing_ts:
-            break  # all covered
-        gap_start = min(missing_ts)
-        gap_end = max(missing_ts)
-        try:
-            cex_vol = _fetch_ccxt_volume(market, resolution_s, gap_start, gap_end, exchange_name, logger)
-            if cex_vol:
-                vol_by_ts.update(cex_vol)
-                logger.info("CCXT/%s: %d volume values for %s", exchange_name, len(cex_vol), market)
-        except Exception as e:
-            logger.debug("CCXT/%s volume failed: %s", exchange_name, e)
-
-    if not vol_by_ts:
-        return 0
-
-    # 3. Merge into zero-volume candles
     from ...models import Candle as CandleModel
-    updated = []
-    for c in all_candles:
-        vol = vol_by_ts.get(c.ts, 0)
-        if vol > 0 and c.volume == 0:
-            updated.append(CandleModel(
-                ts=c.ts, open=c.open, high=c.high, low=c.low,
-                close=c.close, volume=vol, market=c.market,
-                resolution_s=c.resolution_s, venue=c.venue,
-            ))
-    if updated:
-        store.upsert_candles(updated)
-        logger.info("Merged %d total volume values into %s candles", len(updated), market)
-    return len(updated)
+    total_stored = 0
+
+    for venue_name, provider_type in _VOLUME_VENUES:
+        try:
+            venue_candles = []
+
+            if provider_type == "native" and venue_name == "hyperliquid":
+                from ...providers.hyperliquid_candles import HyperliquidCandleProvider, _FLINT_TO_HL
+                if market not in _FLINT_TO_HL:
+                    continue
+                hl = HyperliquidCandleProvider()
+                try:
+                    interval_map = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d"}
+                    interval = interval_map.get(resolution_s, "1h")
+                    venue_candles = hl.fetch_candles(market, start_ts, end_ts, resolution=interval)
+                finally:
+                    hl._client.close()
+
+            elif provider_type == "ccxt":
+                from ...providers.ccxt_provider import CCXTProvider
+                provider = CCXTProvider(exchange=venue_name)
+                try:
+                    venue_candles = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+                finally:
+                    provider.close()
+
+            if venue_candles:
+                # Tag with venue name and store (primary key includes venue)
+                tagged = [
+                    CandleModel(
+                        ts=c.ts, open=c.open, high=c.high, low=c.low,
+                        close=c.close, volume=c.volume, market=c.market,
+                        resolution_s=c.resolution_s, venue=venue_name,
+                    )
+                    for c in venue_candles if c.volume > 0
+                ]
+                if tagged:
+                    stored = store.upsert_candles(tagged)
+                    total_stored += stored
+                    logger.info("%s: stored %d candles for %s", venue_name, stored, market)
+
+        except Exception as e:
+            logger.debug("%s volume download failed for %s: %s", venue_name, market, e)
+
+    # Merge best volume into zero-volume Pyth candles
+    # Priority: use highest-volume venue per timestamp
+    pyth_candles = store.query_candles(market, resolution_s, start_ts, end_ts, venue="pyth")
+    if not pyth_candles:
+        # Fall back to default venue
+        pyth_candles = store.query_candles(market, resolution_s, start_ts, end_ts)
+
+    zero_vol = [c for c in pyth_candles if c.volume == 0]
+    if zero_vol:
+        # Collect volume from all venues
+        vol_by_ts: dict = {}  # ts → (volume, venue)
+        for venue_name, _ in _VOLUME_VENUES:
+            venue_data = store.query_candles(market, resolution_s, start_ts, end_ts, venue=venue_name)
+            for c in venue_data:
+                if c.volume > 0:
+                    existing = vol_by_ts.get(c.ts)
+                    if existing is None or c.volume > existing[0]:
+                        vol_by_ts[c.ts] = (c.volume, venue_name)
+
+        updated = []
+        for c in zero_vol:
+            entry = vol_by_ts.get(c.ts)
+            if entry:
+                vol, _ = entry
+                updated.append(CandleModel(
+                    ts=c.ts, open=c.open, high=c.high, low=c.low,
+                    close=c.close, volume=vol, market=c.market,
+                    resolution_s=c.resolution_s, venue=c.venue,
+                ))
+        if updated:
+            store.upsert_candles(updated)
+            logger.info("Merged volume into %d Pyth candles for %s", len(updated), market)
+            total_stored += len(updated)
+
+    return total_stored
 
 
 def _download_pyth_candles(market: str, resolution_s: int, start_ts: int, end_ts: int):
