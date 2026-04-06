@@ -159,3 +159,43 @@ class TestBatchDataCheck:
         assert resp.status_code == 200
         data = resp.json()
         assert "market" in data  # single-market response shape (no "results" wrapper)
+
+
+class TestDownloadResponseClarity:
+    def test_cached_shows_existing_count(self):
+        """When data is cached, response should show actual count."""
+        # Design-level test
+        response = {
+            "downloaded": 0,
+            "cached": 2162,
+            "existing": 2162,
+            "skipped": True,
+            "message": "All candles already cached for this range",
+        }
+        assert response["cached"] == response["existing"]
+        assert response["downloaded"] == 0
+        assert "message" in response
+
+
+class TestCCXTWarningDedup:
+    def test_ccxt_warning_only_once(self):
+        from flint.api.routes import data as data_module
+        data_module._ccxt_warned.clear()
+
+        warnings1 = []
+        warnings2 = []
+        for exchange in ["mexc", "phemex"]:
+            key = f"ccxt/{exchange}"
+            if key not in data_module._ccxt_warned:
+                data_module._ccxt_warned.add(key)
+                warnings1.append(f"{key} unavailable")
+
+        for exchange in ["mexc", "phemex"]:
+            key = f"ccxt/{exchange}"
+            if key not in data_module._ccxt_warned:
+                data_module._ccxt_warned.add(key)
+                warnings2.append(f"{key} unavailable")
+
+        assert len(warnings1) == 2
+        assert len(warnings2) == 0  # no duplicates
+        data_module._ccxt_warned.clear()

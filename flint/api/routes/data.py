@@ -13,6 +13,8 @@ from ...analytics.correlation import compute_correlation_matrix
 
 router = APIRouter()
 
+_ccxt_warned: set = set()
+
 
 def _get_store(request: Request) -> Optional[FlintStore]:
     """Get the shared store from app state. Never create a new one."""
@@ -668,12 +670,13 @@ def download_market_data(request: Request, body: dict):
                 "market": market,
                 "resolution_s": resolution_s,
                 "downloaded": 0,
-                "cached": 0,
+                "cached": existing_count,
                 "existing": existing_count,
                 "total": existing_count,
                 "funding_fetched": funding_fetched,
                 "source": "local",
                 "skipped": True,
+                "message": "All candles already cached for this range",
                 "warnings": download_warnings,
             }
 
@@ -1414,7 +1417,10 @@ def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int,
         except Exception as e:
             logger.warning("ccxt/%s funding failed for %s: %s", exchange, market, e)
             if warnings is not None:
-                warnings.append(f"ccxt/{exchange} funding unavailable: {e}")
+                warn_key = f"ccxt/{exchange}"
+                if warn_key not in _ccxt_warned:
+                    _ccxt_warned.add(warn_key)
+                    warnings.append(f"ccxt/{exchange} funding unavailable: {e}")
 
     # Also fetch per-venue open interest alongside funding
     OI_VENUES = {"binance", "okx", "bybit", "hyperliquid"}
