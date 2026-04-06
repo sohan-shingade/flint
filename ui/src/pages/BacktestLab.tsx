@@ -304,6 +304,11 @@ export default function BacktestLab() {
       } catch { /* ignore — data status is advisory */ }
     }
     if (market) checkVenueData()
+
+    // Re-check when page becomes visible (user returns from Data Explorer after downloading)
+    const onFocus = () => { if (market) checkVenueData() }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
   }, [market, availableMarkets])
 
   // Auto-set venue when strategy profile changes
@@ -1091,7 +1096,7 @@ export default function BacktestLab() {
                       <span className={venueDataStatus[venue]?.has_funding ? 'text-green-400' : 'text-amber/60'}>
                         {venueDataStatus[venue]?.has_funding
                           ? (venue === 'jupiter' ? 'Borrow rate data available' : 'Funding data available')
-                          : (venue === 'jupiter' ? 'No data — set FLINT_DUNE_API_KEY to backfill' : 'No data — download from Data Explorer')}
+                          : (venue === 'jupiter' ? 'No data — download with Jupiter selected in Data Explorer' : 'No data — download from Data Explorer')}
                       </span>
                       {venue !== 'jupiter' && (
                         <>
