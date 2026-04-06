@@ -35,6 +35,34 @@ data_app.add_typer(provider_app, name="provider")
 
 console = Console()
 
+from flint.providers.pyth_candles import PythCandleProvider  # noqa: E402
+from flint.providers.drift_candles import DriftCandleProvider  # noqa: E402
+
+
+def _download_init_candles(market: str, resolution_s: int, start_ts: int, end_ts: int) -> list:
+    """Download candles for init using Pyth as primary source."""
+    provider = PythCandleProvider()
+    try:
+        candles = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+        if candles:
+            return candles
+    except Exception:
+        pass
+    finally:
+        provider.close()
+
+    # Fallback to Drift if Pyth fails
+    try:
+        drift = DriftCandleProvider()
+        try:
+            return drift.fetch_candles(market, resolution_s, start_ts, end_ts)
+        except Exception:
+            return []
+        finally:
+            drift.close()
+    except ImportError:
+        return []
+
 
 def _load_strategy_from_file(path: str, params: Optional[dict] = None):
     """Load a Strategy from a .py file."""
@@ -130,50 +158,28 @@ def init(
     strat_dir.mkdir(parents=True, exist_ok=True)
     console.print("  [green]✓[/green] Strategies directory ready")
 
-    # 4. Backfill data — try Drift Data API first, fall back to S3
+    # 4. Backfill data — try Pyth first, fall back to Drift
     console.print(f"\n  Backfilling {days} days of {market} data...")
     from flint.store import FlintStore
-    from flint.providers.drift_candles import DriftCandleProvider
-    from flint.providers.drift_s3 import DriftS3Provider
 
     store = FlintStore("./data/flint.duckdb")
 
     end_ts = int(time.time())
     start_ts = end_ts - days * 86400
 
-    candles = []
-    with console.status(f"[bold yellow]Fetching {market} from Drift Data API...[/bold yellow]"):
-        try:
-            api_provider = DriftCandleProvider()
-            candles = api_provider.fetch_candles(market, 3600, start_ts, end_ts)
-            api_provider.close()
-            if candles:
-                console.print(f"  [green]✓[/green] Got {len(candles):,} candles from Drift API")
-        except Exception as e:
-            console.print(f"  [dim]API unavailable: {e}[/dim]")
+    with console.status(f"[bold yellow]Fetching {market} candles...[/bold yellow]"):
+        candles = _download_init_candles(market, 3600, start_ts, end_ts)
 
-    # Fall back to S3 if API returned nothing
-    if not candles:
-        console.print("  [dim]Trying Drift S3 archive...[/dim]")
-        try:
-            s3_provider = DriftS3Provider()
-            candles = s3_provider.fetch_candles(market, 3600, start_ts, end_ts)
-            s3_provider.close()
-        except Exception:
-            pass
-
-    # Last resort: try a known-good date range (2024)
-    if not candles:
+    if candles:
+        console.print(f"  [green]✓[/green] Got {len(candles):,} candles for {market}")
+    else:
+        # Last resort: try a known-good date range (2024)
         console.print("  [yellow]No recent data available — downloading 2024 data instead[/yellow]")
         from datetime import datetime, timezone
         fallback_start = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())
         fallback_end = int(datetime(2024, 12, 31, tzinfo=timezone.utc).timestamp())
-        try:
-            api_provider = DriftCandleProvider()
-            candles = api_provider.fetch_candles(market, 3600, fallback_start, fallback_end)
-            api_provider.close()
-        except Exception:
-            pass
+        with console.status(f"[bold yellow]Fetching {market} 2024 data...[/bold yellow]"):
+            candles = _download_init_candles(market, 3600, fallback_start, fallback_end)
 
     if candles:
         count = store.upsert_candles(candles)
