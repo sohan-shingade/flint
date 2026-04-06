@@ -354,8 +354,9 @@ class DuneVolumeBackfill:
 
     def _build_query(self, market: str, start_ts: int, end_ts: int) -> str:
         custody_name = _MARKET_CUSTODY_NAMES.get(market, market.replace("-PERP", ""))
-        # jupiter_perps.trades has: block_time, market, side, size_usd, price, etc.
-        # Group by hour to get hourly volume
+        # NOTE: jupiter_perps.trades is not yet decoded on Dune as of 2026-04.
+        # This query will fail until the Dune community adds Jupiter Perps decoding.
+        # Alternative: use Helius Enhanced Transactions API for historical trade parsing.
         return (
             f"SELECT "
             f"  '{market}' AS market, "
