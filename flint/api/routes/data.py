@@ -1249,7 +1249,7 @@ def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int,
         return 0
 
     from ...providers.funding_rates import (
-        DriftFundingProvider, HyperliquidFundingProvider,
+        BinanceFundingProvider, DriftFundingProvider, HyperliquidFundingProvider,
         OKXFundingProvider, BybitFundingProvider,
         GateioFundingProvider, BitgetFundingProvider, DydxFundingProvider,
         CCXTFundingProvider, CCXT_FUNDING_EXCHANGES,
@@ -1258,6 +1258,7 @@ def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int,
     native_providers: dict = {
         "drift": DriftFundingProvider,
         "hyperliquid": HyperliquidFundingProvider,
+        "binance": BinanceFundingProvider,
         "okx": OKXFundingProvider,
         "bybit": BybitFundingProvider,
         "gateio": GateioFundingProvider,
