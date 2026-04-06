@@ -39,6 +39,20 @@ class MarginState:
     per_venue: Dict[str, float]  # venue -> margin used
 
 
+@dataclass
+class MarginStats:
+    """Accumulated margin statistics over a backtest."""
+    max_leverage: float = 0.0
+    total_leverage_sum: float = 0.0
+    bars_counted: int = 0
+    margin_calls: int = 0
+    max_utilization_pct: float = 0.0
+
+    @property
+    def avg_leverage(self) -> float:
+        return self.total_leverage_sum / self.bars_counted if self.bars_counted > 0 else 0.0
+
+
 def compute_liquidation_price(
     entry_price: float,
     size: float,
@@ -82,6 +96,7 @@ class MarginEngine:
     ):
         self.configs = venue_configs or VENUE_DEFAULTS
         self._liquidation_events: List[LiquidationEvent] = []
+        self.stats = MarginStats()
 
     def get_config(self, venue: str) -> VenueConfig:
         return self.configs.get(venue, self.configs.get("default", VENUE_DEFAULTS["default"]))
@@ -181,6 +196,7 @@ class MarginEngine:
                 liquidated = True
 
             if liquidated:
+                self.stats.margin_calls += 1
                 # Compute loss at liquidation price
                 if pos.side == Side.LONG:
                     pnl = (liq_price - pos.entry_price) * pos.size
@@ -205,6 +221,16 @@ class MarginEngine:
                 self._liquidation_events.append(event)
 
         return events
+
+    def update_stats(self, positions: List[PositionInfo], cash: float) -> None:
+        """Update accumulated stats. Called once per bar."""
+        state = self.compute_margin_state(cash, positions)
+        self.stats.max_leverage = max(self.stats.max_leverage, state.leverage)
+        self.stats.total_leverage_sum += state.leverage
+        self.stats.bars_counted += 1
+        equity = cash + sum(p.unrealized_pnl for p in positions)
+        utilization = (state.total_margin_used / equity * 100) if equity > 0 else 0
+        self.stats.max_utilization_pct = max(self.stats.max_utilization_pct, utilization)
 
     def compute_margin_state(
         self,
@@ -240,3 +266,4 @@ class MarginEngine:
 
     def reset(self) -> None:
         self._liquidation_events = []
+        self.stats = MarginStats()

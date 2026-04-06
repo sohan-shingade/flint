@@ -225,6 +225,10 @@ class BacktestEngine:
             # 1b. Check liquidations BEFORE anything else
             ctx.check_liquidations(candle)
 
+            # 1c. Update margin stats (leverage, utilization) for this bar
+            if self._margin_engine is not None:
+                self._margin_engine.update_stats(ctx.positions, ctx.account.cash)
+
             # 2. Process pending stop/limit orders BEFORE strategy
             ctx.process_pending_orders(candle)
 
@@ -362,6 +366,7 @@ class BacktestEngine:
             per_venue_funding_income=per_venue_funding,
             jupiter_borrow_paid=ctx.total_borrow_paid,
             borrow_payments=ctx._borrow_payments,
+            margin_stats=self._margin_engine.stats if self._margin_engine else None,
         )
 
 

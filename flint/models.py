@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class Signal(enum.Enum):
@@ -122,6 +122,7 @@ class BacktestResult:
     total_tx_costs: float = 0.0
     jupiter_borrow_paid: float = 0.0
     borrow_payments: List = field(default_factory=list)
+    margin_stats: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------

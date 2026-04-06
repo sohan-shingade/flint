@@ -95,6 +95,39 @@ class TestVolumeWarning:
         assert not any("volume" in w.lower() for w in result.strategy_warnings)
 
 
+class TestMarginTrackingMetrics:
+    def test_margin_stats_dataclass(self):
+        from flint.execution.margin import MarginEngine, MarginStats
+        engine = MarginEngine()
+        assert hasattr(engine, "stats")
+        assert isinstance(engine.stats, MarginStats)
+        assert engine.stats.max_leverage == 0.0
+        assert engine.stats.margin_calls == 0
+        assert engine.stats.avg_leverage == 0.0
+
+    def test_margin_stats_on_backtest_result(self):
+        from flint.models import BacktestResult
+        result = BacktestResult(
+            total_pnl=0, win_rate=0, max_drawdown=0,
+            sharpe_ratio=0, total_trades=0,
+            winning_trades=0, losing_trades=0,
+        )
+        assert hasattr(result, "margin_stats")
+        assert result.margin_stats is None
+
+    def test_update_stats_tracks_leverage(self):
+        from flint.execution.margin import MarginEngine, MarginStats
+        from flint.models import PositionInfo, Side
+        engine = MarginEngine()
+        pos = PositionInfo(
+            market="SOL-PERP", venue="default", side=Side.LONG,
+            size=100, entry_price=100, unrealized_pnl=0,
+        )
+        engine.update_stats([pos], cash=5000)
+        assert engine.stats.max_leverage > 0
+        assert engine.stats.bars_counted == 1
+
+
 class TestRicherOptimizationResults:
     def test_optimization_result_has_study(self):
         from flint.optimization.optimizer import OptimizationResult
