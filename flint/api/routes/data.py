@@ -89,6 +89,11 @@ def get_funding(
     end_ts: Optional[int] = Query(None),
 ):
     """Get funding rates for a market, grouped by venue."""
+    import time as _time
+    if end_ts is None:
+        end_ts = int(_time.time())
+    if start_ts is None:
+        start_ts = end_ts - 30 * 86400
     store = _get_store(request)
     if store is None:
         return {"market": market, "venues": {}, "count": 0}
