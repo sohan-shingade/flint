@@ -43,13 +43,14 @@ CREATE TABLE IF NOT EXISTS oracle_prices (
 
 _CREATE_ORDERBOOK_SNAPSHOTS = """
 CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+    venue      VARCHAR  NOT NULL DEFAULT 'default',
     market     VARCHAR  NOT NULL,
     ts         BIGINT   NOT NULL,
     bid_prices DOUBLE[],
     bid_sizes  DOUBLE[],
     ask_prices DOUBLE[],
     ask_sizes  DOUBLE[],
-    PRIMARY KEY (market, ts)
+    PRIMARY KEY (venue, market, ts)
 );
 """
 
@@ -371,6 +372,40 @@ class FlintStore:
             _logger.debug("Candles migration check: %s", e)
         self._conn.execute(_CREATE_ORACLE_PRICES)
         self._conn.execute(_CREATE_ORDERBOOK_SNAPSHOTS)
+        # Migration: add venue column to orderbook_snapshots if missing (existing DBs)
+        try:
+            cols = {r[0] for r in self._conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='orderbook_snapshots'"
+            ).fetchall()}
+            if cols and "venue" not in cols:
+                self._conn.execute("BEGIN TRANSACTION")
+                try:
+                    self._conn.execute("""
+                        CREATE TABLE orderbook_snapshots_new (
+                            venue      VARCHAR  NOT NULL DEFAULT 'default',
+                            market     VARCHAR  NOT NULL,
+                            ts         BIGINT   NOT NULL,
+                            bid_prices DOUBLE[],
+                            bid_sizes  DOUBLE[],
+                            ask_prices DOUBLE[],
+                            ask_sizes  DOUBLE[],
+                            PRIMARY KEY (venue, market, ts)
+                        )
+                    """)
+                    self._conn.execute(
+                        "INSERT INTO orderbook_snapshots_new "
+                        "SELECT 'default', market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes "
+                        "FROM orderbook_snapshots"
+                    )
+                    self._conn.execute("DROP TABLE orderbook_snapshots")
+                    self._conn.execute("ALTER TABLE orderbook_snapshots_new RENAME TO orderbook_snapshots")
+                    self._conn.execute("COMMIT")
+                    _logger.info("Migrated orderbook_snapshots table: added venue column")
+                except Exception as e:
+                    self._conn.execute("ROLLBACK")
+                    _logger.warning("Orderbook snapshots venue migration failed: %s", e)
+        except Exception as e:
+            _logger.debug("Orderbook snapshots migration check: %s", e)
         self._conn.execute(_CREATE_POOL_SNAPSHOTS)
         self._conn.execute(_CREATE_VENUE_FUNDING)
         # Migrate: if old funding_rates table exists, copy data to venue_funding_rates
@@ -765,14 +800,22 @@ class FlintStore:
         if not snapshots:
             return 0
         rows = [
-            (s["market"], s["ts"], s["bid_prices"], s["bid_sizes"], s["ask_prices"], s["ask_sizes"])
+            (
+                s.get("venue", "default"),
+                s["market"],
+                s["ts"],
+                s["bid_prices"],
+                s["bid_sizes"],
+                s["ask_prices"],
+                s["ask_sizes"],
+            )
             for s in snapshots
         ]
         with self._lock:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO orderbook_snapshots "
-                "(market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(venue, market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
         return len(rows)
@@ -802,6 +845,31 @@ class FlintStore:
             asks = tuple(OrderbookLevel(price=p, size=s) for p, s in zip(r[4] or [], r[5] or []))
             result.append(OrderbookSnapshot(market=r[0], ts=r[1], bids=bids, asks=asks))
         return result
+
+    def query_nearest_orderbook(
+        self,
+        venue: str,
+        market: str,
+        ts: int,
+    ) -> Optional["OrderbookSnapshot"]:
+        """Return the most recent orderbook snapshot for (venue, market) at or before ts.
+
+        Returns None if no snapshot exists at or before the given timestamp.
+        """
+        from .models import OrderbookLevel, OrderbookSnapshot
+        sql = (
+            "SELECT market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes "
+            "FROM orderbook_snapshots "
+            "WHERE venue = ? AND market = ? AND ts <= ? "
+            "ORDER BY ts DESC LIMIT 1"
+        )
+        with self._lock:
+            row = self._conn.execute(sql, [venue, market, ts]).fetchone()
+        if row is None:
+            return None
+        bids = tuple(OrderbookLevel(price=p, size=sz) for p, sz in zip(row[2] or [], row[3] or []))
+        asks = tuple(OrderbookLevel(price=p, size=sz) for p, sz in zip(row[4] or [], row[5] or []))
+        return OrderbookSnapshot(market=row[0], ts=row[1], bids=bids, asks=asks)
 
     # -- pool snapshots --------------------------------------------------------
 
