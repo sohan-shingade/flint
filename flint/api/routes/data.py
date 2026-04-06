@@ -652,6 +652,15 @@ def download_market_data(request: Request, body: dict):
                     msg = f"Funding sync failed: {e}"
                     logger.warning("Funding sync failed for %s: %s", market, e)
                     download_warnings.append(msg)
+
+            # Merge volume from Hyperliquid if candles have zero volume
+            volume_merged = 0
+            has_zero_vol = existing and all(c.volume == 0 for c in existing[:50])
+            if has_zero_vol:
+                volume_merged = _merge_hyperliquid_volume(
+                    store, market, resolution_s, start_ts, end_ts, logger, download_warnings
+                )
+
             # Update sync_metadata for freshness tracking
             try:
                 from ...models import SyncMetadata
@@ -685,6 +694,7 @@ def download_market_data(request: Request, body: dict):
                 "existing": existing_count,
                 "total": existing_count,
                 "funding_fetched": funding_fetched,
+                "volume_merged": volume_merged,
                 "source": "local",
                 "skipped": True,
                 "message": "All candles already cached for this range",
@@ -714,10 +724,14 @@ def download_market_data(request: Request, body: dict):
                 errors.append(err)
                 download_warnings.append(f"Candle download ({source}): {err}")
 
-        # Download venue candles for volume data
-        venue_candle_count = 0
+        # Merge volume from Hyperliquid into Pyth candles (Pyth has price-only, volume=0)
+        venue_candle_count = _merge_hyperliquid_volume(
+            store, market, resolution_s, start_ts, end_ts, logger, download_warnings
+        )
+
+        # Also download venue candles if explicitly requested
         for ev in (execution_venues or []):
-            if ev in ("jupiter",):  # Jupiter has no candle provider
+            if ev in ("jupiter",):
                 continue
             try:
                 venue_candles, _ = _download_range_for_venue(market, resolution_s, start_ts, end_ts, ev, logger)
@@ -838,6 +852,46 @@ def download_market_data(request: Request, body: dict):
             "error": str(e),
             "warnings": download_warnings,
         }
+
+
+def _merge_hyperliquid_volume(store, market, resolution_s, start_ts, end_ts, logger, warnings):
+    """Fetch volume from Hyperliquid and merge into zero-volume Pyth candles."""
+    try:
+        from ...providers.hyperliquid_candles import HyperliquidCandleProvider, _FLINT_TO_HL
+        if market not in _FLINT_TO_HL:
+            return 0
+        hl = HyperliquidCandleProvider()
+        try:
+            interval_map = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d"}
+            interval = interval_map.get(resolution_s, "1h")
+            hl_candles = hl.fetch_candles(market, start_ts, end_ts, resolution=interval)
+            if not hl_candles:
+                return 0
+            vol_by_ts = {c.ts: c.volume for c in hl_candles if c.volume > 0}
+            if not vol_by_ts:
+                return 0
+            all_candles = store.query_candles(market, resolution_s, start_ts, end_ts)
+            updated = []
+            for c in all_candles:
+                vol = vol_by_ts.get(c.ts, 0)
+                if vol > 0 and c.volume == 0:
+                    from ...models import Candle
+                    updated.append(Candle(
+                        ts=c.ts, open=c.open, high=c.high, low=c.low,
+                        close=c.close, volume=vol, market=c.market,
+                        resolution_s=c.resolution_s, venue=c.venue,
+                    ))
+            if updated:
+                store.upsert_candles(updated)
+                logger.info("Merged %d Hyperliquid volume values into %s candles", len(updated), market)
+            return len(updated)
+        finally:
+            hl._client.close()
+    except Exception as e:
+        logger.debug("Hyperliquid volume merge skipped: %s", e)
+        if warnings is not None:
+            warnings.append(f"Volume merge: {e}")
+        return 0
 
 
 def _download_pyth_candles(market: str, resolution_s: int, start_ts: int, end_ts: int):
