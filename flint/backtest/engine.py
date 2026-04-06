@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import inspect
 import time as _time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -74,6 +74,7 @@ class BacktestEngine:
         margin_engine=None,
         capital_allocator=None,
         max_runtime_s: float = 300,
+        venue_fill_models: Optional[Dict[str, FillModel]] = None,
     ) -> None:
         self.strategy = strategy
         self.initial_capital = initial_capital
@@ -89,6 +90,7 @@ class BacktestEngine:
         self._capital_allocator = capital_allocator
         self._risk_manager = risk_manager
         self._max_runtime_s = max_runtime_s
+        self._venue_fill_models: Dict[str, FillModel] = venue_fill_models or {}
 
     def run(self, candles, extra_markets: dict = None) -> BacktestResult:
         """Run backtest.
@@ -141,6 +143,7 @@ class BacktestEngine:
             risk_manager=self._risk_manager,
             margin_engine=self._margin_engine,
             capital_allocator=self._capital_allocator,
+            venue_fill_models=self._venue_fill_models,
         )
 
         has_ctx = _strategy_uses_context(self.strategy)
@@ -245,6 +248,13 @@ class BacktestEngine:
             if isinstance(self._fill_model, (OrderbookFillModel, FillPipeline)):
                 book = ctx.get_orderbook(candle.market)
                 self._fill_model.set_orderbook(book)
+
+            # 3e. Feed orderbooks and candle buffers to venue-specific fill models
+            for _vname, _vfm in self._venue_fill_models.items():
+                if hasattr(_vfm, 'set_orderbook'):
+                    _vfm.set_orderbook(ctx.get_orderbook(candle.market))
+                if hasattr(_vfm, 'set_candle_buffer'):
+                    _vfm.set_candle_buffer(candles[_ci:])
 
             # 4. Call strategy
             history.append(candle)

@@ -76,6 +76,7 @@ class BacktestContext(ExecutionContext):
         risk_manager=None,
         margin_engine=None,
         capital_allocator=None,
+        venue_fill_models: Optional[Dict[str, FillModel]] = None,
     ):
         self._initial_capital = initial_capital
         self._cash = initial_capital
@@ -85,6 +86,7 @@ class BacktestContext(ExecutionContext):
         self._risk_manager = risk_manager
         self._margin_engine = margin_engine  # Optional: enables margin/liquidation tracking
         self._allocator = capital_allocator  # Optional: enables per-venue capital tracking
+        self._venue_fill_models: Dict[str, FillModel] = venue_fill_models or {}  # per-venue dispatch
         if self._allocator:
             self._cash = self._allocator.total_cash  # sync initial
 
@@ -578,9 +580,10 @@ class BacktestContext(ExecutionContext):
                 remaining.append(order)
                 continue
 
+            fm = self._resolve_fill_model(order.venue)
             fill = None
             if order.order_type in (OrderType.STOP_LOSS, OrderType.TAKE_PROFIT):
-                if self._fill_model.check_stop_trigger(order, order_candle):
+                if fm.check_stop_trigger(order, order_candle):
                     # Stop triggers become market orders — fill at candle close,
                     # not the trigger price. In a gap-down the fill can be worse.
                     fill_price = order_candle.close
@@ -607,7 +610,7 @@ class BacktestContext(ExecutionContext):
                         venue=order.venue,
                     )
             elif order.order_type == OrderType.LIMIT:
-                fill = self._fill_model.fill_limit(order, order_candle)
+                fill = fm.fill_limit(order, order_candle)
 
             if fill is not None:
                 fee = self._fee_model.compute_fee(fill)
@@ -624,11 +627,19 @@ class BacktestContext(ExecutionContext):
         self._pending_orders = remaining
         return fills
 
+    def _resolve_fill_model(self, venue: str) -> FillModel:
+        """Look up the fill model for a venue, falling back to the default."""
+        return self._venue_fill_models.get(venue, self._fill_model)
+
     def process_market_orders(self, candle: Candle) -> List[Fill]:
         """Process market orders placed during this bar AFTER strategy runs.
 
         Resolves the correct candle for each order's market, enabling
         cross-market orders (e.g. buy spot while selling perp).
+
+        When venue_fill_models are configured, each order is dispatched to
+        its venue-specific fill model. Orders whose venue is not in the map
+        fall back to the default fill model.
         """
         fills = []
         for order in self._market_orders_queue:
@@ -639,7 +650,8 @@ class BacktestContext(ExecutionContext):
                     f"order dropped. Download this market's data first."
                 )
                 continue
-            fill = self._fill_model.fill_market(order, order_candle)
+            fm = self._resolve_fill_model(order.venue)
+            fill = fm.fill_market(order, order_candle)
             if fill is not None:
                 fee = self._fee_model.compute_fee(fill)
                 fill = Fill(
@@ -654,8 +666,8 @@ class BacktestContext(ExecutionContext):
                 self._apply_fill(fill)
                 fills.append(fill)
             # Drain GTC resting orders from pipeline
-            if hasattr(self._fill_model, 'drain_resting_orders'):
-                for resting in self._fill_model.drain_resting_orders():
+            if hasattr(fm, 'drain_resting_orders'):
+                for resting in fm.drain_resting_orders():
                     if self._check_order_cap():
                         self._pending_orders.append(resting)
         self._market_orders_queue.clear()
@@ -688,6 +700,7 @@ class BacktestContext(ExecutionContext):
 
         Resolves the correct candle for each position's market so that
         cross-market positions (spot + perp) close at their own prices.
+        Uses per-venue fill model dispatch when venue_fill_models are configured.
         """
         fills = []
         for (venue, market) in list(self._positions.keys()):
@@ -699,7 +712,8 @@ class BacktestContext(ExecutionContext):
                 size=pos.size, order_id=self._next_order_id(), ts=close_candle.ts,
                 venue=venue,
             )
-            fill = self._fill_model.fill_market(order, close_candle)
+            fm = self._resolve_fill_model(venue)
+            fill = fm.fill_market(order, close_candle)
             if fill:
                 fee = self._fee_model.compute_fee(fill)
                 fill = Fill(
