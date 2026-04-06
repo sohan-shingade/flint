@@ -36,6 +36,27 @@ def get_ohlcv(
         return {"market": market, "resolution_s": resolution_s, "count": 0, "candles": []}
     try:
         candles = store.query_candles(market, resolution_s, start_ts, end_ts, limit=limit, venue=venue)
+
+        # When querying all venues, deduplicate by timestamp.
+        # Prefer pyth (best prices), take highest volume across venues.
+        if venue is None:
+            by_ts: dict = {}
+            for c in candles:
+                existing = by_ts.get(c.ts)
+                if existing is None:
+                    by_ts[c.ts] = c
+                elif c.venue == "pyth":
+                    # Pyth has best prices — use it, but keep higher volume
+                    vol = max(c.volume, existing.volume)
+                    by_ts[c.ts] = type(c)(
+                        ts=c.ts, open=c.open, high=c.high, low=c.low,
+                        close=c.close, volume=vol, market=c.market,
+                        resolution_s=c.resolution_s, venue=c.venue,
+                    )
+                elif existing.venue != "pyth" and c.volume > existing.volume:
+                    by_ts[c.ts] = c
+            candles = sorted(by_ts.values(), key=lambda c: c.ts)
+
         return {
             "market": market,
             "resolution_s": resolution_s,
