@@ -683,10 +683,19 @@ def run_backtest(req: BacktestRequest, request: Request):
                     logger.warning("Journal save failed: %s", journal_err)
 
         except Exception as e:
+            import traceback
             logger.exception("Backtest %s failed", run_id)
+            tb = traceback.format_exc()
+            user_lines = [
+                l.strip() for l in tb.split('\n')
+                if '<string>' in l
+            ]
+            error_detail = f"{type(e).__name__}: {e}"
+            if user_lines:
+                error_detail += f"\n  in strategy code: {user_lines[-1]}"
             _set_status(run_id, "failed")
-            _set_result(run_id, {"error": f"{type(e).__name__}: {e}"})
-            _set_progress(run_id, phase="error", pct=0, detail=f"{type(e).__name__}: {e}")
+            _set_result(run_id, {"error": error_detail})
+            _set_progress(run_id, phase="error", pct=0, detail=error_detail)
         finally:
             with _state_lock:
                 _concurrency["active"] = max(0, _concurrency["active"] - 1)
