@@ -854,44 +854,120 @@ def download_market_data(request: Request, body: dict):
         }
 
 
+def _fetch_okx_volume(market: str, resolution_s: int, start_ts: int, end_ts: int, logger) -> dict:
+    """Fetch volume from OKX. Returns {ts: volume} dict. Free, no key, full history."""
+    import httpx
+    _FLINT_TO_OKX = {
+        "SOL-PERP": "SOL-USDT-SWAP", "BTC-PERP": "BTC-USDT-SWAP", "ETH-PERP": "ETH-USDT-SWAP",
+        "DOGE-PERP": "DOGE-USDT-SWAP", "ARB-PERP": "ARB-USDT-SWAP", "SUI-PERP": "SUI-USDT-SWAP",
+        "OP-PERP": "OP-USDT-SWAP", "LINK-PERP": "LINK-USDT-SWAP", "AVAX-PERP": "AVAX-USDT-SWAP",
+        "XRP-PERP": "XRP-USDT-SWAP", "BNB-PERP": "BNB-USDT-SWAP", "WIF-PERP": "WIF-USDT-SWAP",
+        "JUP-PERP": "JUP-USDT-SWAP", "RENDER-PERP": "RENDER-USDT-SWAP",
+    }
+    _BAR_MAP = {60: "1m", 300: "5m", 900: "15m", 3600: "1H", 14400: "4H", 86400: "1D"}
+
+    inst = _FLINT_TO_OKX.get(market)
+    if not inst:
+        return {}
+    bar = _BAR_MAP.get(resolution_s, "1H")
+    vol_by_ts: dict = {}
+    # OKX returns max 100 candles per request, paginate backward
+    cursor = end_ts * 1000
+    client = httpx.Client(timeout=15)
+    try:
+        for _ in range(200):  # safety limit
+            url = "https://www.okx.com/api/v5/market/history-candles"
+            params = {"instId": inst, "bar": bar, "limit": "100", "after": str(cursor)}
+            try:
+                resp = client.get(url, params=params)
+                if resp.status_code != 200:
+                    break
+                data = resp.json().get("data", [])
+                if not data:
+                    break
+                for c in data:
+                    ts_ms = int(c[0])
+                    ts_s = ts_ms // 1000
+                    if start_ts <= ts_s <= end_ts:
+                        vol = float(c[5]) if len(c) > 5 else 0
+                        if vol > 0:
+                            vol_by_ts[ts_s] = vol
+                oldest_ms = min(int(c[0]) for c in data)
+                if oldest_ms // 1000 <= start_ts:
+                    break
+                cursor = oldest_ms
+                import time as _t
+                _t.sleep(0.05)  # rate limit
+            except Exception as e:
+                logger.debug("OKX volume page failed: %s", e)
+                break
+    finally:
+        client.close()
+    return vol_by_ts
+
+
 def _merge_hyperliquid_volume(store, market, resolution_s, start_ts, end_ts, logger, warnings):
-    """Fetch volume from Hyperliquid and merge into zero-volume Pyth candles."""
+    """Fetch volume from Hyperliquid + OKX and merge into zero-volume Pyth candles.
+
+    Waterfall: Hyperliquid (recent ~7mo) → OKX (backfill older, full history).
+    """
+    vol_by_ts: dict = {}
+
+    # 1. Hyperliquid — recent data, best for DeFi-native volume
     try:
         from ...providers.hyperliquid_candles import HyperliquidCandleProvider, _FLINT_TO_HL
-        if market not in _FLINT_TO_HL:
-            return 0
-        hl = HyperliquidCandleProvider()
-        try:
-            interval_map = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d"}
-            interval = interval_map.get(resolution_s, "1h")
-            hl_candles = hl.fetch_candles(market, start_ts, end_ts, resolution=interval)
-            if not hl_candles:
-                return 0
-            vol_by_ts = {c.ts: c.volume for c in hl_candles if c.volume > 0}
-            if not vol_by_ts:
-                return 0
-            all_candles = store.query_candles(market, resolution_s, start_ts, end_ts)
-            updated = []
-            for c in all_candles:
-                vol = vol_by_ts.get(c.ts, 0)
-                if vol > 0 and c.volume == 0:
-                    from ...models import Candle
-                    updated.append(Candle(
-                        ts=c.ts, open=c.open, high=c.high, low=c.low,
-                        close=c.close, volume=vol, market=c.market,
-                        resolution_s=c.resolution_s, venue=c.venue,
-                    ))
-            if updated:
-                store.upsert_candles(updated)
-                logger.info("Merged %d Hyperliquid volume values into %s candles", len(updated), market)
-            return len(updated)
-        finally:
-            hl._client.close()
+        if market in _FLINT_TO_HL:
+            hl = HyperliquidCandleProvider()
+            try:
+                interval_map = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d"}
+                interval = interval_map.get(resolution_s, "1h")
+                hl_candles = hl.fetch_candles(market, start_ts, end_ts, resolution=interval)
+                for c in hl_candles:
+                    if c.volume > 0:
+                        vol_by_ts[c.ts] = c.volume
+                if vol_by_ts:
+                    logger.info("Hyperliquid: %d volume values for %s", len(vol_by_ts), market)
+            finally:
+                hl._client.close()
     except Exception as e:
-        logger.debug("Hyperliquid volume merge skipped: %s", e)
-        if warnings is not None:
-            warnings.append(f"Volume merge: {e}")
+        logger.debug("Hyperliquid volume fetch failed: %s", e)
+
+    # 2. OKX — backfill timestamps that Hyperliquid missed (full history)
+    all_candles = store.query_candles(market, resolution_s, start_ts, end_ts)
+    zero_vol_count = sum(1 for c in all_candles if c.volume == 0 and c.ts not in vol_by_ts)
+    if zero_vol_count > 0:
+        try:
+            # Only fetch the range that Hyperliquid didn't cover
+            covered_ts = set(vol_by_ts.keys())
+            missing_ts = [c.ts for c in all_candles if c.volume == 0 and c.ts not in covered_ts]
+            if missing_ts:
+                okx_start = min(missing_ts)
+                okx_end = max(missing_ts)
+                okx_vol = _fetch_okx_volume(market, resolution_s, okx_start, okx_end, logger)
+                vol_by_ts.update(okx_vol)
+                if okx_vol:
+                    logger.info("OKX: %d volume values backfilled for %s", len(okx_vol), market)
+        except Exception as e:
+            logger.debug("OKX volume backfill failed: %s", e)
+
+    if not vol_by_ts:
         return 0
+
+    # 3. Merge into zero-volume candles
+    from ...models import Candle as CandleModel
+    updated = []
+    for c in all_candles:
+        vol = vol_by_ts.get(c.ts, 0)
+        if vol > 0 and c.volume == 0:
+            updated.append(CandleModel(
+                ts=c.ts, open=c.open, high=c.high, low=c.low,
+                close=c.close, volume=vol, market=c.market,
+                resolution_s=c.resolution_s, venue=c.venue,
+            ))
+    if updated:
+        store.upsert_candles(updated)
+        logger.info("Merged %d total volume values into %s candles", len(updated), market)
+    return len(updated)
 
 
 def _download_pyth_candles(market: str, resolution_s: int, start_ts: int, end_ts: int):
