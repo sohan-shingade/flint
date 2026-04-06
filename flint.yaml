@@ -74,10 +74,11 @@ providers:
   jupiter:
     enabled: true
 
-  # CCXT — unified access to 100+ crypto exchanges (pip install flint[ccxt])
+  # CCXT — unified access to 100+ crypto exchanges (included by default)
+  # Used for volume data backfill (OKX, Gate.io) and CEX funding rates
   ccxt:
-    enabled: false
-    exchange: binance
+    enabled: true
+    exchange: okx
     # api_key: ""     # optional, for private endpoints
     # secret: ""      # optional
 
