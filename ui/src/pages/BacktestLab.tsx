@@ -1401,7 +1401,7 @@ export default function BacktestLab() {
                 ))}
               </div>
               {/* Top 3 trials */}
-              {optResults.trials.slice(0, 3).map((t, i) => (
+              {(optResults.top_trials || optResults.trials || []).slice(0, 3).map((t, i) => (
                 <div key={i} className="flex items-center justify-between text-[10px] py-0.5 border-t border-border/20">
                   <span className="text-ghost/50">#{i+1}</span>
                   <span className="text-terminal">{t.metric_value.toFixed(3)}</span>
@@ -1713,7 +1713,7 @@ export default function BacktestLab() {
                 </div>
               ))}
             </div>
-            {optResults.trials.length > 0 && (
+            {(optResults.top_trials || optResults.trials || []).length > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full text-[11px] font-mono">
                   <thead>
@@ -1729,7 +1729,7 @@ export default function BacktestLab() {
                     </tr>
                   </thead>
                   <tbody>
-                    {optResults.trials.slice(0, 10).map((t, i) => (
+                    {(optResults.top_trials || optResults.trials || []).slice(0, 10).map((t, i) => (
                       <tr key={i} className="border-t border-border/20 hover:bg-amber-glow/30">
                         <td className="px-2 py-1 text-ghost/50">{i + 1}</td>
                         <td className="px-2 py-1 text-right text-terminal">{t.metric_value.toFixed(4)}</td>

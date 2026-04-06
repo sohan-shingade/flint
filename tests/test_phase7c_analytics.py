@@ -93,3 +93,17 @@ class TestVolumeWarning:
         engine = BacktestEngine(_HoldStrategy(), 10000, 0.0005)
         result = engine.run(candles)
         assert not any("volume" in w.lower() for w in result.strategy_warnings)
+
+
+class TestRicherOptimizationResults:
+    def test_optimization_result_has_study(self):
+        from flint.optimization.optimizer import OptimizationResult
+        fields = OptimizationResult.__dataclass_fields__
+        assert "study" in fields, "OptimizationResult needs a 'study' field"
+
+    def test_convergence_format(self):
+        convergence = [[0, 1.0], [1, 1.5], [2, 1.5], [3, 2.0]]
+        assert all(len(entry) == 2 for entry in convergence)
+        values = [v for _, v in convergence]
+        for i in range(1, len(values)):
+            assert values[i] >= values[i-1]

@@ -290,7 +290,7 @@ def run_optimization(req: OptimizeRequest, request: Request):
                 "best_value": best_val,
                 "metric": opt_result.metric,
                 "n_trials": opt_result.n_trials,
-                "trials": trials_list,
+                "top_trials": trials_list,
                 "strategy_name": strategy_cls.__name__,
                 "market": req.market,
                 "candles": len(candles),
@@ -298,6 +298,39 @@ def run_optimization(req: OptimizeRequest, request: Request):
             # Add metric-specific convenience key (e.g., best_sharpe, best_pnl)
             metric_key = f"best_{req.metric.replace('_ratio', '').replace('total_', '')}"
             result_dict[metric_key] = best_val
+
+            # Convergence: best value over trial number
+            convergence = []
+            best_so_far = float("-inf")
+            if opt_result.study:
+                for t in opt_result.study.trials:
+                    val = t.value if t.value is not None else float("-inf")
+                    if val > best_so_far:
+                        best_so_far = val
+                    convergence.append([t.number, round(best_so_far, 4) if best_so_far > float("-inf") else None])
+            result_dict["convergence"] = convergence
+
+            # Parameter importance (requires sklearn)
+            try:
+                from optuna.importance import get_param_importances
+                if opt_result.study and len(opt_result.study.trials) >= 5:
+                    importance = get_param_importances(opt_result.study)
+                    result_dict["param_importance"] = {k: round(v, 4) for k, v in importance.items()}
+                else:
+                    result_dict["param_importance"] = None
+            except Exception:
+                result_dict["param_importance"] = None
+
+            # Best trial full metrics
+            if trials_list:
+                best_trial = trials_list[0]
+                result_dict["best_backtest_metrics"] = {
+                    "total_pnl": best_trial.get("total_pnl"),
+                    "sharpe_ratio": best_trial.get("sharpe_ratio"),
+                    "max_drawdown": best_trial.get("max_drawdown"),
+                    "win_rate": best_trial.get("win_rate"),
+                    "total_trades": best_trial.get("total_trades"),
+                }
 
             _set(run_id, status="complete", progress={
                 "phase": "complete", "pct": 100,
