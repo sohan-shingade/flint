@@ -524,12 +524,19 @@ class FlintStore:
         if end_ts is not None:
             sql += " AND ts <= ?"
             params.append(end_ts)
-        sql += " ORDER BY ts ASC"
-        if limit is not None:
-            sql += " LIMIT ?"
+        if limit is not None and start_ts is None:
+            sql += " ORDER BY ts DESC LIMIT ?"
             params.append(limit)
-        with self._lock:
-            rows = self._conn.execute(sql, params).fetchall()
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+            rows = rows[::-1]  # reverse to chronological order
+        else:
+            sql += " ORDER BY ts ASC"
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(limit)
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
         return [
             Candle(market=r[0], resolution_s=r[1], ts=r[2], open=r[3],
                    high=r[4], low=r[5], close=r[6], volume=r[7],

@@ -144,3 +144,42 @@ class TestJournalReturnPct:
         assert len(runs) == 1
         assert runs[0]["total_return_pct"] == -20.0
         store.close()
+
+
+class TestOHLCVLimitReturnsNewest:
+    """query_candles(limit=N) without start_ts must return the N newest candles."""
+
+    def _make_candles(self, n=20):
+        from flint.models import Candle
+        base_ts = 1_700_000_000
+        return [
+            Candle(
+                market="SOL-PERP", resolution_s=3600, ts=base_ts + i * 3600,
+                open=100.0 + i, high=101.0 + i, low=99.0 + i,
+                close=100.5 + i, volume=1000.0 + i,
+            )
+            for i in range(n)
+        ]
+
+    def test_limit_without_start_returns_newest(self):
+        from flint.store import FlintStore
+        store = FlintStore(":memory:")
+        candles = self._make_candles(20)
+        store.upsert_candles(candles)
+        result = store.query_candles("SOL-PERP", 3600, limit=5)
+        assert len(result) == 5
+        # Should get the 5 newest candles (indices 15-19), in chronological order
+        assert result[0].ts == candles[15].ts
+        assert result[-1].ts == candles[19].ts
+        store.close()
+
+    def test_limit_with_start_returns_from_start(self):
+        from flint.store import FlintStore
+        store = FlintStore(":memory:")
+        candles = self._make_candles(20)
+        store.upsert_candles(candles)
+        result = store.query_candles("SOL-PERP", 3600, start_ts=candles[0].ts, limit=5)
+        assert len(result) == 5
+        # With start_ts, should return from the start in ascending order (old behavior)
+        assert result[0].ts == candles[0].ts
+        store.close()
