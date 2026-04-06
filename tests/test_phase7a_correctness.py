@@ -102,3 +102,45 @@ class TestMonteCarloAnnualization:
         result = run_monte_carlo(pnls, initial_capital=10000, n_simulations=100)
         assert result.n_simulations == 100
         assert result.sharpe_mean != 0
+
+
+class TestJournalReturnPct:
+    """Journal must store total_return_pct computed from pnl / initial_capital."""
+
+    def test_total_return_pct_stored(self):
+        from flint.store import FlintStore
+        from flint.journal.storage import JournalStorage
+        from flint.models import BacktestResult
+
+        store = FlintStore(":memory:")
+        journal = JournalStorage(store)
+        result = BacktestResult(
+            total_pnl=500, win_rate=0.6, max_drawdown=0.05,
+            sharpe_ratio=1.5, total_trades=5,
+            winning_trades=3, losing_trades=2,
+        )
+        journal.save_run("r1", "MA-Cross", "SOL-PERP", 3600,
+                         1000, 5000, 10000, result=result)
+        runs = journal.list_runs()
+        assert len(runs) == 1
+        assert runs[0]["total_return_pct"] == 5.0
+        store.close()
+
+    def test_negative_return(self):
+        from flint.store import FlintStore
+        from flint.journal.storage import JournalStorage
+        from flint.models import BacktestResult
+
+        store = FlintStore(":memory:")
+        journal = JournalStorage(store)
+        result = BacktestResult(
+            total_pnl=-2000, win_rate=0.2, max_drawdown=0.20,
+            sharpe_ratio=-0.5, total_trades=10,
+            winning_trades=2, losing_trades=8,
+        )
+        journal.save_run("r1", "RSI", "SOL-PERP", 3600,
+                         1000, 5000, 10000, result=result)
+        runs = journal.list_runs()
+        assert len(runs) == 1
+        assert runs[0]["total_return_pct"] == -20.0
+        store.close()
