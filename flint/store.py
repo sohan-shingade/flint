@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS candles (
     low         DOUBLE  NOT NULL,
     close       DOUBLE  NOT NULL,
     volume      DOUBLE  NOT NULL,
-    venue       VARCHAR NOT NULL DEFAULT 'default',
+    venue       VARCHAR NOT NULL DEFAULT 'pyth',
     PRIMARY KEY (venue, market, resolution_s, ts)
 );
 """
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS oracle_prices (
 
 _CREATE_ORDERBOOK_SNAPSHOTS = """
 CREATE TABLE IF NOT EXISTS orderbook_snapshots (
-    venue      VARCHAR  NOT NULL DEFAULT 'default',
+    venue      VARCHAR  NOT NULL DEFAULT 'pyth',
     market     VARCHAR  NOT NULL,
     ts         BIGINT   NOT NULL,
     bid_prices DOUBLE[],
@@ -352,13 +352,13 @@ class FlintStore:
                             low          DOUBLE  NOT NULL,
                             close        DOUBLE  NOT NULL,
                             volume       DOUBLE  NOT NULL,
-                            venue        VARCHAR NOT NULL DEFAULT 'default',
+                            venue        VARCHAR NOT NULL DEFAULT 'pyth',
                             PRIMARY KEY (venue, market, resolution_s, ts)
                         )
                     """)
                     self._conn.execute(
                         "INSERT INTO candles_new "
-                        "SELECT market, resolution_s, ts, open, high, low, close, volume, 'default' "
+                        "SELECT market, resolution_s, ts, open, high, low, close, volume, 'pyth' "
                         "FROM candles"
                     )
                     self._conn.execute("DROP TABLE candles")
@@ -382,7 +382,7 @@ class FlintStore:
                 try:
                     self._conn.execute("""
                         CREATE TABLE orderbook_snapshots_new (
-                            venue      VARCHAR  NOT NULL DEFAULT 'default',
+                            venue      VARCHAR  NOT NULL DEFAULT 'pyth',
                             market     VARCHAR  NOT NULL,
                             ts         BIGINT   NOT NULL,
                             bid_prices DOUBLE[],
@@ -394,7 +394,7 @@ class FlintStore:
                     """)
                     self._conn.execute(
                         "INSERT INTO orderbook_snapshots_new "
-                        "SELECT 'default', market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes "
+                        "SELECT 'pyth', market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes "
                         "FROM orderbook_snapshots"
                     )
                     self._conn.execute("DROP TABLE orderbook_snapshots")
@@ -458,6 +458,13 @@ class FlintStore:
         self._conn.execute(_CREATE_DEX_VOLUME)
         self._conn.execute(_CREATE_TOKEN_UNLOCKS)
         self._conn.execute(_CREATE_SYNC_METADATA)
+        # Migrate: remove 'default' venue candles (legacy, now tagged as 'pyth')
+        try:
+            self._conn.execute("DELETE FROM candles WHERE venue = 'default'")
+            self._conn.execute("UPDATE orderbook_snapshots SET venue = 'pyth' WHERE venue = 'default'")
+        except Exception:
+            pass
+
         # Paper trading persistence
         self._conn.execute(_CREATE_PAPER_SESSIONS)
         self._conn.execute(_CREATE_PAPER_EQUITY_HISTORY)
@@ -480,7 +487,7 @@ class FlintStore:
         if not candles:
             return 0
         rows = [
-            (c.venue or "default", c.market, c.resolution_s, c.ts, c.open, c.high, c.low, c.close, c.volume)
+            (c.venue or "pyth", c.market, c.resolution_s, c.ts, c.open, c.high, c.low, c.close, c.volume)
             for c in candles
         ]
         batch_size = 2000
@@ -540,7 +547,7 @@ class FlintStore:
         return [
             Candle(market=r[0], resolution_s=r[1], ts=r[2], open=r[3],
                    high=r[4], low=r[5], close=r[6], volume=r[7],
-                   venue=r[8] if len(r) > 8 else "default")
+                   venue=r[8] if len(r) > 8 else "pyth")
             for r in rows
         ]
 
@@ -808,7 +815,7 @@ class FlintStore:
             return 0
         rows = [
             (
-                s.get("venue", "default"),
+                s.get("venue", "pyth"),
                 s["market"],
                 s["ts"],
                 s["bid_prices"],

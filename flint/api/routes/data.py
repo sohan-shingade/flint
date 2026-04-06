@@ -65,7 +65,7 @@ def get_ohlcv(
             "candles": [
                 {"ts": c.ts, "open": c.open, "high": c.high,
                  "low": c.low, "close": c.close, "volume": c.volume,
-                 "venue": getattr(c, 'venue', 'default')}
+                 "venue": getattr(c, 'venue', 'pyth')}
                 for c in candles
             ],
         }
@@ -90,7 +90,7 @@ def get_volume(
         result: Dict[str, list] = {}
         with store._lock:
             venues_rows = store._conn.execute(
-                "SELECT DISTINCT venue FROM candles WHERE market = ? AND venue != 'pyth'",
+                "SELECT DISTINCT venue FROM candles WHERE market = ? AND venue NOT IN ('pyth', 'default')",
                 [market]
             ).fetchall()
 
