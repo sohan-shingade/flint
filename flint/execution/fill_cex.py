@@ -1,7 +1,16 @@
 """CEX fill models for Binance, OKX, and Bybit.
 
 Each model walks the L2 orderbook for a volume-weighted average fill price,
-falling back to synthetic depth when no real book is available.
+falling back to volume-scaled synthetic depth when no real book is available.
+
+When the synthetic fallback is used, two volume-based adjustments apply:
+
+1. **Depth scaling** — the static venue depth profile is scaled by the ratio
+   of actual bar volume (in USD) to the profile's expected volume.  Low-volume
+   bars produce thinner books and worse fills; high-volume bars the opposite.
+
+2. **Participation cap** — fill size is capped at 10 % of bar volume so that
+   unrealistically large fills against synthetic depth are impossible.
 
 Bybit overrides fill_market with IOC semantics: the walk is capped at a
 1% price band from candle.close, returning a partial fill if the band is
@@ -13,7 +22,23 @@ from typing import Optional
 
 from ..models import Candle, Fill, Order, OrderbookSnapshot, Side
 from .fill_models import FillModel
-from .synthetic_depth import VENUE_PROFILES, generate_synthetic_book
+from .synthetic_depth import VENUE_PROFILES, DepthProfile, generate_synthetic_book
+
+# ---------------------------------------------------------------------------
+# Volume-scaling constants
+# ---------------------------------------------------------------------------
+# Typical ratio of hourly bar volume to instantaneous book depth (within 1%)
+# for major CEX perp markets.  A ratio of 20 means that if bar volume in USD
+# equals 20x the profile's bid_depth_1pct, the synthetic book keeps its
+# baseline depth (scale = 1.0).
+_VOL_DEPTH_RATIO: float = 20.0
+
+# Clamps to avoid extreme depth values.
+_DEPTH_SCALE_FLOOR: float = 0.05   # minimum 5 % of baseline depth
+_DEPTH_SCALE_CAP: float = 3.0      # maximum 300 % of baseline depth
+
+# Maximum fraction of bar volume a single order can consume.
+_MAX_PARTICIPATION: float = 0.10   # 10 %
 
 
 class CexFillModel(FillModel):
@@ -46,12 +71,13 @@ class CexFillModel(FillModel):
                 if order.side == Side.LONG
                 else self._current_book.bids
             )
-        else:
-            # Generate synthetic orderbook from venue depth profile.
-            book = self._synthetic_book(candle)
-            levels = book.asks if order.side == Side.LONG else book.bids
+            return self._walk_book(order, candle, list(levels))
 
-        return self._walk_book(order, candle, list(levels))
+        # Synthetic fallback: volume-scaled depth + participation cap.
+        book = self._synthetic_book(candle)
+        levels = book.asks if order.side == Side.LONG else book.bids
+        max_size = self._max_fill_size(candle)
+        return self._walk_book(order, candle, list(levels), max_size=max_size)
 
     def fill_limit(self, order: Order, candle: Candle) -> Optional[Fill]:
         """Fill a limit order using simple price-cross logic."""
@@ -79,8 +105,25 @@ class CexFillModel(FillModel):
     # ------------------------------------------------------------------
 
     def _synthetic_book(self, candle: Candle) -> OrderbookSnapshot:
-        """Build a synthetic book from the venue depth profile."""
+        """Build a synthetic book from the venue depth profile.
+
+        When bar volume is available the profile depth is scaled so that
+        low-volume bars produce thinner books (worse fills) and high-volume
+        bars produce deeper books (better fills).
+        """
         profile = self._profile or next(iter(VENUE_PROFILES.values()))
+
+        bar_vol_usd = candle.volume * candle.close if candle.volume else 0.0
+        if bar_vol_usd > 0:
+            expected_vol = profile.bid_depth_1pct * _VOL_DEPTH_RATIO
+            scale = max(_DEPTH_SCALE_FLOOR, min(bar_vol_usd / expected_vol, _DEPTH_SCALE_CAP))
+            profile = DepthProfile(
+                bid_depth_1pct=profile.bid_depth_1pct * scale,
+                ask_depth_1pct=profile.ask_depth_1pct * scale,
+                concentration=profile.concentration,
+                spread_bps=profile.spread_bps,
+            )
+
         return generate_synthetic_book(
             mid_price=candle.close,
             profile=profile,
@@ -88,12 +131,23 @@ class CexFillModel(FillModel):
             ts=candle.ts,
         )
 
+    def _max_fill_size(self, candle: Candle) -> Optional[float]:
+        """Cap fill size at a fraction of bar volume (participation rate).
+
+        Returns the maximum fillable size in base-asset units, or ``None``
+        if volume data is unavailable (in which case no cap is applied).
+        """
+        if not candle.volume or candle.volume <= 0:
+            return None
+        return candle.volume * _MAX_PARTICIPATION
+
     def _walk_book(
         self,
         order: Order,
         candle: Candle,
         levels: list,
         price_cap: Optional[float] = None,
+        max_size: Optional[float] = None,
     ) -> Optional[Fill]:
         """Walk orderbook levels accumulating a volume-weighted average fill.
 
@@ -104,12 +158,15 @@ class CexFillModel(FillModel):
                     bid side for sells).
             price_cap: Optional upper (for buys) or lower (for sells) price
                        boundary — levels beyond the cap are ignored (IOC band).
+            max_size: Optional cap on fill size (e.g. participation rate limit).
+                      When set, at most *max_size* units will be filled even if
+                      the book has more depth.
 
         Returns:
             A Fill with the VWAP price and actual filled size, or None if no
             liquidity is available.
         """
-        remaining = order.size
+        remaining = min(order.size, max_size) if max_size is not None else order.size
         total_cost = 0.0
         filled = 0.0
 
@@ -188,13 +245,15 @@ class BybitFillModel(CexFillModel):
                 if order.side == Side.LONG
                 else self._current_book.bids
             )
+            max_size = None
         else:
             book = self._synthetic_book(candle)
             levels = list(book.asks if order.side == Side.LONG else book.bids)
+            max_size = self._max_fill_size(candle)
 
         if order.side == Side.LONG:
             price_cap = candle.close * (1 + band_pct)
         else:
             price_cap = candle.close * (1 - band_pct)
 
-        return self._walk_book(order, candle, levels, price_cap=price_cap)
+        return self._walk_book(order, candle, levels, price_cap=price_cap, max_size=max_size)
