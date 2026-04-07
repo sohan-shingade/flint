@@ -1,12 +1,35 @@
 #!/usr/bin/env bash
 # Flint installer — single command to install and run Flint
 # Usage: curl -fsSL <url>/install.sh | bash
+#        curl -fsSL <url>/install.sh | bash -s -- --non-interactive
 set -euo pipefail
 
 FLINT_HOME="${FLINT_HOME:-$HOME/.flint}"
 REPO_URL="${FLINT_REPO_URL:-https://github.com/sohan-shingade/flint.git}"
 MIN_PYTHON="3.10"
 MIN_NODE="18"
+
+# ── Parse flags ─────────────────────────────────────────────
+
+INTERACTIVE=1
+if [ "${FLINT_NONINTERACTIVE:-0}" = "1" ]; then
+    INTERACTIVE=0
+fi
+
+for arg in "$@"; do
+    case "$arg" in
+        --non-interactive)
+            INTERACTIVE=0
+            ;;
+        --help|-h)
+            printf "Usage: install.sh [OPTIONS]\n"
+            printf "  --non-interactive    Skip all prompts (for CI/automation)\n"
+            printf "  --help, -h           Show this help message\n"
+            printf "  FLINT_HOME=<path>    Install to a custom directory (default: ~/.flint)\n"
+            exit 0
+            ;;
+    esac
+done
 
 # ── Helpers ──────────────────────────────────────────────────
 
@@ -40,6 +63,37 @@ info() {
 version_gte() {
     printf '%s\n%s\n' "$2" "$1" | sort -V -C
 }
+
+prompt_yn() {
+    if [ "$INTERACTIVE" = "0" ]; then
+        return 0
+    fi
+    printf "  %s [y/N] " "$1"
+    read -r answer </dev/tty
+    case "$answer" in
+        [Yy]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# ── Summary banner ──────────────────────────────────────────
+
+printf "\n"
+printf "  Flint Installer\n"
+printf "  ================\n"
+printf "  This script will:\n"
+printf "    1. Check for Python %s+ and Node %s+\n" "$MIN_PYTHON" "$MIN_NODE"
+printf "    2. Clone the Flint repository to %s\n" "$FLINT_HOME"
+printf "    3. Install Python dependencies in a virtual environment\n"
+printf "    4. Build the web UI\n"
+printf "    5. Start the Flint server\n"
+printf "\n"
+
+if [ "$INTERACTIVE" = "1" ]; then
+    printf "  Press Enter to continue or Ctrl+C to cancel..."
+    read -r </dev/tty
+    printf "\n"
+fi
 
 # ── Step 1: Detect OS ────────────────────────────────────────
 
@@ -76,14 +130,12 @@ install_python() {
     info "Installing Python..."
     if [ "$OS_TYPE" = "macos" ]; then
         if ! command -v brew >/dev/null 2>&1; then
-            printf "\n  Homebrew is required to install Python on macOS but is not installed.\n"
-            printf "  Install Homebrew? (https://brew.sh) [y/N] "
-            read -r REPLY
-            if [ "$REPLY" = "y" ] || [ "$REPLY" = "Y" ]; then
+            if prompt_yn "Homebrew is required to install Python. Install Homebrew?"; then
+                info "Installing Homebrew..."
                 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
                 eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
             else
-                fail "Homebrew is required to install Python on macOS. Install it manually from https://brew.sh or install Python ${MIN_PYTHON}+ yourself."
+                fail "Homebrew is required to install Python on macOS. Install it manually or install Python ${MIN_PYTHON}+ yourself."
             fi
         fi
         brew install python@3.12
@@ -129,14 +181,12 @@ install_node() {
     info "Installing Node.js..."
     if [ "$OS_TYPE" = "macos" ]; then
         if ! command -v brew >/dev/null 2>&1; then
-            printf "\n  Homebrew is required to install Node.js on macOS but is not installed.\n"
-            printf "  Install Homebrew? (https://brew.sh) [y/N] "
-            read -r REPLY
-            if [ "$REPLY" = "y" ] || [ "$REPLY" = "Y" ]; then
+            if prompt_yn "Homebrew is required to install Node.js. Install Homebrew?"; then
+                info "Installing Homebrew..."
                 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
                 eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
             else
-                fail "Homebrew is required to install Node.js on macOS. Install it manually from https://brew.sh or install Node ${MIN_NODE}+ yourself."
+                fail "Homebrew is required to install Node.js on macOS. Install it manually or install Node ${MIN_NODE}+ yourself."
             fi
         fi
         brew install node
@@ -167,13 +217,14 @@ fi
 
 # ── Step 4: Clone/update repo ────────────────────────────────
 
-progress "Setting up Flint at ${FLINT_HOME}..."
+progress "Setting up Flint repository..."
 
 if [ -d "$FLINT_HOME/.git" ]; then
-    info "Updating existing installation..."
+    info "Updating existing installation at ${FLINT_HOME}..."
     git -C "$FLINT_HOME" pull --ff-only 2>/dev/null || git -C "$FLINT_HOME" pull
     success "Updated"
 else
+    info "Cloning Flint to ${FLINT_HOME}..."
     git clone "$REPO_URL" "$FLINT_HOME"
     success "Cloned"
 fi
@@ -181,6 +232,7 @@ fi
 # ── Step 5: Create venv and install ──────────────────────────
 
 progress "Installing Python dependencies..."
+info "Installing Python packages into a virtual environment at ${FLINT_HOME}/.venv..."
 
 VENV_DIR="$FLINT_HOME/.venv"
 
@@ -194,7 +246,7 @@ success "Installed flint package"
 
 # ── Step 6: Build UI ─────────────────────────────────────────
 
-progress "Building UI..."
+progress "Building the web UI (React + Vite)..."
 
 cd "$FLINT_HOME/ui"
 if [ ! -d "node_modules" ]; then
@@ -206,7 +258,7 @@ success "UI built"
 
 # ── Step 7: Start server ─────────────────────────────────────
 
-progress "Starting Flint..."
+progress "Starting Flint server on http://localhost:8000..."
 
 PORT_PID="$(lsof -ti:8000 2>/dev/null || true)"
 if [ -n "$PORT_PID" ]; then

@@ -124,9 +124,24 @@ def _print_results(result, strategy_name: str, elapsed: float):
 def init(
     days: int = typer.Option(90, help="Days of data to backfill"),
     market: str = typer.Option("SOL-PERP", help="Primary market to backfill"),
+    skip_demo: bool = typer.Option(False, "--skip-demo", help="Skip running the demo backtest"),
 ):
     """Scaffold a Flint project — create config, backfill data, run sample backtest."""
     console.print(Panel("[bold]Flint Init[/bold]\nSetting up your trading environment", border_style="yellow"))
+
+    # Check for missing optional dependencies
+    _missing_deps = []
+    try:
+        import ccxt as _ccxt  # noqa: F401
+    except ImportError:
+        _missing_deps.append("ccxt")
+    try:
+        import mcp as _mcp  # noqa: F401
+    except ImportError:
+        _missing_deps.append("mcp")
+    if _missing_deps:
+        console.print(f"  [dim]Note: optional dependencies not installed: {', '.join(_missing_deps)}[/dim]")
+        console.print("  [dim]For the full feature set: pip install flint-trading[all][/dim]\n")
 
     # 1. Create config if not exists
     config_path = Path("flint.yaml")
@@ -158,8 +173,7 @@ def init(
     strat_dir.mkdir(parents=True, exist_ok=True)
     console.print("  [green]✓[/green] Strategies directory ready")
 
-    # 4. Backfill data — try Pyth first, fall back to Drift
-    console.print(f"\n  Backfilling {days} days of {market} data...")
+    # 4. Backfill data — check existing coverage first, then fetch if needed
     from flint.store import FlintStore
 
     store = FlintStore("./data/flint.duckdb")
@@ -167,44 +181,70 @@ def init(
     end_ts = int(time.time())
     start_ts = end_ts - days * 86400
 
-    with console.status(f"[bold yellow]Fetching {market} candles...[/bold yellow]"):
-        candles = _download_init_candles(market, 3600, start_ts, end_ts)
+    # Check if data already exists for this market/period
+    existing = store.query_candles(market, 3600, start_ts, end_ts)
+    expected = (end_ts - start_ts) // 3600
+    coverage = len(existing) / expected if expected > 0 else 0
 
-    if candles:
-        console.print(f"  [green]✓[/green] Got {len(candles):,} candles for {market}")
+    if coverage >= 0.8:
+        console.print(f"\n  [dim]· {market} data already cached ({len(existing):,} candles, {coverage*100:.0f}% coverage) — skipping download[/dim]")
+        candles = existing
     else:
-        # Last resort: try a known-good date range (2024)
-        console.print("  [yellow]No recent data available — downloading 2024 data instead[/yellow]")
-        from datetime import datetime, timezone
-        fallback_start = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())
-        fallback_end = int(datetime(2024, 12, 31, tzinfo=timezone.utc).timestamp())
-        with console.status(f"[bold yellow]Fetching {market} 2024 data...[/bold yellow]"):
-            candles = _download_init_candles(market, 3600, fallback_start, fallback_end)
+        console.print(f"\n  Backfilling {days} days of {market} data...")
 
-    if candles:
-        count = store.upsert_candles(candles)
-        console.print(f"  [green]✓[/green] Stored {count:,} candles for {market}")
+        with console.status(f"[bold yellow]Fetching {market} candles...[/bold yellow]"):
+            candles = _download_init_candles(market, 3600, start_ts, end_ts)
+
+        if candles:
+            console.print(f"  [green]✓[/green] Got {len(candles):,} candles for {market}")
+        else:
+            # Last resort: try a known-good date range (2024)
+            console.print("  [yellow]No recent data available — downloading 2024 data instead[/yellow]")
+            from datetime import datetime, timezone
+            fallback_start = int(datetime(2024, 6, 1, tzinfo=timezone.utc).timestamp())
+            fallback_end = int(datetime(2024, 12, 31, tzinfo=timezone.utc).timestamp())
+            with console.status(f"[bold yellow]Fetching {market} 2024 data...[/bold yellow]"):
+                candles = _download_init_candles(market, 3600, fallback_start, fallback_end)
+
+        if candles:
+            count = store.upsert_candles(candles)
+            console.print(f"  [green]✓[/green] Stored {count:,} candles for {market}")
+        else:
+            console.print(f"  [yellow]![/yellow] Could not fetch data. Run manually:")
+            console.print(f"    flint data download --market {market} --days 365")
+
+    # 5. Run sample backtest (unless --skip-demo)
+    if skip_demo:
+        console.print("\n  [dim]· Skipping demo backtest (--skip-demo)[/dim]")
     else:
-        console.print(f"  [yellow]![/yellow] Could not fetch data. Run manually:")
-        console.print(f"    flint data download --market {market} --days 365")
+        console.print("\n  Running sample backtest (MA Crossover 10/30)...")
+        from flint.strategy import MACrossoverStrategy
+        from flint.backtest.engine import BacktestEngine
 
-    # 5. Run sample backtest
-    console.print("\n  Running sample backtest (MA Crossover 10/30)...")
-    from flint.strategy import MACrossoverStrategy
-    from flint.backtest.engine import BacktestEngine
-
-    if candles:
-        strategy = MACrossoverStrategy()
-        engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0005)
-        t0 = time.time()
-        result = engine.run(candles)
-        elapsed = time.time() - t0
-        _print_results(result, strategy.name, elapsed)
-        console.print("[green]Flint is ready![/green] Run [bold]flint serve[/bold] to start the UI.")
-    else:
-        console.print("  [dim]Skipped — no data available[/dim]")
+        if candles:
+            strategy = MACrossoverStrategy()
+            engine = BacktestEngine(strategy, initial_capital=10_000, fee_rate=0.0005)
+            t0 = time.time()
+            result = engine.run(candles)
+            elapsed = time.time() - t0
+            _print_results(result, strategy.name, elapsed)
+        else:
+            console.print("  [dim]Skipped — no data available[/dim]")
 
     store.close()
+
+    # 6. Print "What's next?" section
+    console.print()
+    console.print(Panel(
+        "[bold]What's next:[/bold]\n"
+        "  flint serve                    open the web UI\n"
+        "  flint backtest <strategy.py>   run a backtest from CLI\n"
+        "  flint new my_strategy          scaffold a new strategy file\n"
+        "  flint data download --market SOL-PERP --days 365\n"
+        "                                 download more data",
+        border_style="green",
+        title="Ready",
+    ))
 
 
 # ─── BACKTEST ──────────────────────────────────────────────

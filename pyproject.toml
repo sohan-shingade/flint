@@ -3,11 +3,27 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "flint"
+name = "flint-trading"
 version = "1.0.0"
 description = "Backtest and paper trade Solana perp strategies. Local-first, free data."
 requires-python = ">=3.10"
 license = {text = "AGPL-3.0-or-later"}
+readme = "README.md"
+authors = [{name = "Sohan Shingade"}]
+keywords = ["trading", "backtesting", "solana", "drift", "hyperliquid", "defi", "perps", "quantitative-finance"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "duckdb>=0.9",
     "httpx>=0.25",
@@ -24,6 +40,12 @@ dependencies = [
     "rich>=13.0",
     "ccxt>=4.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/sohan-shingade/flint"
+Repository = "https://github.com/sohan-shingade/flint"
+Documentation = "https://github.com/sohan-shingade/flint/tree/main/docs"
+"Issue Tracker" = "https://github.com/sohan-shingade/flint/issues"
 
 [project.scripts]
 flint = "flint.cli:main"
@@ -42,6 +64,7 @@ all = [
 
 [tool.setuptools.packages.find]
 include = ["flint*"]
+exclude = ["tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

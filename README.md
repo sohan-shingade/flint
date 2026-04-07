@@ -55,7 +55,17 @@ Freqtrade is a good tool for Binance spot bots. Flint is what you use when you'r
 
 ## Getting Started
 
-### Option 1: One-line install (recommended)
+### Option 1: pip install (recommended)
+
+```bash
+pip install flint-trading
+flint init                    # download sample data + run demo backtest
+flint serve                   # starts everything at localhost:8000
+```
+
+Note: The web UI requires a separate build step when installing from pip. For the full browser experience out of the box, use the one-line installer or install from source.
+
+### Option 2: One-line install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sohan-shingade/flint/main/install.sh | bash
@@ -63,7 +73,15 @@ curl -fsSL https://raw.githubusercontent.com/sohan-shingade/flint/main/install.s
 
 This installs Python, Node, clones the repo, builds the UI, and opens your browser. A setup wizard walks you through picking venues, markets, and downloading data.
 
-### Option 2: Docker
+For CI or automated environments:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sohan-shingade/flint/main/install.sh | bash -s -- --non-interactive
+```
+
+This skips all interactive prompts. You can also set `FLINT_NONINTERACTIVE=1` or `FLINT_HOME=/custom/path`.
+
+### Option 3: Docker
 
 ```bash
 git clone https://github.com/sohan-shingade/flint.git && cd flint
@@ -72,7 +90,7 @@ docker compose up
 
 Open [localhost:8000](http://localhost:8000). Data persists in a Docker volume.
 
-### Option 3: From source (developers)
+### Option 4: From source (developers)
 
 ```bash
 git clone https://github.com/sohan-shingade/flint.git && cd flint
