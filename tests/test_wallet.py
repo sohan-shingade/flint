@@ -3,19 +3,24 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 
+def _generate_valid_key() -> str:
+    """Generate a valid Solana keypair and return its base58 string."""
+    from solders.keypair import Keypair  # type: ignore
+    return str(Keypair())
+
+
 class TestKeypairAdapter:
     def test_create_from_env(self, monkeypatch):
-        # Use a valid base58 keypair (64 bytes encoded)
-        fake_key = "4wBqpZM9k69W87zdYRzM2FYF9czGSGarfKfabkFtEfGHiKA4VEbJNFMZ1eKQxZNrFBQTnJsEbYBThG8X8DSGA6DD"
-        monkeypatch.setenv("FLINT_PRIVATE_KEY", fake_key)
+        valid_key = _generate_valid_key()
+        monkeypatch.setenv("FLINT_PRIVATE_KEY", valid_key)
         from flint.execution.wallet import KeypairAdapter
         adapter = KeypairAdapter()
         assert adapter.public_key is not None
 
     def test_create_from_param(self):
-        fake_key = "4wBqpZM9k69W87zdYRzM2FYF9czGSGarfKfabkFtEfGHiKA4VEbJNFMZ1eKQxZNrFBQTnJsEbYBThG8X8DSGA6DD"
+        valid_key = _generate_valid_key()
         from flint.execution.wallet import KeypairAdapter
-        adapter = KeypairAdapter(private_key=fake_key)
+        adapter = KeypairAdapter(private_key=valid_key)
         assert adapter.public_key is not None
 
     def test_no_key_raises(self, monkeypatch):
