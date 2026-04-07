@@ -12,7 +12,7 @@
   <a href="#where-data-comes-from"><img src="https://img.shields.io/badge/providers-15_data_sources-8b5cf6?style=flat-square&labelColor=141418" alt="15 providers"></a>
   <a href="#live-trading"><img src="https://img.shields.io/badge/live-Drift_%2B_Hyperliquid-22c55e?style=flat-square&labelColor=141418" alt="Drift + Hyperliquid"></a>
   <img src="https://img.shields.io/badge/python-3.10+-3776ab?style=flat-square&labelColor=141418" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/license-AGPL--3.0-gray?style=flat-square&labelColor=141418" alt="AGPL-3.0 License">
+  <img src="https://img.shields.io/badge/license-MIT-gray?style=flat-square&labelColor=141418" alt="MIT License">
 </p>
 
 ---
