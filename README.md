@@ -411,6 +411,8 @@ Flint is a **backtesting, research, and live trading platform** -- but understan
 - **Live trading requires care.** Live execution on Drift and Hyperliquid is functional but carries real financial risk. Always validate with dry-run, devnet, and parity testing before deploying with real capital. Use API wallets on Hyperliquid.
 - **Single-machine only.** Flint runs locally on one machine. There's no distributed mode, no cloud deployment, and no multi-user support. DuckDB is single-writer.
 - **Solana + Hyperliquid focus.** The core platform is built around Solana (Drift, Jupiter, Raydium, Orca) and Hyperliquid. CEX data is available via CCXT but live execution targets Drift and Hyperliquid.
+- **Jupiter Perps: no historical data.** Jupiter Perps has no public API for historical borrow rates, volume, or OHLCV. Borrow rate data is forward-collected only (accumulates while the collector runs). Volume is approximated from Helius transaction data (USDC transfer proxy, not notional). Do not backtest strategies that depend on Jupiter Perps borrow rates or volume beyond what has been forward-collected.
+- **Orca / Raydium are spot DEXes.** They have no funding rates (that's a perps concept). Historical pool volume is available via GeckoTerminal. Current pool data (TVL, reserves, tick liquidity) is available via their native APIs.
 
 ---
 
