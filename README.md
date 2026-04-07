@@ -1,11 +1,11 @@
 <p align="center">
   <br/>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/FLINT-Solana_Trading_Engine-e8a849?style=for-the-badge&labelColor=09090b">
-    <img alt="Flint" src="https://img.shields.io/badge/FLINT-Solana_Trading_Engine-e8a849?style=for-the-badge&labelColor=09090b">
+    <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/FLINT-Solana_Trading_Lab-e8a849?style=for-the-badge&labelColor=09090b">
+    <img alt="Flint" src="https://img.shields.io/badge/FLINT-Solana_Trading_Lab-e8a849?style=for-the-badge&labelColor=09090b">
   </picture>
   <br/><br/>
-  <strong>Backtest, paper trade, and go live on Solana and Hyperliquid. Free data, local-first, no cloud.</strong>
+  <strong>The open-source trading engine for Drift and Hyperliquid. Backtest with realistic fills, paper trade with live data, go live when ready. One command to install, free data, nothing leaves your machine.</strong>
   <br/><br/>
   <a href="#getting-started"><img src="https://img.shields.io/badge/setup-1_command-57c84d?style=flat-square&labelColor=141418" alt="1 command"></a>
   <a href="#writing-strategies"><img src="https://img.shields.io/badge/strategies-20_built--in-e8a849?style=flat-square&labelColor=141418" alt="20 strategies"></a>
@@ -19,33 +19,37 @@
 
 ## What is Flint?
 
-Flint is a **local trading lab for Solana and Hyperliquid**. You write a strategy in Python, backtest it against historical market data with realistic fills, fees, and funding rates, then deploy it to paper trading or live execution on Drift and Hyperliquid.
+Flint is a **complete trading engine for Solana and Hyperliquid perps**. Write a strategy in Python, backtest it against real market data with venue-accurate fills, funding rates, and margin simulation, then paper trade with live WebSocket prices or deploy directly to Drift and Hyperliquid. No other open-source framework does this for DeFi perps.
 
-Everything runs on your machine. Market data comes free from Drift Protocol and Hyperliquid's public APIs (no signup, no keys). You get a web UI with a code editor, interactive charts, and one-click backtesting. When you're ready, paper trade with live prices, optimize parameters with Optuna, or go live on-chain.
-
-Flint supports **cross-venue strategies** -- arbitrage funding rate spreads between Drift and Hyperliquid, run basis trades across venues, or monitor MEV opportunities on Solana DEXs. Candle data, positions, and margin are tracked per-venue with `venue:market` composite keys.
+Market data is free -- Drift and Hyperliquid publish OHLCV candles, funding rates, open interest, and orderbook snapshots via public APIs. No signup, no API keys, no monthly bills. Everything runs locally and stays on your machine. You get a full browser UI with a VS Code-quality editor, interactive charts, and one-click backtesting, plus a CLI for automation.
 
 <p align="center">
   <img src="imgs/homepage.png" alt="Flint homepage" width="100%">
 </p>
 
-### Why Flint?
+### Why Flint over Freqtrade / Hummingbot / TradingView?
+
+Most trading frameworks were built for centralized exchanges. They bolt on crypto support as an afterthought, use flat-fee fill models, and have zero concept of on-chain funding rates, vAMM mechanics, or Solana priority fees. Flint was built from the ground up for DeFi perps.
 
 | | Flint | Freqtrade | Hummingbot | TradingView |
 |---|:---:|:---:|:---:|:---:|
-| **Solana-native** (Drift, Jupiter, Raydium) | Yes | No | Partial | No |
+| **Solana-native** (Drift, Jupiter, Raydium, Orca) | Yes | No | No | No |
 | **Multi-venue live trading** (Drift + Hyperliquid) | Yes | No | Partial | No |
-| **Free data** (no API keys needed) | Yes | No | No | Paid |
-| **Cross-venue strategies** (arb, basis) | Yes | No | Limited | No |
+| **Free data** (no API keys, no monthly cost) | Yes | No | No | Paid |
+| **Cross-venue strategies** (funding arb, basis trades) | Yes | No | Limited | No |
 | **Browser-based strategy editor** | Yes | No | No | Yes |
-| **Paper trading with live data** | Yes | Yes | Yes | No |
-| **Funding rate analysis** (10 venues) | Yes | Limited | No | No |
-| **4-tier fill models** (vAMM, orderbook, sqrt, flat) | Yes | Flat only | Flat only | N/A |
+| **Paper trading with live WebSocket data** | Yes | Yes | Yes | No |
+| **Funding rate analysis** (10 venues, normalized hourly) | Yes | No | No | No |
+| **4-tier fill models** (vAMM, orderbook walk, sqrt, flat) | Yes | Close-price | Close-price | N/A |
 | **Slippage calibration from live fills** | Yes | No | No | No |
-| **Optuna optimization** | Yes | Hyperopt | No | No |
-| **MCP server** (AI integration) | Yes | No | No | No |
+| **Per-venue margin + liquidation simulation** | Yes | No | No | No |
+| **Optuna hyperparameter optimization** | Yes | Hyperopt | No | No |
+| **Monte Carlo confidence intervals** | Yes | No | No | No |
+| **MCP server** (Claude / AI integration) | Yes | No | No | No |
 | **Local-first** (nothing leaves your machine) | Yes | Yes | Yes | No |
 | **Setup time** | 1 command | 10+ min | Docker | Browser |
+
+Freqtrade is a good tool for Binance spot bots. Flint is what you use when you're trading perps on Drift and Hyperliquid and you need fills that actually model how these venues work.
 
 ---
 
@@ -57,7 +61,7 @@ Flint supports **cross-venue strategies** -- arbitrage funding rate spreads betw
 curl -fsSL https://raw.githubusercontent.com/sohan-shingade/flint/main/install.sh | bash
 ```
 
-This installs Python, Node, clones the repo, builds the UI, and opens your browser. A **setup wizard** walks you through picking venues, markets, and downloading data -- no terminal required after the initial command.
+This installs Python, Node, clones the repo, builds the UI, and opens your browser. A setup wizard walks you through picking venues, markets, and downloading data.
 
 ### Option 2: Docker
 
@@ -66,157 +70,73 @@ git clone https://github.com/sohan-shingade/flint.git && cd flint
 docker compose up
 ```
 
-Open [localhost:8000](http://localhost:8000) -- the setup wizard handles the rest. Data persists in a Docker volume.
+Open [localhost:8000](http://localhost:8000). Data persists in a Docker volume.
 
 ### Option 3: From source (developers)
 
 ```bash
 git clone https://github.com/sohan-shingade/flint.git && cd flint
 pip install -e .
-flint init
-flint serve               # starts everything at localhost:8000
-```
-
-Or use the **Makefile** for dev workflows:
-
-```bash
-make install              # pip install + npm install
-make dev                  # API (hot reload) + UI dev server
-make test                 # run all tests
-make serve                # production build + serve
-make build                # build Docker image
+flint init                    # download sample data + run demo backtest
+flint serve                   # starts everything at localhost:8000
 ```
 
 For UI development:
 
 ```bash
-flint serve --dev         # API only on :8000
-cd ui && npm run dev      # UI on :5173 with hot reload
+flint serve --dev             # API only on :8000
+cd ui && npm run dev          # UI on :5173 with hot reload
 ```
 
 ---
 
-## Core Features
+## Try It Yourself
 
-### Strategy Lab
+After installing, run the canonical backtest to verify everything works:
 
-Write strategies directly in the browser with a full Monaco editor (same editor as VS Code). Pick a market and venue, set your date range and capital, and click **Run**. Results appear inline -- no context switching.
+```bash
+python examples/canonical_backtest.py
+```
 
-Flint ships with **20 built-in strategy templates**: momentum, EMA/MA crossover, RSI, Bollinger Bands, MACD, VWAP reversion, grid trading, funding rate harvesting, cross-venue funding arbitrage, basis trading, MEV monitoring, and more. Or write your own from scratch.
+This downloads 90 days of SOL-PERP hourly data from Drift and runs a momentum breakout strategy with the full fill pipeline (latency, market impact, partial fills). Expected output:
 
-The lab **auto-detects your strategy type** from the code -- single-venue, multi-market, multi-venue, or monitor -- and adjusts the UI accordingly (venue selectors, capital allocation inputs, market pickers).
+```
+Loaded 2,160 candles for SOL-PERP.
 
-<p align="center">
-  <img src="imgs/IMG_1390.png" alt="Strategy Lab" width="100%">
-</p>
+============================================================
+  FLINT BACKTEST RESULTS
+============================================================
+  Strategy:        Momentum Breakout (lookback=20, stop=2%)
+  Market:          SOL-PERP
+  Period:          2026-01-06 to 2026-04-06
+  Candles:         2,160 (1h bars)
+  Initial capital: $10,000
+  Fill model:      FillPipeline (latency + impact + partial)
+  Fee rate:        5 bps
+------------------------------------------------------------
+  Total PnL:       ...
+  Return:          ...
+  Sharpe ratio:    ...
+  Max drawdown:    ...
+  Total trades:    ...
+============================================================
+```
 
-### Backtest Results
+To see how fill model choice affects results:
 
-Every backtest produces a full tearsheet: equity curve vs. buy-and-hold, drawdown chart, price chart with trade entry/exit markers, and a complete metrics panel (Sharpe, Sortino, max drawdown, win rate, profit factor, and more).
+```bash
+python examples/fill_model_comparison.py
+```
 
-<p align="center">
-  <img src="imgs/IMG_5613.png" alt="Backtest results" width="100%">
-  <br/>
-  <em>Equity curve, drawdown, price action with trade markers, and all metrics at a glance</em>
-</p>
+This runs the same strategy through `ClosePriceFill`, `NextBarOpenFill`, `SlippageFill`, and `FillPipeline` side by side -- so you can see how fill assumptions change performance. See the [Fill Model Comparison](docs/validation/fill-model-comparison.md) for the full technical writeup.
 
-Below the overview you get PnL distribution, an exposure timeline, monthly returns heatmap, and a full trade log showing every entry and exit with prices, sizes, venue, and PnL.
+To validate that backtests predict paper trading behavior:
 
-<p align="center">
-  <img src="imgs/IMG_0222.png" alt="Trade log and monthly returns" width="100%">
-  <br/>
-  <em>PnL distribution, exposure timeline, monthly returns, and trade-by-trade breakdown</em>
-</p>
+```bash
+python examples/parity_test_example.py
+```
 
-Backtests simulate realistic execution with a 4-tier fill pipeline:
-
-- **vAMM curve model** -- constant-product AMM fill pricing calibrated to Drift's on-chain depth (Tier 0)
-- **Orderbook walk** -- volume-weighted fills from L2 snapshots (Tier 1)
-- **Sqrt participation model** -- per-venue impact coefficients (Tier 2)
-- **Flat bps fallback** -- configurable basis-point slippage (Tier 3)
-- **Fee models** -- per-venue maker/taker tiers (Drift, Hyperliquid, Binance, OKX, Bybit, dYdX)
-- **Transaction costs** -- Solana priority fees + Jito tips, Hyperliquid settlement
-- **Stop-loss / take-profit** -- checked against each bar's high and low
-- **Funding rates** -- applied hourly to open positions from real multi-venue data
-- **Margin tracking** -- per-venue margin with liquidation detection
-- **Capital allocation** -- per-venue cash with transfer delays
-- **Multi-market** -- run strategies across multiple markets simultaneously
-- **Monte Carlo** -- 500-iteration bootstrap with confidence intervals on every run with 5+ trades
-
-### Optimization
-
-Define a `parameters()` method on your strategy and Flint uses **Optuna** to find the best combination. Bayesian search, grid search, or random -- your choice. Results show a ranked table of all trials with metrics so you can see parameter stability, not just the best single result.
-
-<p align="center">
-  <img src="imgs/IMG_0074.png" alt="Optimization results" width="100%">
-  <br/>
-  <em>Optuna optimization -- 10 trials ranked by Sharpe ratio with one-click "backtest with best params"</em>
-</p>
-
-### Paper Trading
-
-Deploy any backtested strategy to run live against real market data with simulated execution. Click **Deploy to Paper** on any backtest result and it goes live immediately. Select the venue (Drift, Hyperliquid, or both) for paper execution.
-
-Each strategy runs as its own independent portfolio with:
-
-- **Venue selection** -- paper trade on Drift, Hyperliquid, or both simultaneously
-- **Replay-forward execution** -- replays up to 30 days of history, then seamlessly transitions to live candle processing
-- **Risk guardrails** -- configurable max drawdown, daily loss limit, position size cap, and perp liquidation simulation
-- **Realistic fills** -- 5bps slippage, venue-specific fee schedule, optional order latency
-- **Funding rate payments** -- applied hourly from real multi-venue data
-- **Live PnL updates** -- DLOB mid-price polling every 5 seconds
-- **Equity curve with buy-and-hold baseline** -- see your strategy vs just holding the asset
-- **Trade markers** -- entry/exit dots on the equity chart
-- **Session persistence** -- survives server restarts, resumes automatically
-- **Per-venue capital allocation** -- allocate capital per venue with simulated transfer delays
-
-### Live Trading
-
-Deploy strategies to **Drift** (Solana) and **Hyperliquid** with real on-chain execution.
-
-- **Drift**: driftpy SDK, Solana keypair signing, devnet/mainnet support
-- **Hyperliquid**: native REST + EIP-712 signing, API wallets (recommended -- no withdrawals), testnet/mainnet
-- **Multi-venue**: `MultiVenueLiveContext` routes orders by venue, maintains separate margin/positions per venue
-- **Paired leg submission**: cross-venue orders with timeout + auto-unwind on partial fill
-- **Kill switch**: `EquityMonitor` flattens all positions across all venues on drawdown breach
-- **Risk guards**: position limits, drawdown circuit breaker, daily loss limit, rate limiter
-- **Dry-run mode**: full pipeline without submitting transactions
-- **Parity testing**: verify backtest-vs-live behavior before deploying
-- **WebSocket feeds**: Drift + Hyperliquid + Pyth for real-time data
-
-See the [Live Deployment Guide](docs/guides/live-deployment.md) for full setup instructions.
-
-### Data Explorer
-
-Interactive TradingView-quality charts powered by lightweight-charts v5. Overlay indicators (SMA, EMA, VWAP, Bollinger Bands, RSI) and toggle between price and funding views. **Venue selector** lets you switch between Drift and Hyperliquid candles, or overlay both for price comparison.
-
-<p align="center">
-  <img src="imgs/IMG_8100.png" alt="Interactive candlestick chart" width="100%">
-  <br/>
-  <em>Candlestick chart with volume, moving average overlay, and crosshair</em>
-</p>
-
-The Data tab also has a **download manager** where you pick which markets, venues, and time ranges to fetch. Presets make it easy -- "Starter Pack" gets you the top 5 markets, "Everything" gets all 48 Drift markets plus Hyperliquid equivalents and funding from 10 venues.
-
-<p align="center">
-  <img src="imgs/IMG_5254.png" alt="Data download manager" width="100%">
-  <br/>
-  <em>Download presets, venue selection, and market inventory with one-click bulk download</em>
-</p>
-
-### Cross-Venue Funding Analysis
-
-Flint pulls funding rates from **10 venues** (Drift, Binance, Hyperliquid, OKX, Bybit, Gate.io, Bitget, dYdX, plus any CCXT exchange) and normalizes them to hourly. The Data Explorer lets you overlay all venues on one chart to spot dislocations -- when one venue's funding diverges from the rest, there's a potential arb.
-
-<p align="center">
-  <img src="imgs/IMG_7466.png" alt="Cross-venue funding rate comparison" width="100%">
-  <br/>
-  <em>Funding rates across 7 venues with per-venue statistics -- spot dislocations at a glance</em>
-</p>
-
-### Slippage Calibration
-
-Fit your fill models from real live trading data using `flint calibrate`. The `CalibrationEngine` fits power-law and sqrt models via 5-fold cross-validation, detects coefficient drift at 15%, and writes calibrated coefficients back to `VenueConfig`. Pre-trade cost estimation is available in strategies via `ctx.estimate_cost()`.
+This runs the backtest engine and paper broker on identical data and reports PnL divergence, fill price MAE, and equity curve correlation. Pass threshold: <2% PnL divergence. See [Known Limitations](docs/validation/known-limitations.md) for what the backtester does and does not model.
 
 ---
 
@@ -272,15 +192,7 @@ def on_candle(self, candle, history, ctx=None):
     return Signal.HOLD
 ```
 
-With `ctx` you get market orders, limit orders, stop-losses, take-profits, multi-market data access (`ctx.get_candles("BTC-PERP")`), funding rates, open interest, orderbook depth, and cross-venue order routing (`venue="drift"` or `venue="hyperliquid"`).
-
-### Cross-venue strategies
-
-```python
-# Long on Drift (low funding), short on Hyperliquid (high funding)
-ctx.market_order("SOL-PERP", "long", size, venue="drift")
-ctx.market_order("SOL-PERP", "short", size, venue="hyperliquid")
-```
+With `ctx` you get market orders, limit orders, stop-losses, take-profits, multi-market data access (`ctx.get_candles("BTC-PERP")`), funding rates, open interest, and orderbook depth.
 
 ### Making strategies optimizable
 
@@ -295,7 +207,7 @@ def parameters(cls):
     }
 ```
 
-### 20 built-in indicators
+### Built-in indicators
 
 `sma`, `ema`, `wma`, `rsi`, `stochastic`, `macd`, `bollinger`, `bollinger_width`, `atr`, `volatility`, `vwap`, `volume_ratio`, `roc`, `adx`, `z_score`, `highest_high`, `lowest_low` -- all take `(history, period)` and return floats.
 
@@ -305,7 +217,7 @@ See the [Strategy Authoring Guide](docs/guides/strategy-authoring.md) for the fu
 
 ## Where Data Comes From
 
-All core data is **free** -- no API keys, no signup. Flint pulls from Drift Protocol's and Hyperliquid's public APIs and stores everything locally in DuckDB with per-venue candle storage.
+All core data is **free** -- no API keys, no signup. Flint pulls from Drift Protocol's and Hyperliquid's public APIs and stores everything locally in DuckDB.
 
 ### Free (no keys needed)
 
@@ -320,26 +232,83 @@ All core data is **free** -- no API keys, no signup. Flint pulls from Drift Prot
 | **CoinGecko** | Spot candles for BTC, ETH, SOL (fills gaps for non-Drift assets) |
 | **Jupiter** | Swap quotes and routing for any SPL token pair |
 | **Raydium + Orca** | AMM/CLMM pool data, TVL, volume from the two largest Solana DEXs |
-| **Cross-venue funding** | 10 venues: Drift, Binance, Hyperliquid, OKX, Bybit, Gate.io, Bitget, dYdX + CCXT adapters |
 
 ### Optional (free API key, no credit card)
 
 | Source | What you get | Sign up |
 |---|---|---|
-| **Birdeye** | OHLCV for **any** Solana token | [birdeye.so](https://birdeye.so/developers) |
+| **Birdeye** | OHLCV for any Solana token | [birdeye.so](https://birdeye.so/developers) |
 | **Helius** | Liquidation detection, whale tracking | [helius.dev](https://helius.dev) |
-
-### CCXT (100+ centralized exchanges)
-
-```bash
-pip install flint[ccxt]
-```
-
-Pull candles, funding, and orderbooks from Binance, Coinbase, Kraken, KuCoin, and 100+ more. Symbol mapping is automatic (`SOL-PERP` maps to each exchange's native format).
 
 ### Local storage
 
-Everything is cached in a local DuckDB file (`./data/flint.duckdb`). No data leaves your machine. Candles are stored per-venue (`PRIMARY KEY (venue, market, resolution_s, ts)`), so you can have Drift and Hyperliquid data side by side. Subsequent backtests on the same market are instant -- no re-downloading.
+Everything is cached in a local DuckDB file (`./data/flint.duckdb`). No data leaves your machine. Candles are stored per-venue, so you can have Drift and Hyperliquid data side by side. Subsequent backtests on the same market are instant -- no re-downloading.
+
+---
+
+## Backtesting
+
+Every backtest produces a full tearsheet: equity curve vs. buy-and-hold, drawdown chart, price chart with trade entry/exit markers, and a complete metrics panel (Sharpe, Sortino, max drawdown, win rate, profit factor, and more).
+
+<p align="center">
+  <img src="imgs/IMG_5613.png" alt="Backtest results" width="100%">
+  <br/>
+  <em>Equity curve, drawdown, price action with trade markers, and all metrics at a glance</em>
+</p>
+
+Below the overview you get PnL distribution, an exposure timeline, monthly returns heatmap, and a full trade log showing every entry and exit with prices, sizes, venue, and PnL.
+
+<p align="center">
+  <img src="imgs/IMG_0222.png" alt="Trade log and monthly returns" width="100%">
+  <br/>
+  <em>PnL distribution, exposure timeline, monthly returns, and trade-by-trade breakdown</em>
+</p>
+
+Flint ships with 20 built-in strategy templates: momentum, EMA/MA crossover, RSI, Bollinger Bands, MACD, VWAP reversion, grid trading, funding rate harvesting, and more. Or write your own from scratch.
+
+### Optimization
+
+Define a `parameters()` method on your strategy and Flint uses Optuna to find the best combination. Bayesian search, grid search, or random -- your choice. Results show a ranked table of all trials with metrics so you can see parameter stability, not just the best single result.
+
+<p align="center">
+  <img src="imgs/IMG_0074.png" alt="Optimization results" width="100%">
+  <br/>
+  <em>Optuna optimization -- 10 trials ranked by Sharpe ratio with one-click "backtest with best params"</em>
+</p>
+
+---
+
+## Paper Trading
+
+Deploy any backtested strategy to run live against real market data with simulated execution. Click **Deploy to Paper** on any backtest result and it goes live immediately. Select the venue (Drift, Hyperliquid, or both) for paper execution.
+
+- **Replay-forward execution** -- replays up to 30 days of history, then transitions to live candle processing
+- **Risk guardrails** -- configurable max drawdown, daily loss limit, position size cap
+- **Realistic fills** -- venue-specific fee schedule, slippage, optional order latency
+- **Funding rate payments** -- applied hourly from real multi-venue data
+- **Live PnL updates** -- DLOB mid-price polling every 5 seconds
+- **Equity curve with buy-and-hold baseline** -- see your strategy vs just holding the asset
+- **Session persistence** -- survives server restarts, resumes automatically
+
+---
+
+## Data Explorer
+
+Interactive TradingView-quality charts powered by lightweight-charts v5. Overlay indicators (SMA, EMA, VWAP, Bollinger Bands, RSI) and toggle between price and funding views. The venue selector lets you switch between Drift and Hyperliquid candles, or overlay both for price comparison.
+
+<p align="center">
+  <img src="imgs/IMG_8100.png" alt="Interactive candlestick chart" width="100%">
+  <br/>
+  <em>Candlestick chart with volume, moving average overlay, and crosshair</em>
+</p>
+
+The Data tab also has a download manager where you pick which markets, venues, and time ranges to fetch. Presets make it easy -- "Starter Pack" gets the top 5 markets, "Everything" gets all 48 Drift markets plus Hyperliquid equivalents.
+
+<p align="center">
+  <img src="imgs/IMG_5254.png" alt="Data download manager" width="100%">
+  <br/>
+  <em>Download presets, venue selection, and market inventory with one-click bulk download</em>
+</p>
 
 ---
 
@@ -355,22 +324,135 @@ flint data download --market SOL-PERP --days 180    # download market data
 flint data status                                   # show what data you have
 flint new my_strategy                               # scaffold a new strategy file
 flint live --paper                                  # paper trade with live prices
-flint live --strategy momentum --market SOL-PERP    # live trade (requires venue keys)
-flint calibrate --venue drift --market SOL-PERP     # calibrate slippage model from live fills
 ```
+
+---
+
+## Live Trading
+
+Deploy any strategy to Drift or Hyperliquid with the same code you backtested. Flint handles order submission, fill confirmation, position tracking, and risk management. Start on devnet/testnet, validate with parity testing, then go live on mainnet.
+
+- **Drift**: driftpy SDK, Solana keypair signing, devnet/mainnet toggle, vAMM-aware execution
+- **Hyperliquid**: native REST API + EIP-712 signing, API wallets, testnet/mainnet
+- **Multi-venue**: `MultiVenueLiveContext` routes orders to the right venue -- same strategy code, different deployment targets
+- **Kill switch**: `EquityMonitor` flattens all positions across all venues the instant drawdown breaches your threshold
+- **Safety rails**: per-market position limits, drawdown circuit breaker, daily loss cap, order rate limiter, mandatory dry-run mode for first deployment
+- **Parity testing**: run the same strategy through backtest and paper engines on the same time window, get a divergence report before risking capital
+
+```bash
+flint live --strategy my_strategy.py --venue drift --network devnet    # devnet first
+flint live --strategy my_strategy.py --venue drift --dry-run           # dry-run on mainnet
+flint live --strategy my_strategy.py --venue drift                     # real execution
+```
+
+See the [Live Deployment Guide](docs/guides/live-deployment.md) for wallet setup, risk configuration, and the full deployment checklist.
+
+### Venue Execution Pipelines
+
+Drift and Hyperliquid are fundamentally different venues -- different blockchains, different matching engines, different fee structures, different settlement mechanics. Flint models each one natively instead of cramming them through a generic adapter.
+
+| | Drift | Hyperliquid |
+|---|---|---|
+| **Chain** | Solana (on-chain program) | EVM L1 (centralized CLOB) |
+| **Signing** | Solana keypair (Ed25519) | EIP-712 typed data (secp256k1) |
+| **Fill model** | vAMM constant-product curve with peg multiplier + oracle anchoring | CLOB orderbook walk + HLP vault backstop for residual fills |
+| **Taker / maker fees** | 10 bps / -2 bps (maker rebate) | 3.5 bps / 1 bp |
+| **Max leverage** | 10x | 20x |
+| **Settlement latency** | ~8s (Solana slot confirmation + program CPI) | ~1s (centralized matching) |
+| **Network costs** | Solana priority fees + Jito bundle tips (~$0.002/tx) | Negligible L1 gas (~$0.001/tx) |
+| **Margin model** | Cross-collateral per market, 5% maintenance | Account-level cross, 2.5% maintenance |
+| **WebSocket data** | Raw trade stream -- Flint aggregates into candles via `CandleAggregator` | Pre-built OHLCV bars + L2 orderbook snapshots |
+| **Precision** | Base: 1e9, Price: 1e6 (Drift program units) | Per-asset decimal places, string-encoded JSON |
+
+**Drift pipeline**: Orders are converted to `driftpy.OrderParams` with Drift-specific precision scaling, submitted as Solana transactions with configurable priority fees, confirmed via account state polling, and fills are priced through the vAMM curve model calibrated to each market's on-chain liquidity depth (per-market `sqrt_k` values for SOL, BTC, ETH, and 28 other markets).
+
+**Hyperliquid pipeline**: Orders are EIP-712 signed and sent to Hyperliquid's REST exchange endpoint. Market orders are submitted as IOC limits with 0.3% slippage tolerance. Fill prices are modeled by walking the CLOB orderbook levels, with the HLP vault backstopping any remaining size at an impact-adjusted mark price. Asset indices, tick sizes, and lot sizes are fetched from the meta endpoint on startup and cached.
+
+**In backtests**, each venue uses its own `VenueConfig` -- Drift fills go through the vAMM model while Hyperliquid fills walk a synthetic orderbook. Margin, fees, funding rates, and transaction costs are all venue-specific. A $10k SOL-PERP taker trade costs ~$10 on Drift vs ~$3.50 on Hyperliquid -- Flint models this difference automatically.
+
+Additional venue configs (Binance, OKX, Bybit, dYdX) are included for backtest fee/margin modeling via CCXT data, with taker fees ranging from 3.5-5.5 bps and leverage up to 50x.
+
+---
+
+## Cross-Venue Strategies
+
+This is where Flint is genuinely unique. Write strategies that hold positions on multiple venues simultaneously -- arbitrage funding rate spreads, run basis trades, or route to whichever venue has better pricing. No other open-source framework supports this for DeFi perps.
+
+```python
+# Funding arb: long on Drift (low funding), short on Hyperliquid (high funding)
+drift_funding = ctx.get_funding_by_venue("SOL-PERP")["drift"]
+hyper_funding = ctx.get_funding_by_venue("SOL-PERP")["hyperliquid"]
+
+if hyper_funding - drift_funding > 0.0005:  # 5bps spread
+    ctx.market_order("SOL-PERP", "long", size, venue="drift")
+    ctx.market_order("SOL-PERP", "short", size, venue="hyperliquid")
+```
+
+Backtesting supports per-venue positions, margin tracking, capital allocation with simulated transfer delays, and per-venue PnL attribution. The built-in `FundingArbStrategy` and `BasisTradeStrategy` templates are ready to use.
+
+### Cross-Venue Funding Analysis
+
+Flint pulls funding rates from 10 venues (Drift, Binance, Hyperliquid, OKX, Bybit, Gate.io, Bitget, dYdX, plus CCXT adapters for MEXC, Phemex, BitMEX) and normalizes them all to hourly. Overlay all venues on one chart to spot funding dislocations in real time.
+
+<p align="center">
+  <img src="imgs/IMG_7466.png" alt="Cross-venue funding rate comparison" width="100%">
+  <br/>
+  <em>Funding rates across 7 venues with per-venue statistics -- spot the spread, backtest the arb</em>
+</p>
+
+---
+
+## Fill Models and Execution Fidelity
+
+Most backtesting frameworks fill your orders at the close price and call it a day. Flint models how DeFi perp venues actually work.
+
+The fill pipeline has four tiers, applied in priority order:
+
+| Tier | Model | When it's used |
+|------|-------|----------------|
+| 0 | **vAMM curve** | Drift markets -- models the actual constant-product AMM with peg multiplier and oracle anchoring |
+| 1 | **Orderbook walk** | Any market with L2 snapshots -- walks the book for volume-weighted fill prices |
+| 2 | **Sqrt participation** | Per-venue impact coefficients fit from historical or live data |
+| 3 | **Flat bps fallback** | Configurable basis-point slippage when no depth data is available |
+
+On top of fills: per-venue maker/taker fees, Solana priority fees + Jito tips modeled, stop-loss/take-profit checked against each bar's high and low (not just close), hourly funding payments from real multi-venue data, per-venue margin with liquidation detection, and 500-iteration Monte Carlo bootstrap on every run.
+
+### Slippage Calibration
+
+Once you have live fill data, `flint calibrate` fits power-law and sqrt impact models via 5-fold cross-validation, detects when coefficients drift by >15%, and writes calibrated values back to your venue config. Your backtests get more accurate over time.
+
+---
+
+## CCXT (100+ Centralized Exchanges)
+
+```bash
+pip install flint[ccxt]
+```
+
+Pull candles, funding, and orderbooks from Binance, Coinbase, Kraken, KuCoin, OKX, and 100+ more via CCXT. Symbol mapping is automatic -- `SOL-PERP` maps to each exchange's native format. Use CEX data alongside Drift/Hyperliquid for cross-venue analysis or as additional backtest data sources.
+
+---
 
 ## MCP Server (AI Integration)
 
-Flint includes an MCP server so AI models (Claude, etc.) can run backtests, query data, and optimize strategies directly.
+Flint includes an MCP server so AI models (Claude, GPT, etc.) can run backtests, query market data, and optimize strategies programmatically.
 
 ```bash
 pip install flint[mcp]
 claude mcp add flint -- python -m flint.mcp_server
 ```
 
-11 tools available: `run_backtest`, `optimize_strategy`, `get_candles`, `download_market_data`, `list_available_markets`, `list_local_markets`, `list_strategies`, `get_funding_rates`, `get_open_interest`, `get_correlation`, `get_data_freshness`.
+11 tools: `run_backtest`, `optimize_strategy`, `get_candles`, `download_market_data`, `list_available_markets`, `list_local_markets`, `list_strategies`, `get_funding_rates`, `get_open_interest`, `get_correlation`, `get_data_freshness`.
 
-2 resources: `flint://guide` (usage overview), `flint://markets` (market list).
+---
+
+## Limitations
+
+- **Single-machine, single-user.** DuckDB is single-writer. Flint is a personal trading lab, not a team platform. This is by design -- it keeps the stack simple and your data local.
+- **Backtests are not predictions.** Overfitting is easy. Use walk-forward validation and Monte Carlo to stress-test before trusting any result.
+- **Fill models are approximations.** The 4-tier pipeline is far more realistic than close-price fills, but it cannot capture real-time liquidity dynamics, queue priority, or MEV. Calibrate from live data for best accuracy.
+- **Live trading carries real risk.** Always validate with dry-run, devnet, and parity testing. The kill switch and risk guards are there for a reason -- use them.
+- **Local-first means local-only.** No cloud sync, no remote access, no mobile app. Your machine, your data, your responsibility.
 
 ---
 
@@ -393,26 +475,7 @@ claude mcp add flint -- python -m flint.mcp_server
 |---|---|
 | Backend | Python 3.10+, FastAPI, DuckDB, Optuna, NumPy |
 | Frontend | React 19, Vite, Tailwind CSS, Monaco Editor, lightweight-charts v5 |
-| Data | 15 providers (Drift, Hyperliquid, Pyth, Birdeye, Helius, Raydium, Orca, GeckoTerminal, CoinGecko, Jupiter, CCXT) |
-| Funding | 10 venues (Drift, Binance, Hyperliquid, OKX, Bybit, Gate.io, Bitget, dYdX + CCXT) |
-| Execution | Drift (driftpy), Hyperliquid (REST + EIP-712), multi-venue routing |
-| Fill Models | vAMM, orderbook walk, sqrt participation, flat bps, calibration engine |
 | Testing | 676 tests, all mocked (no network calls) |
-
----
-
-## Limitations
-
-Flint is a **backtesting, research, and live trading platform** -- but understand what it is and what it isn't:
-
-- **Backtests are not predictions.** Past performance doesn't guarantee future results. Overfitting to historical data is easy -- use walk-forward validation and Monte Carlo to stress-test your strategies.
-- **Fill simulation is approximate.** Even with the 4-tier fill pipeline (vAMM, orderbook, sqrt, flat), simulated fills cannot capture real-time liquidity dynamics, queue priority, or MEV-induced price impact. Use calibration from live fills to improve accuracy.
-- **Funding rate data varies by venue.** Some venues don't provide historical mark/index prices per record, so funding payments in backtests use the candle close price as a proxy for notional calculation.
-- **Live trading requires care.** Live execution on Drift and Hyperliquid is functional but carries real financial risk. Always validate with dry-run, devnet, and parity testing before deploying with real capital. Use API wallets on Hyperliquid.
-- **Single-machine only.** Flint runs locally on one machine. There's no distributed mode, no cloud deployment, and no multi-user support. DuckDB is single-writer.
-- **Solana + Hyperliquid focus.** The core platform is built around Solana (Drift, Jupiter, Raydium, Orca) and Hyperliquid. CEX data is available via CCXT but live execution targets Drift and Hyperliquid.
-- **Jupiter Perps: no historical data.** Jupiter Perps has no public API for historical borrow rates, volume, or OHLCV. Borrow rate data is forward-collected only (accumulates while the collector runs). Volume is approximated from Helius transaction data (USDC transfer proxy, not notional). Do not backtest strategies that depend on Jupiter Perps borrow rates or volume beyond what has been forward-collected.
-- **Orca / Raydium are spot DEXes.** They have no funding rates (that's a perps concept). Historical pool volume is available via GeckoTerminal. Current pool data (TVL, reserves, tick liquidity) is available via their native APIs.
 
 ---
 

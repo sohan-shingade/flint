@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flint"
-version = "0.2.0"
+version = "1.0.0"
+description = "Backtest and paper trade Solana perp strategies. Local-first, free data."
 requires-python = ">=3.10"
 license = {text = "AGPL-3.0-or-later"}
 dependencies = [

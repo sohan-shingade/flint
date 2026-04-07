@@ -76,9 +76,15 @@ install_python() {
     info "Installing Python..."
     if [ "$OS_TYPE" = "macos" ]; then
         if ! command -v brew >/dev/null 2>&1; then
-            info "Installing Homebrew first..."
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
+            printf "\n  Homebrew is required to install Python on macOS but is not installed.\n"
+            printf "  Install Homebrew? (https://brew.sh) [y/N] "
+            read -r REPLY
+            if [ "$REPLY" = "y" ] || [ "$REPLY" = "Y" ]; then
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+                eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
+            else
+                fail "Homebrew is required to install Python on macOS. Install it manually from https://brew.sh or install Python ${MIN_PYTHON}+ yourself."
+            fi
         fi
         brew install python@3.12
     elif [ "$PKG_MGR" = "apt" ]; then
@@ -123,9 +129,15 @@ install_node() {
     info "Installing Node.js..."
     if [ "$OS_TYPE" = "macos" ]; then
         if ! command -v brew >/dev/null 2>&1; then
-            info "Installing Homebrew first..."
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
+            printf "\n  Homebrew is required to install Node.js on macOS but is not installed.\n"
+            printf "  Install Homebrew? (https://brew.sh) [y/N] "
+            read -r REPLY
+            if [ "$REPLY" = "y" ] || [ "$REPLY" = "Y" ]; then
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+                eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
+            else
+                fail "Homebrew is required to install Node.js on macOS. Install it manually from https://brew.sh or install Node ${MIN_NODE}+ yourself."
+            fi
         fi
         brew install node
     elif [ "$PKG_MGR" = "apt" ]; then
@@ -196,7 +208,14 @@ success "UI built"
 
 progress "Starting Flint..."
 
-lsof -ti:8000 2>/dev/null | xargs kill 2>/dev/null || true
+PORT_PID="$(lsof -ti:8000 2>/dev/null || true)"
+if [ -n "$PORT_PID" ]; then
+    PORT_PROCESS="$(ps -p "$PORT_PID" -o comm= 2>/dev/null || echo "unknown")"
+    printf "\n${RED}Port 8000 is already in use${RESET} by process %s (PID %s).\n" "$PORT_PROCESS" "$PORT_PID"
+    printf "  ${DIM}Option 1:${RESET} Stop the process yourself:  kill %s\n" "$PORT_PID"
+    printf "  ${DIM}Option 2:${RESET} Use a different port:      FLINT_PORT=8001 $VENV_DIR/bin/flint serve\n"
+    fail "Cannot start Flint while port 8000 is occupied."
+fi
 
 "$VENV_DIR/bin/flint" serve > "$FLINT_HOME/flint.log" 2>&1 &
 FLINT_PID=$!
