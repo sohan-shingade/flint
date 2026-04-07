@@ -31,10 +31,11 @@ POOL_ACCOUNT = "5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq"
 PERP_MARKETS = ["SOL-PERP", "ETH-PERP", "BTC-PERP"]
 
 # Custody account addresses per market (mainnet-beta)
+# Found via getProgramAccounts on PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu
 _CUSTODY_ADDRESSES: Dict[str, str] = {
-    "SOL-PERP": "7xS2gz2bTp3fwCC7knpjKGZZ9xQzCDdMaDEGKR8RkYFz",
-    "ETH-PERP": "4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8",
-    "BTC-PERP": "AQCGyheWPLeo6Qp9WpYS9m3Simy7T1K7yCFbOHMXjjQY",
+    "SOL-PERP": "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz",
+    "ETH-PERP": "AQCGyheWPLeo6Qp9WpYS9m3Qj479t7R636N9ey1rEjEn",
+    "BTC-PERP": "5Pv3gM9JrFFH883SWAhvJC9RPYmo8UNxuFtv5bMMALkm",
 }
 
 _DUNE_API = "https://api.dune.com/api/v1"
@@ -672,9 +673,9 @@ class HeliusJupiterVolume:
 
     # Jupiter Perps custody accounts — transfers to/from these = trades
     _CUSTODY_ACCOUNTS = {
-        "7xS2gz2bTp3fwCC7knpjKGZZ9xQzCDdMaDEGKR8RkYFz": "SOL-PERP",
-        "4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8": "ETH-PERP",
-        "AQCGyheWPLeo6Qp9WpYS9m3Simy7T1K7yCFbOHMXjjQY": "BTC-PERP",
+        "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz": "SOL-PERP",
+        "AQCGyheWPLeo6Qp9WpYS9m3Qj479t7R636N9ey1rEjEn": "ETH-PERP",
+        "5Pv3gM9JrFFH883SWAhvJC9RPYmo8UNxuFtv5bMMALkm": "BTC-PERP",
     }
 
     def __init__(self, api_key: str, client: Optional[httpx.Client] = None) -> None:
