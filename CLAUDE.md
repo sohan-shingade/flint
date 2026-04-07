@@ -71,6 +71,26 @@ ui/                # React 19 + Vite + Tailwind
 
 **Funding venues** (all free, no keys): Drift, Binance, Hyperliquid, OKX, Bybit, Gate.io, Bitget, dYdX + CCXT (mexc, phemex, bitmex).
 
+**Volume venues** (auto-downloaded per-venue): Hyperliquid, OKX, Coinbase, Gate.io, Binance US + Jupiter (Helius tx proxy).
+
+### Jupiter Perps Data Limitations
+
+Jupiter Perps has **no historical borrow rate or volume API**. Historical backfill is not currently available:
+
+- **Borrow rates**: Jupiter's `perps-api.jup.ag` provides current rates only. The `RpcBorrowBackfill` needs the Anchor IDL to deserialize custody account bytes — not yet implemented. Forward collection via `JupiterBorrowCollector` works but only accumulates going forward.
+- **Volume**: Approximated from Helius Enhanced Transaction USDC transfers (collateral proxy, not notional). Limited to recent data on free tier.
+- **No historical OHLCV**: Jupiter Perps has no candle endpoint. Use Pyth oracle prices instead.
+
+Strategies that depend on Jupiter Perps borrow rate history or volume should not be backtested beyond the data that has been forward-collected.
+
+### Orca / Raydium Data
+
+Orca and Raydium are **spot DEXes** — they have no funding rates (that's a perps concept). Available data:
+
+- **Current pool data**: TVL, reserves, fee rates — via native APIs
+- **Historical OHLCV + volume**: Via GeckoTerminal (free, no key) for any Solana pool
+- **Tick-level liquidity**: Orca Whirlpools via `OrcaTickFetcher` (on-chain RPC)
+
 ## v0.3 Execution Features (dev branch)
 
 | Feature | Files | What |
