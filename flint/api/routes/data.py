@@ -889,8 +889,9 @@ def download_market_data(request: Request, body: dict):
 # Each stores candles under its own venue tag.
 _VOLUME_VENUES = [
     ("hyperliquid", "native"),  # native = use HyperliquidCandleProvider directly
-    ("jupiter", "dune"),        # dune = use DuneVolumeBackfill (requires FLINT_DUNE_API_KEY)
+    ("jupiter", "dune"),        # dune/helius = Jupiter Perps volume
     ("okx", "ccxt"),
+    ("coinbase", "ccxt"),
     ("gate", "ccxt"),
     ("binanceus", "ccxt"),
 ]
