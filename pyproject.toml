@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "flint-trading"
 version = "1.0.0"
-description = "Backtest and paper trade Solana perp strategies. Local-first, free data."
+description = "Backtest and trade on Drift and Hyperliquid. Data from 100+ CEXs via CCXT. Local-first, free data."
 requires-python = ">=3.10"
 license = {text = "MIT"}
 readme = "README.md"

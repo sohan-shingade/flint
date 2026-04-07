@@ -5,7 +5,7 @@
     <img alt="Flint" src="https://img.shields.io/badge/FLINT-Solana_Trading_Lab-e8a849?style=for-the-badge&labelColor=09090b">
   </picture>
   <br/><br/>
-  <strong>The open-source trading engine for Drift and Hyperliquid. Backtest with realistic fills, paper trade with live data, go live when ready. One command to install, free data, nothing leaves your machine.</strong>
+  <strong>The open-source trading engine for Drift and Hyperliquid. Backtest with realistic fills, paper trade with live data, go live when ready. Data from 100+ CEXs via CCXT. One command to install, free data, nothing leaves your machine.</strong>
   <br/><br/>
   <a href="#getting-started"><img src="https://img.shields.io/badge/setup-1_command-57c84d?style=flat-square&labelColor=141418" alt="1 command"></a>
   <a href="#writing-strategies"><img src="https://img.shields.io/badge/strategies-20_built--in-e8a849?style=flat-square&labelColor=141418" alt="20 strategies"></a>
@@ -19,7 +19,7 @@
 
 ## What is Flint?
 
-Flint is a **complete trading engine for Solana and Hyperliquid perps**. Write a strategy in Python, backtest it against real market data with venue-accurate fills, funding rates, and margin simulation, then paper trade with live WebSocket prices or deploy directly to Drift and Hyperliquid. No other open-source framework does this for DeFi perps.
+Flint is a **complete trading engine for Solana and Hyperliquid perps**. Write a strategy in Python, backtest it against real market data with venue-accurate fills, funding rates, and margin simulation, then paper trade with live WebSocket prices or deploy directly to Drift and Hyperliquid. Pull data from 100+ centralized exchanges via CCXT for cross-venue analysis and backtesting. No other open-source framework does this for DeFi perps.
 
 Market data is free -- Drift and Hyperliquid publish OHLCV candles, funding rates, open interest, and orderbook snapshots via public APIs. No signup, no API keys, no monthly bills. Everything runs locally and stays on your machine. You get a full browser UI with a VS Code-quality editor, interactive charts, and one-click backtesting, plus a CLI for automation.
 
@@ -390,7 +390,7 @@ Drift and Hyperliquid are fundamentally different venues -- different blockchain
 
 **In backtests**, each venue uses its own `VenueConfig` -- Drift fills go through the vAMM model while Hyperliquid fills walk a synthetic orderbook. Margin, fees, funding rates, and transaction costs are all venue-specific. A $10k SOL-PERP taker trade costs ~$10 on Drift vs ~$3.50 on Hyperliquid -- Flint models this difference automatically.
 
-Additional venue configs (Binance, OKX, Bybit, dYdX) are included for backtest fee/margin modeling via CCXT data, with taker fees ranging from 3.5-5.5 bps and leverage up to 50x.
+**CEX backtest modeling**: Per-venue `VenueConfig` presets for Binance (4.5bps taker, 50x), OKX (5bps, 50x), Bybit (5.5bps, 50x), dYdX (5bps, 20x), and others provide accurate fee, margin, and latency modeling in backtests via CCXT data. Live CEX execution via CCXT is on the roadmap — the `ExecutionContext` interface is venue-agnostic, so adding CCXT order submission is a connector, not an architecture change.
 
 ---
 
@@ -449,7 +449,12 @@ Once you have live fill data, `flint calibrate` fits power-law and sqrt impact m
 pip install flint[ccxt]
 ```
 
-Pull candles, funding, and orderbooks from Binance, Coinbase, Kraken, KuCoin, OKX, and 100+ more via CCXT. Symbol mapping is automatic -- `SOL-PERP` maps to each exchange's native format. Use CEX data alongside Drift/Hyperliquid for cross-venue analysis or as additional backtest data sources.
+Pull candles, funding rates, and orderbooks from Binance, Coinbase, Kraken, KuCoin, OKX, Bybit, Gate.io, and 100+ more via CCXT. Symbol mapping is automatic -- `SOL-PERP` maps to each exchange's native format.
+
+- **Data**: Candles, funding rates, and orderbooks for backtesting and cross-venue analysis
+- **Backtest modeling**: Per-venue fee schedules, margin configs, and leverage tiers for Binance (50x), OKX (50x), Bybit (50x), dYdX (20x), and more
+- **Cross-venue analysis**: Compare funding rates across DeFi and CEX venues in the same chart
+- **Live CEX execution**: On the roadmap -- the `VenueConfig` and `ExecutionContext` interfaces are ready, CCXT order submission is next
 
 ---
 
@@ -463,6 +468,23 @@ claude mcp add flint -- python -m flint.mcp_server
 ```
 
 11 tools: `run_backtest`, `optimize_strategy`, `get_candles`, `download_market_data`, `list_available_markets`, `list_local_markets`, `list_strategies`, `get_funding_rates`, `get_open_interest`, `get_correlation`, `get_data_freshness`.
+
+---
+
+## Maturity
+
+| Feature | Status |
+|---------|--------|
+| Backtesting | Stable |
+| Paper trading | Stable |
+| Data providers (Drift, Hyperliquid, CCXT) | Stable |
+| Optimization (Optuna) | Stable |
+| Live trading — Drift devnet | Beta |
+| Live trading — Hyperliquid testnet | Beta |
+| Live trading — DeFi mainnet | Experimental |
+| CEX live trading (via CCXT) | Roadmap |
+| Cross-venue execution | Beta |
+| MEV scanning | Experimental |
 
 ---
 
