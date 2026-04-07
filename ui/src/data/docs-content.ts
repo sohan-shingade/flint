@@ -40,7 +40,7 @@ export const docsContent: DocSection[] = [
           </ol>
           <h4>What You'll Need</h4>
           <ul>
-            <li>Python 3.9+ and pip (or Docker)</li>
+            <li>Python 3.10+ and pip (or Docker)</li>
             <li>A terminal</li>
             <li>That's it. No API keys, no wallet, no database setup.</li>
           </ul>
@@ -58,11 +58,15 @@ export const docsContent: DocSection[] = [
           { language: 'bash', code: `# Option A: one-line install (recommended — handles Python, Node, UI build)
 curl -fsSL https://raw.githubusercontent.com/sohan-shingade/flint/main/install.sh | bash
 
-# Option B: Docker
+# Option B: pip install from PyPI
+pip install flint-trading   # installs as "flint" CLI command; import name is "flint"
+flint init
+
+# Option C: Docker
 git clone https://github.com/sohan-shingade/flint.git && cd flint
 docker compose up   # open localhost:8000, wizard handles the rest
 
-# Option C: from source
+# Option D: from source
 git clone <repo-url>
 cd flint
 pip install -e .
@@ -225,7 +229,7 @@ flint backtest strategies/user/my_first.py -m BTC-PERP -p 6m` },
         `,
         codeBlocks: [
           { language: 'bash', code: `flint serve
-# Open http://localhost:5173 in your browser` },
+# Open http://localhost:8000 in your browser` },
           { language: 'text', code: `What you'll see:
 1. Strategy Lab — Monaco code editor + config panel
    - Pick a template from the dropdown (20+ to choose from)
@@ -255,7 +259,7 @@ Keyboard shortcuts:
           <p>In the Strategy Lab, try each of the 20+ templates. The <strong>Advanced</strong> category shows v2 features: cross-market access, stop-loss/take-profit orders, and cross-venue funding strategies.</p>
 
           <h4>Try Different Markets</h4>
-          <p>Flint supports 42 Drift perp markets. Popular ones: SOL-PERP, BTC-PERP, ETH-PERP, WIF-PERP, DOGE-PERP. Each market has different volatility and character.</p>
+          <p>Flint supports 48 Drift perp markets. Popular ones: SOL-PERP, BTC-PERP, ETH-PERP, WIF-PERP, DOGE-PERP. Each market has different volatility and character.</p>
 
           <h4>Paper Trade Your Best Strategy</h4>
           <p>Once you find a profitable strategy, paper trade it:</p>
@@ -310,18 +314,23 @@ print(f"Overfitting ratio: {result.overfitting_ratio:.2f}")  # > 2x = suspicious
           { language: 'bash', code: `# Option 1: One-line install (handles everything)
 curl -fsSL https://raw.githubusercontent.com/sohan-shingade/flint/main/install.sh | bash
 
-# Option 2: Docker
+# Option 2: pip install from PyPI
+pip install flint-trading   # installs as "flint" CLI; import name is "flint"
+flint init          # creates config, backfills data, runs sample backtest
+flint serve         # starts the API + UI at localhost:8000
+
+# Option 3: Docker
 git clone https://github.com/sohan-shingade/flint.git && cd flint
 echo "FLINT_BIRDEYE_API_KEY=your-key" > .env   # optional
 docker compose up   # open localhost:8000
 
-# Option 3: From source
+# Option 4: From source
 git clone https://github.com/sohan-shingade/flint.git && cd flint
 pip install -e .
 flint init          # creates config, backfills data, runs sample backtest
 flint serve         # starts the API + UI at localhost:8000
 
-# Option 4: Makefile shortcuts (developers)
+# Option 5: Makefile shortcuts (developers)
 make install   # pip install -e . + ui npm install
 make dev       # flint serve --dev + npm run dev in parallel
 make test      # pytest tests/ -v` },
@@ -345,7 +354,7 @@ flint backtest strategies/user/my_alpha.py --market SOL-PERP --period 90d
 flint optimize strategies/user/my_alpha.py --metric sharpe --trials 50
 
 # Or use the web UI
-flint serve   # then open http://localhost:5173` },
+flint serve   # then open http://localhost:8000` },
           { language: 'text', code: `CLI Output:
 ┏━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
 ┃ Metric           ┃      Value ┃
@@ -369,16 +378,16 @@ flint serve   # then open http://localhost:5173` },
             <tr><td>flint/execution/</td><td>Fill models, fee models, BacktestContext, PaperBroker, LiveDriftContext, MultiVenueLiveContext</td></tr>
             <tr><td>flint/execution/tx_costs.py</td><td>Transaction cost model (Jito tip, priority fee, slippage)</td></tr>
             <tr><td>flint/execution/vamm.py</td><td>vAMM curve math for realistic Drift fill simulation</td></tr>
-            <tr><td>flint/execution/clmm.py</td><td>Concentrated liquidity math for Orca/Raydium fill simulation</td></tr>
-            <tr><td>flint/execution/calibration.py</td><td>Auto-calibrate fill models against real trade history</td></tr>
+            <tr><td>flint/mev/clmm.py</td><td>Concentrated liquidity math for Orca/Raydium fill simulation</td></tr>
+            <tr><td>flint/backtest/calibration.py</td><td>Auto-calibrate fill models against real trade history</td></tr>
             <tr><td>flint/risk/</td><td>Risk guards: MaxDrawdown, MaxPositions, DailyLossLimit, EquityMonitor, PerMarketPositionLimit, MaxOrdersPerMinute</td></tr>
             <tr><td>flint/optimization/</td><td>Optuna hyperparameter search + walk-forward analysis</td></tr>
             <tr><td>flint/analytics/</td><td>Metrics, tearsheet, Monte Carlo simulation</td></tr>
             <tr><td>flint/providers/</td><td>Drift Data API, Drift S3, Hyperliquid candles, GeckoTerminal, Jupiter (15 providers)</td></tr>
             <tr><td>flint/providers/hyperliquid_candles.py</td><td>Hyperliquid OHLCV candle provider</td></tr>
-            <tr><td>flint/connectors/hyperliquid_ws.py</td><td>Hyperliquid WebSocket connector for live data</td></tr>
-            <tr><td>flint/connectors/multi_venue_live.py</td><td>Multi-venue live execution coordinator</td></tr>
-            <tr><td>flint/connectors/hyperliquid_live.py</td><td>Live order execution on Hyperliquid (EIP-712 signing)</td></tr>
+            <tr><td>flint/providers/hyperliquid_ws.py</td><td>Hyperliquid WebSocket connector for live data</td></tr>
+            <tr><td>flint/execution/multi_venue_live.py</td><td>Multi-venue live execution coordinator</td></tr>
+            <tr><td>flint/execution/hyperliquid_live.py</td><td>Live order execution on Hyperliquid (EIP-712 signing)</td></tr>
             <tr><td>flint/collector/</td><td>Automated data collection (oracle, funding, orderbook)</td></tr>
             <tr><td>flint/portfolio/</td><td>Multi-strategy portfolio engine + allocators</td></tr>
             <tr><td>flint/paper/</td><td>Paper trading engine</td></tr>
@@ -403,7 +412,7 @@ flint serve   # then open http://localhost:5173` },
         id: 'cli-overview',
         title: 'Command Overview',
         content: `
-          <p>The <code>flint</code> CLI is installed via <code>pip install -e .</code> and registered as a console script.</p>
+          <p>The <code>flint</code> CLI is installed via <code>pip install flint-trading</code> (or <code>pip install -e .</code> from source) and registered as a console script.</p>
           <table>
             <tr><td><strong>flint init</strong></td><td>Scaffold project, create flint.yaml, backfill data, run sample backtest</td></tr>
             <tr><td><strong>flint backtest</strong></td><td>Run a strategy on historical data with rich terminal output + ASCII equity sparkline</td></tr>
@@ -425,19 +434,22 @@ flint serve   # then open http://localhost:5173` },
           <table>
             <tr><td>--days N</td><td>Days of data to backfill (default: 90)</td></tr>
             <tr><td>--market MARKET</td><td>Primary market to backfill (default: SOL-PERP)</td></tr>
+            <tr><td>--skip-demo</td><td>Skip running the demo backtest</td></tr>
           </table>
           <h4>What it does:</h4>
           <ol>
             <li>Creates <code>flint.yaml</code> config file (if not exists)</li>
             <li>Creates <code>data/</code> and <code>strategies/user/</code> directories</li>
+            <li>Checks for existing data — skips download if &ge;80% coverage already exists</li>
             <li>Downloads candle data from Drift Data API (with S3 fallback)</li>
             <li>Falls back to 2024 data if current data unavailable</li>
-            <li>Runs a sample MA Crossover backtest to verify everything works</li>
+            <li>Runs a sample MA Crossover backtest to verify everything works (unless <code>--skip-demo</code>)</li>
           </ol>
         `,
         codeBlocks: [
           { language: 'bash', code: `flint init
-flint init --days 365 --market BTC-PERP` },
+flint init --days 365 --market BTC-PERP
+flint init --skip-demo   # skip the sample backtest` },
         ],
       },
       {
@@ -563,10 +575,10 @@ flint data markets bybit --type spot --quote USDC` },
         content: `
           <h4>flint serve</h4>
           <table>
-            <tr><td>--host</td><td>Bind address (default: 0.0.0.0)</td></tr>
+            <tr><td>--host</td><td>Bind address (default: 127.0.0.1)</td></tr>
             <tr><td>--port</td><td>Port number (default: 8000)</td></tr>
           </table>
-          <p>Starts the FastAPI server with auto-reload. The web UI runs separately on port 5173 (<code>cd ui && npm run dev</code>).</p>
+          <p>Starts the FastAPI server with the built UI at localhost:8000. For dev mode, use <code>flint serve --dev</code> (API only) and run the UI separately with <code>cd ui && npm run dev</code> (port 5173).</p>
 
           <h4>flint new [NAME]</h4>
           <table>
@@ -866,11 +878,12 @@ def on_candle(self, candle, history, ctx=None):
         title: 'Fill Models',
         content: `
           <p>Fill models determine <strong>at what price</strong> orders execute. Pluggable via <code>BacktestEngine(fill_model=...)</code>. Flint offers a 4-tier fill model hierarchy from simple to highest-fidelity:</p>
+          <p>Legacy standalone models include <code>ClosePriceFill</code>, <code>NextBarOpenFill</code>, and <code>SlippageFill</code>. The <code>FillPipeline</code> applies tiers in priority order:</p>
           <table>
-            <tr><td><strong>Tier 1 — Flat</strong></td><td><code>ClosePriceFill</code> / <code>SlippageFill(bps=N)</code> — fill at close ± fixed slippage. Fastest. Default.</td></tr>
-            <tr><td><strong>Tier 2 — Orderbook</strong></td><td><code>OrderbookFillModel</code> — walks the L2 order book for volume-weighted fill prices. Requires stored orderbook snapshots.</td></tr>
-            <tr><td><strong>Tier 3 — vAMM Curve</strong></td><td><code>VammCurveFill</code> — simulates Drift's virtual AMM curve using <code>VammCurve</code> math. Accounts for market depth and quote asset reserve ratios.</td></tr>
-            <tr><td><strong>Tier 4 — CLMM</strong></td><td><code>ClmmFill</code> — concentrated liquidity math for Orca/Raydium pools. Uses tick arrays to compute exact fill prices through the liquidity curve.</td></tr>
+            <tr><td><strong>Tier 0 — vAMM</strong></td><td><code>VammCurveFill</code> — simulates Drift's virtual AMM curve using <code>VammCurve</code> math. Accounts for market depth and quote asset reserve ratios. Used when vAMM configs are provided.</td></tr>
+            <tr><td><strong>Tier 1 — Orderbook walk</strong></td><td><code>OrderbookFillModel</code> — walks the L2 order book for volume-weighted fill prices. Requires stored orderbook snapshots.</td></tr>
+            <tr><td><strong>Tier 2 — Sqrt participation</strong></td><td>Square-root participation model — estimates price impact from bar volume. Used when volume data exists but no orderbook.</td></tr>
+            <tr><td><strong>Tier 3 — Flat bps fallback</strong></td><td><code>ClosePriceFill</code> / <code>SlippageFill(bps=N)</code> — fill at close ± fixed slippage. Last resort when no other data is available.</td></tr>
           </table>
           <p>The <code>tx_cost_model</code> parameter adds Jito tip + Solana priority fee to every fill, regardless of which fill tier is used. Calibrate fill model parameters against real trade history with <code>flint calibrate</code>.</p>
           <h4>How limit orders fill</h4>
@@ -1004,8 +1017,8 @@ result = engine.run(candles)` },
             <li>All data cached in local DuckDB — instant on next load</li>
             <li>8h funding rates are forward-filled to hourly for uniform resolution</li>
           </ol>
-          <h4>Available Markets (36 perp + 19 spot)</h4>
-          <p>SOL-PERP, BTC-PERP, ETH-PERP, and 33 more perp markets. Spot: SOL, BTC, ETH, JUP, DRIFT, PYTH, WIF, JTO, BONK, POPCAT, and more. With Birdeye enabled, backtest <strong>any</strong> Solana token.</p>
+          <h4>Available Markets (48 perp + 17 spot)</h4>
+          <p>SOL-PERP, BTC-PERP, ETH-PERP, and 45 more perp markets. Spot: SOL, BTC, ETH, JUP, DRIFT, PYTH, WIF, JTO, BONK, POPCAT, and more. With Birdeye enabled, backtest <strong>any</strong> Solana token.</p>
         `,
       },
       {
@@ -1106,7 +1119,7 @@ providers:
     drift: true
     hyperliquid: true
     okx: true
-    binance: false       # geo-blocked from US
+    binance: false       # geo-blocked from US (funding data works without API key)
     bybit: false` },
           { language: 'python', code: `# Use providers directly in scripts
 from flint.providers import BirdeyeProvider, CCXTProvider, PythProvider
@@ -1377,20 +1390,23 @@ curl http://localhost:8000/api/v1/backtest/abc123/results` },
         id: 'api-calibration',
         title: 'Calibration Endpoints',
         content: `
-          <p>Calibration endpoints fit fill model parameters against real trade history to improve backtest accuracy.</p>
+          <p>Calibration and parity endpoints live under the backtest router. They fit fill model parameters against real trade history to improve backtest accuracy.</p>
           <table>
-            <tr><td><strong>POST /calibration/run</strong></td><td>Run calibration for a venue/market. Body: <code>venue</code>, <code>market</code>, <code>days</code> (default: 30)</td></tr>
-            <tr><td><strong>GET /calibration/status/{job_id}</strong></td><td>Poll calibration job. Returns: status, fitted_params, rmse, fill_price_error_bps</td></tr>
-            <tr><td><strong>GET /calibration/params</strong></td><td>Current calibrated parameters for all venue/market pairs</td></tr>
-            <tr><td><strong>POST /calibration/apply</strong></td><td>Write fitted parameters back to flint.yaml. Body: <code>job_id</code></td></tr>
+            <tr><td><strong>POST /backtest/calibrate</strong></td><td>Run slippage calibration for a venue/market. Body: <code>venue</code>, <code>market</code>, <code>lookback_days</code> (default: 30). Returns fitted parameters and error metrics.</td></tr>
+            <tr><td><strong>POST /backtest/parity</strong></td><td>Run a parity test comparing backtest fills against real fills. Body: <code>venue</code>, <code>market</code>, <code>strategy</code>, <code>code</code>. Reports fill price error, slippage accuracy, and timing drift.</td></tr>
           </table>
           <p>Calibrated parameters are stored in <code>flint.yaml</code> under <code>fill_models</code> and automatically used by the backtest engine for the matching venue.</p>
         `,
         codeBlocks: [
           { language: 'bash', code: `# Run calibration via API
-curl -X POST http://localhost:8000/api/v1/calibration/run \\
+curl -X POST http://localhost:8000/api/v1/backtest/calibrate \\
   -H "Content-Type: application/json" \\
-  -d '{"venue": "drift", "market": "SOL-PERP", "days": 30}'
+  -d '{"venue": "drift", "market": "SOL-PERP", "lookback_days": 30}'
+
+# Run parity test via API
+curl -X POST http://localhost:8000/api/v1/backtest/parity \\
+  -H "Content-Type: application/json" \\
+  -d '{"venue": "drift", "market": "SOL-PERP"}'
 
 # Or use the CLI
 flint calibrate --venue drift --market SOL-PERP` },
@@ -1575,7 +1591,7 @@ risk:
             <tr><td>OrcaTickFetcher</td><td>Fetches live tick arrays from the Orca Whirlpool program on-chain. Stores in <code>tick_snapshots</code> table for offline replay.</td></tr>
             <tr><td>ClmmArbDetector</td><td>Finds arb routes between CLMM pools and constant-product AMMs. Accounts for the non-uniform liquidity distribution in tick ranges.</td></tr>
           </table>
-          <p>Use <code>ClmmFill</code> fill model (Tier 4) to replay CLMM tick snapshots during backtesting for the highest-fidelity fill price simulation on Orca/Raydium pools.</p>
+          <p>Use <code>ClmmFill</code> fill model to replay CLMM tick snapshots during backtesting for the highest-fidelity fill price simulation on Orca/Raydium pools.</p>
         `,
         codeBlocks: [
           { language: 'python', code: `from flint.mev.clmm import CLMMPool, OrcaTickFetcher
@@ -1653,6 +1669,10 @@ docker compose up` },
           <h4>Multi-Venue Live Trading</h4>
           <p>Run a single strategy across both venues simultaneously using <code>MultiVenueLiveContext</code>. Capital is split per <code>capital_allocation</code> config. Both venue connections are managed concurrently with independent heartbeat monitoring.</p>
 
+          <h4>Network Defaults</h4>
+          <p>The default network is <strong>devnet</strong> for Drift and <strong>testnet</strong> for Hyperliquid. Mainnet requires explicit <code>--network mainnet</code> or <code>live_network: mainnet</code> in config. Mainnet support is experimental.</p>
+          <p>Use <code>--dry-run</code> flag (or <code>live_dry_run: true</code> in config) to simulate live execution without submitting real orders. Dry-run mode logs all order intents with timestamps for review.</p>
+
           <h4>Safety Rails</h4>
           <ul>
             <li><code>EquityMonitor</code> — kills all positions if equity falls below the floor percentage</li>
@@ -1682,7 +1702,7 @@ flint live my_strategy.py --market SOL-PERP --venue hyperliquid --real
 # Multi-venue live trading (REAL MONEY on both)
 flint live multi_venue_strat.py --venue multi --real` },
           { language: 'python', code: `# Programmatic multi-venue live setup
-from flint.connectors.multi_venue_live import MultiVenueLiveContext
+from flint.execution.multi_venue_live import MultiVenueLiveContext
 from flint.risk import RiskManager, EquityMonitor, MaxOrdersPerMinute
 
 ctx = MultiVenueLiveContext(
