@@ -225,3 +225,129 @@ def test_full_fill_not_flagged_partial():
     fill = model.fill_market(_make_order(size=10.0), _make_candle())
     assert fill is not None
     assert fill.is_partial is False
+
+
+# ---------------------------------------------------------------------------
+# Volume-scaled synthetic depth fallback
+# ---------------------------------------------------------------------------
+
+def _make_candle_vol(price=100.0, volume=10000.0):
+    """Candle helper with explicit volume control."""
+    return Candle(1700000000, price, price + 1, price - 1, price, volume, "SOL-PERP", 3600, "pyth")
+
+
+def test_low_volume_bar_produces_worse_fills():
+    """Low-volume bars should produce more slippage than high-volume bars.
+
+    Uses a 5000 SOL order ($500K notional) so the walk exercises multiple
+    levels and the depth difference between thin/thick books is visible.
+    """
+    model = BinanceFillModel()
+    order = _make_order(side=Side.LONG, size=5000.0)
+
+    # Low volume → thin book (scale floors near 0.05, ~$1M depth)
+    fill_low = model.fill_market(order, _make_candle_vol(volume=100_000.0))
+    # High volume → thick book (scale ~2.5, ~$50M depth)
+    fill_high = model.fill_market(order, _make_candle_vol(volume=10_000_000.0))
+
+    assert fill_low is not None and fill_high is not None
+    # Buying: higher price = worse fill.  Low volume should give worse (higher) price.
+    assert fill_low.price > fill_high.price
+
+
+def test_low_volume_bar_worse_fills_sell_side():
+    """Short orders: low-volume bars should give worse (lower) fill prices."""
+    model = BinanceFillModel()
+    order = _make_order(side=Side.SHORT, size=5000.0)
+
+    fill_low = model.fill_market(order, _make_candle_vol(volume=100_000.0))
+    fill_high = model.fill_market(order, _make_candle_vol(volume=10_000_000.0))
+
+    assert fill_low is not None and fill_high is not None
+    # Selling: lower price = worse fill.
+    assert fill_low.price < fill_high.price
+
+
+def test_participation_cap_produces_partial_fill():
+    """Orders exceeding 10 % of bar volume should be partially filled."""
+    model = BinanceFillModel()
+    # 10 % of 50 SOL = 5 SOL max fill
+    candle = _make_candle_vol(volume=50.0)
+    order = _make_order(size=20.0)
+
+    fill = model.fill_market(order, candle)
+    assert fill is not None
+    assert fill.size <= 50.0 * 0.10 + 1e-9  # at most 10 % of bar volume
+    assert fill.is_partial is True
+
+
+def test_participation_cap_full_fill_when_small_order():
+    """Small orders relative to bar volume should fill completely."""
+    model = BinanceFillModel()
+    candle = _make_candle_vol(volume=100_000.0)
+    order = _make_order(size=10.0)  # 10 / 100_000 = 0.01 % — well under cap
+
+    fill = model.fill_market(order, candle)
+    assert fill is not None
+    assert fill.size == 10.0
+    assert fill.is_partial is False
+
+
+def test_zero_volume_uses_unscaled_profile():
+    """When volume is zero, the static profile is used (no scaling, no cap)."""
+    model = BinanceFillModel()
+    candle = _make_candle_vol(volume=0.0)
+    order = _make_order(size=10.0)
+
+    fill = model.fill_market(order, candle)
+    assert fill is not None
+    assert fill.size == 10.0  # no participation cap applied
+
+
+def test_volume_scaling_does_not_affect_real_orderbook():
+    """When a real orderbook is set, volume scaling and participation cap
+    should NOT be applied — only the synthetic fallback uses them."""
+    model = BinanceFillModel()
+    model.set_orderbook(_make_book(depth_per_level=200.0))
+    candle = _make_candle_vol(volume=5.0)  # tiny volume — would cap to 0.5 SOL
+    order = _make_order(size=10.0)
+
+    fill = model.fill_market(order, candle)
+    assert fill is not None
+    assert fill.size == 10.0  # real book: no cap
+
+
+def test_bybit_synthetic_fallback_applies_participation_cap():
+    """Bybit synthetic path should respect both IOC band and participation cap."""
+    model = BybitFillModel()
+    candle = _make_candle_vol(volume=30.0)  # 10 % = 3 SOL max
+    order = _make_order(size=20.0)
+
+    fill = model.fill_market(order, candle)
+    assert fill is not None
+    assert fill.size <= 30.0 * 0.10 + 1e-9
+    assert fill.is_partial is True
+
+
+def test_bybit_real_book_no_participation_cap():
+    """Bybit with a real book should not apply participation cap."""
+    model = BybitFillModel()
+    model.set_orderbook(_make_book(depth_per_level=200.0))
+    candle = _make_candle_vol(volume=5.0)
+    order = _make_order(size=10.0)
+
+    fill = model.fill_market(order, candle)
+    assert fill is not None
+    assert fill.size == 10.0
+
+
+def test_okx_volume_scaling():
+    """OKX synthetic fills should also respect volume scaling."""
+    model = OkxFillModel()
+    order = _make_order(side=Side.LONG, size=5000.0)
+
+    fill_low = model.fill_market(order, _make_candle_vol(volume=100_000.0))
+    fill_high = model.fill_market(order, _make_candle_vol(volume=10_000_000.0))
+
+    assert fill_low is not None and fill_high is not None
+    assert fill_low.price > fill_high.price
