@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 
 from ..models import (
     AccountState,
+    BorrowSnapshot,
     Candle,
     Fill,
     FundingRate,
@@ -31,7 +32,7 @@ class _Position:
     """Internal mutable position tracker."""
 
     __slots__ = ("market", "venue", "side", "size", "entry_price", "entry_ts",
-                 "unrealized_pnl", "funding_paid")
+                 "unrealized_pnl", "funding_paid", "borrow_cumulative_at_entry")
 
     def __init__(self, market: str, side: Side, size: float,
                  entry_price: float, entry_ts: int, venue: str = "default"):
@@ -43,6 +44,7 @@ class _Position:
         self.entry_ts = entry_ts
         self.unrealized_pnl = 0.0
         self.funding_paid = 0.0
+        self.borrow_cumulative_at_entry = 0.0
 
     def update_pnl(self, current_price: float) -> None:
         if self.side == Side.LONG:
@@ -74,6 +76,7 @@ class BacktestContext(ExecutionContext):
         risk_manager=None,
         margin_engine=None,
         capital_allocator=None,
+        venue_fill_models: Optional[Dict[str, FillModel]] = None,
     ):
         self._initial_capital = initial_capital
         self._cash = initial_capital
@@ -83,6 +86,7 @@ class BacktestContext(ExecutionContext):
         self._risk_manager = risk_manager
         self._margin_engine = margin_engine  # Optional: enables margin/liquidation tracking
         self._allocator = capital_allocator  # Optional: enables per-venue capital tracking
+        self._venue_fill_models: Dict[str, FillModel] = venue_fill_models or {}  # per-venue dispatch
         if self._allocator:
             self._cash = self._allocator.total_cash  # sync initial
 
@@ -103,6 +107,11 @@ class BacktestContext(ExecutionContext):
         # Funding rate data for strategy access
         self._funding_history: Dict[str, List[FundingRate]] = {}  # market -> [FundingRate]
         self._venue_funding: Dict[str, Dict[str, List[FundingRate]]] = {}  # market -> {venue -> [FundingRate]}
+
+        # Borrow rate data for Jupiter Perps
+        self._borrow_history: Dict[str, List[BorrowSnapshot]] = {}  # market -> [BorrowSnapshot]
+        self._total_borrow_paid: float = 0.0
+        self._borrow_payments: list = []
 
         # Orderbook data for strategy access and fill models
         self._orderbook_history: Dict[str, List] = {}  # market -> [OrderbookSnapshot]
@@ -352,6 +361,45 @@ class BacktestContext(ExecutionContext):
             for venue, rates in venues.items()
         }
 
+    # --- Borrow rate data (Jupiter Perps) ---
+
+    def add_borrow_rate(self, bs: BorrowSnapshot) -> None:
+        """Record a borrow rate snapshot for strategy access."""
+        mkt = bs.market
+        if mkt not in self._borrow_history:
+            self._borrow_history[mkt] = []
+        self._borrow_history[mkt].append(bs)
+
+    def get_borrow_rate(self, market: str = None, venue: str = None) -> Optional[float]:
+        """Get the most recent hourly borrow rate for a market."""
+        mkt = market or (self._current_candle.market if self._current_candle else None)
+        if not mkt:
+            return None
+        history = self._borrow_history.get(mkt)
+        if not history:
+            return None
+        return history[-1].rate_hourly
+
+    def get_borrow_rates(self, market: str = None, venue: str = None, lookback: int = 24) -> list:
+        """Get recent borrow rate history as [(ts, rate_hourly), ...]."""
+        mkt = market or (self._current_candle.market if self._current_candle else None)
+        if not mkt:
+            return []
+        history = self._borrow_history.get(mkt, [])
+        sliced = history[-lookback:] if lookback < len(history) else history
+        return [(bs.ts, bs.rate_hourly) for bs in sliced]
+
+    def get_borrow_cumulative_at(self, market: str, ts: int) -> Optional[float]:
+        """Get the cumulative borrow rate at or before a timestamp. Returns None if no data."""
+        history = self._borrow_history.get(market, [])
+        result = None
+        for bs in history:
+            if bs.ts <= ts:
+                result = bs.cumulative_rate
+            else:
+                break
+        return result
+
     def add_orderbook_snapshot(self, snapshot) -> None:
         """Record an orderbook snapshot. Called by engine."""
         mkt = snapshot.market
@@ -532,9 +580,10 @@ class BacktestContext(ExecutionContext):
                 remaining.append(order)
                 continue
 
+            fm = self._resolve_fill_model(order.venue)
             fill = None
             if order.order_type in (OrderType.STOP_LOSS, OrderType.TAKE_PROFIT):
-                if self._fill_model.check_stop_trigger(order, order_candle):
+                if fm.check_stop_trigger(order, order_candle):
                     # Stop triggers become market orders — fill at candle close,
                     # not the trigger price. In a gap-down the fill can be worse.
                     fill_price = order_candle.close
@@ -561,7 +610,7 @@ class BacktestContext(ExecutionContext):
                         venue=order.venue,
                     )
             elif order.order_type == OrderType.LIMIT:
-                fill = self._fill_model.fill_limit(order, order_candle)
+                fill = fm.fill_limit(order, order_candle)
 
             if fill is not None:
                 fee = self._fee_model.compute_fee(fill)
@@ -578,11 +627,19 @@ class BacktestContext(ExecutionContext):
         self._pending_orders = remaining
         return fills
 
+    def _resolve_fill_model(self, venue: str) -> FillModel:
+        """Look up the fill model for a venue, falling back to the default."""
+        return self._venue_fill_models.get(venue, self._fill_model)
+
     def process_market_orders(self, candle: Candle) -> List[Fill]:
         """Process market orders placed during this bar AFTER strategy runs.
 
         Resolves the correct candle for each order's market, enabling
         cross-market orders (e.g. buy spot while selling perp).
+
+        When venue_fill_models are configured, each order is dispatched to
+        its venue-specific fill model. Orders whose venue is not in the map
+        fall back to the default fill model.
         """
         fills = []
         for order in self._market_orders_queue:
@@ -593,7 +650,8 @@ class BacktestContext(ExecutionContext):
                     f"order dropped. Download this market's data first."
                 )
                 continue
-            fill = self._fill_model.fill_market(order, order_candle)
+            fm = self._resolve_fill_model(order.venue)
+            fill = fm.fill_market(order, order_candle)
             if fill is not None:
                 fee = self._fee_model.compute_fee(fill)
                 fill = Fill(
@@ -608,8 +666,8 @@ class BacktestContext(ExecutionContext):
                 self._apply_fill(fill)
                 fills.append(fill)
             # Drain GTC resting orders from pipeline
-            if hasattr(self._fill_model, 'drain_resting_orders'):
-                for resting in self._fill_model.drain_resting_orders():
+            if hasattr(fm, 'drain_resting_orders'):
+                for resting in fm.drain_resting_orders():
                     if self._check_order_cap():
                         self._pending_orders.append(resting)
         self._market_orders_queue.clear()
@@ -642,6 +700,7 @@ class BacktestContext(ExecutionContext):
 
         Resolves the correct candle for each position's market so that
         cross-market positions (spot + perp) close at their own prices.
+        Uses per-venue fill model dispatch when venue_fill_models are configured.
         """
         fills = []
         for (venue, market) in list(self._positions.keys()):
@@ -653,7 +712,8 @@ class BacktestContext(ExecutionContext):
                 size=pos.size, order_id=self._next_order_id(), ts=close_candle.ts,
                 venue=venue,
             )
-            fill = self._fill_model.fill_market(order, close_candle)
+            fm = self._resolve_fill_model(venue)
+            fill = fm.fill_market(order, close_candle)
             if fill:
                 fee = self._fee_model.compute_fee(fill)
                 fill = Fill(
@@ -710,7 +770,7 @@ class BacktestContext(ExecutionContext):
 
         if pos is None:
             # Opening a new position
-            self._positions[key] = _Position(
+            new_pos = _Position(
                 market=market,
                 side=fill.side,
                 size=fill.size,
@@ -718,6 +778,13 @@ class BacktestContext(ExecutionContext):
                 entry_ts=fill.ts,
                 venue=venue,
             )
+            # Snapshot cumulative borrow rate for Jupiter Perps positions
+            if venue == "jupiter":
+                cum = self.get_borrow_cumulative_at(
+                    market, self._current_candle.ts if self._current_candle else 0)
+                if cum is not None:
+                    new_pos.borrow_cumulative_at_entry = cum
+            self._positions[key] = new_pos
         elif pos.side == fill.side:
             # Adding to position (DCA)
             total_cost = pos.entry_price * pos.size + fill.price * fill.size
@@ -731,6 +798,25 @@ class BacktestContext(ExecutionContext):
                     pnl = round((fill.price - pos.entry_price) * pos.size, 8)
                 else:
                     pnl = round((pos.entry_price - fill.price) * pos.size, 8)
+
+                # Realize Jupiter borrow cost on close
+                borrow_cost = 0.0
+                if venue == "jupiter" and pos.borrow_cumulative_at_entry > 0:
+                    cum_now = self.get_borrow_cumulative_at(
+                        market, self._current_candle.ts if self._current_candle else 0)
+                    if cum_now is not None:
+                        size_usd = abs(pos.size * fill.price)
+                        borrow_cost = (cum_now - pos.borrow_cumulative_at_entry) * size_usd
+                        self._total_borrow_paid += borrow_cost
+                        self._borrow_payments.append({
+                            "market": market,
+                            "ts": fill.ts,
+                            "cost": borrow_cost,
+                            "cum_entry": pos.borrow_cumulative_at_entry,
+                            "cum_exit": cum_now,
+                        })
+                        self._cash -= borrow_cost
+
                 self._credit_cash(pnl, venue)
                 self._closed_positions.append({
                     "market": market,
@@ -743,12 +829,13 @@ class BacktestContext(ExecutionContext):
                     "exit_ts": fill.ts,
                     "pnl": pnl,
                     "funding_paid": pos.funding_paid,
+                    "borrow_paid": borrow_cost,
                 })
                 remainder = fill.size - pos.size
                 del self._positions[key]
                 if remainder > 0.0001:  # ignore dust positions from float rounding
                     # Flip: open opposite position with remainder
-                    self._positions[key] = _Position(
+                    new_pos = _Position(
                         market=market,
                         side=fill.side,
                         size=remainder,
@@ -756,12 +843,38 @@ class BacktestContext(ExecutionContext):
                         entry_ts=fill.ts,
                         venue=venue,
                     )
+                    # Snapshot cumulative borrow for the new flipped position
+                    if venue == "jupiter":
+                        cum = self.get_borrow_cumulative_at(
+                            market, self._current_candle.ts if self._current_candle else 0)
+                        if cum is not None:
+                            new_pos.borrow_cumulative_at_entry = cum
+                    self._positions[key] = new_pos
             else:
                 # Partial close
                 if pos.side == Side.LONG:
                     pnl = round((fill.price - pos.entry_price) * fill.size, 8)
                 else:
                     pnl = round((pos.entry_price - fill.price) * fill.size, 8)
+
+                # Proportional Jupiter borrow cost on partial close
+                borrow_cost = 0.0
+                if venue == "jupiter" and pos.borrow_cumulative_at_entry > 0:
+                    cum_now = self.get_borrow_cumulative_at(
+                        market, self._current_candle.ts if self._current_candle else 0)
+                    if cum_now is not None:
+                        size_usd = abs(fill.size * fill.price)
+                        borrow_cost = (cum_now - pos.borrow_cumulative_at_entry) * size_usd
+                        self._total_borrow_paid += borrow_cost
+                        self._borrow_payments.append({
+                            "market": market,
+                            "ts": fill.ts,
+                            "cost": borrow_cost,
+                            "cum_entry": pos.borrow_cumulative_at_entry,
+                            "cum_exit": cum_now,
+                        })
+                        self._cash -= borrow_cost
+
                 self._credit_cash(pnl, venue)
                 self._closed_positions.append({
                     "market": market,
@@ -774,6 +887,7 @@ class BacktestContext(ExecutionContext):
                     "exit_ts": fill.ts,
                     "pnl": pnl,
                     "funding_paid": 0.0,
+                    "borrow_paid": borrow_cost,
                     "partial": True,
                 })
                 pos.size -= fill.size
@@ -799,6 +913,10 @@ class BacktestContext(ExecutionContext):
     @property
     def total_tx_costs(self) -> float:
         return self._total_tx_costs
+
+    @property
+    def total_borrow_paid(self) -> float:
+        return self._total_borrow_paid
 
     @property
     def log_messages(self) -> List[str]:

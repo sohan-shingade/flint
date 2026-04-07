@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
 import InteractiveChart from '../components/InteractiveChart'
+import { EXECUTION_VENUES, DEFAULT_EXECUTION_VENUES, DEX_VENUES, CEX_VENUES } from '../constants/venues'
 
 interface CandleData { ts: number; open: number; high: number; low: number; close: number; volume: number }
 interface MarketInfo { market: string; resolution_s: number; candle_count: number; first_ts: number; last_ts: number }
@@ -95,43 +96,8 @@ export default function DataExplorer() {
   const [downloadProgress, setDownloadProgress] = useState<{market: string, status: string}[]>([])
   const [downloadWarnings, setDownloadWarnings] = useState<string[]>([])
   const [isDownloading, setIsDownloading] = useState(false)
-  // Candle venue selection for downloads (multi-select)
-  const CANDLE_VENUES = [
-    { id: 'drift',        label: 'Drift',        color: '#e8a849' },
-    { id: 'hyperliquid',  label: 'Hyperliquid',  color: '#22d3ee' },
-    { id: 'binance',      label: 'Binance',       color: '#f0b90b' },
-    { id: 'okx',          label: 'OKX',           color: '#a78bfa' },
-    { id: 'bybit',        label: 'Bybit',         color: '#57c84d' },
-  ]
-  const DEFAULT_CANDLE_VENUES = ['drift']
-  const [selectedCandleVenues, setSelectedCandleVenues] = useState<string[]>(DEFAULT_CANDLE_VENUES)
-  // Funding venue selection for downloads
-  const ALL_VENUES = [
-    { id: 'drift',       label: 'Drift',       freq: '1h',  color: '#e8a849' },
-    { id: 'hyperliquid', label: 'Hyperliquid',  freq: '1h',  color: '#22d3ee' },
-    { id: 'dydx',        label: 'dYdX',         freq: '1h',  color: '#818cf8' },
-    { id: 'okx',         label: 'OKX',          freq: '8h',  color: '#a78bfa' },
-    { id: 'bybit',       label: 'Bybit',        freq: '8h',  color: '#57c84d' },
-    { id: 'gateio',      label: 'Gate.io',      freq: '8h',  color: '#f472b6' },
-    { id: 'bitget',      label: 'Bitget',       freq: '8h',  color: '#fb923c' },
-    { id: 'mexc',        label: 'MEXC',         freq: '8h',  color: '#34d399' },
-    { id: 'phemex',      label: 'Phemex',       freq: '8h',  color: '#f87171' },
-    { id: 'bitmex',      label: 'BitMEX',       freq: '8h',  color: '#fbbf24' },
-  ]
-  const DEFAULT_VENUES = ['drift', 'hyperliquid', 'okx', 'dydx', 'gateio', 'bitget']
-  const [selectedVenues, setSelectedVenues] = useState<string[]>(DEFAULT_VENUES)
-  // Multi-venue price visualization
-  const VENUE_COLORS: Record<string, string> = {
-    default: '#e8a849',
-    drift: '#e8a849',
-    hyperliquid: '#22d3ee',
-    binance: '#a78bfa',
-    okx: '#57c84d',
-    bybit: '#f472b6',
-  }
-  const [priceVenues, setPriceVenues] = useState<string[]>(['default'])
-  const [priceViewMode, setPriceViewMode] = useState<'overlay' | 'separate'>('overlay')
-  const [venueCandles, setVenueCandles] = useState<Record<string, CandleData[]>>({})
+  // Execution venue selection for downloads
+  const [selectedExecutionVenues, setSelectedExecutionVenues] = useState<string[]>(DEFAULT_EXECUTION_VENUES)
 
   // Indicators
   const [showSMA, setShowSMA] = useState(false)
@@ -144,6 +110,7 @@ export default function DataExplorer() {
   const [showRSI, setShowRSI] = useState(false)
   const [rsiPeriod, setRsiPeriod] = useState(14)
   const [showVolume, setShowVolume] = useState(true)
+  const [venueVolume, setVenueVolume] = useState<Record<string, {ts: number, volume: number}[]>>({})
   const [showFunding, setShowFunding] = useState(false)
 
   const refreshInventory = useCallback(() => {
@@ -218,29 +185,6 @@ export default function DataExplorer() {
       return loaded
     })
 
-    // Fetch per-venue candles if multiple venues selected
-    if (priceVenues.length > 0 && priceVenues[0] !== 'default') {
-      const venueData: Record<string, CandleData[]> = {}
-      for (const v of priceVenues) {
-        try {
-          const vParams = new URLSearchParams({
-            market, resolution_s: String(resolution), limit: String(Math.floor(limit)),
-            venue: v,
-            ...(startTs > 0 ? { start_ts: String(startTs) } : {}),
-            ...(endTs < now ? { end_ts: String(endTs) } : {}),
-          })
-          const vRes = await fetch(`/api/v1/data/ohlcv?${vParams}`)
-          const vData = await vRes.json()
-          if (vData.candles?.length > 0) {
-            venueData[v] = vData.candles
-          }
-        } catch {}
-      }
-      setVenueCandles(venueData)
-    } else {
-      setVenueCandles({})
-    }
-
     // Query local funding data (grouped by venue)
     if (market.includes('-PERP') && loaded.length > 0) {
       try {
@@ -264,6 +208,24 @@ export default function DataExplorer() {
       setFundingByVenue({})
     }
 
+    // Fetch per-venue volume data
+    if (loaded.length > 0) {
+      try {
+        const candleStart = loaded[0].ts
+        const candleEnd = loaded[loaded.length - 1].ts
+        const vParams = new URLSearchParams({
+          market, resolution_s: String(resolution),
+          start_ts: String(candleStart),
+          end_ts: String(candleEnd),
+        })
+        const vr = await fetch(`/api/v1/data/volume?${vParams}`)
+        const vd = await vr.json()
+        setVenueVolume(vd.venues || {})
+      } catch { setVenueVolume({}) }
+    } else {
+      setVenueVolume({})
+    }
+
     if (loaded.length > 0) {
       setLoadStatus(`${loaded.length.toLocaleString()} candles`)
     } else {
@@ -271,7 +233,7 @@ export default function DataExplorer() {
     }
 
     setLoading(false)
-  }, [market, resolution, horizon, startDate, endDate, priceVenues, priceViewMode])
+  }, [market, resolution, horizon, startDate, endDate])
 
   // Load data on mount and when market/settings change
   useEffect(() => { loadData() }, [loadData])
@@ -296,8 +258,6 @@ export default function DataExplorer() {
     const progress: {market: string, status: string}[] = selectedDownloads.map(m => ({ market: m, status: 'pending' }))
     setDownloadProgress([...progress])
 
-    // Determine which candle venues to download; fall back to default (auto) if none selected
-    const candleVenuesToFetch = selectedCandleVenues.length > 0 ? selectedCandleVenues : ['default']
     const allWarnings: string[] = []
 
     for (let i = 0; i < selectedDownloads.length; i++) {
@@ -309,32 +269,29 @@ export default function DataExplorer() {
       let totalFunding = 0
       let anyError = false
 
-      for (const cv of candleVenuesToFetch) {
-        try {
-          const res = await fetch('/api/v1/data/download', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              market: mkt,
-              resolution_s: 3600,
-              start_ts: startTs,
-              end_ts: endTs,
-              funding_venues: selectedVenues,
-              venue: cv,
-            }),
-          })
-          const data = await res.json()
-          totalCandles += (data.downloaded || 0) + (data.existing || 0)
-          totalFunding += data.funding_fetched || 0
-          if (data.warnings && data.warnings.length > 0) {
-            for (const w of data.warnings) {
-              allWarnings.push(`[${mkt}] ${w}`)
-            }
-            setDownloadWarnings([...allWarnings])
+      try {
+        const res = await fetch('/api/v1/data/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            market: mkt,
+            resolution_s: 3600,
+            start_ts: startTs,
+            end_ts: endTs,
+            execution_venues: selectedExecutionVenues,
+          }),
+        })
+        const data = await res.json()
+        totalCandles += (data.downloaded || 0) + (data.existing || 0)
+        totalFunding += data.funding_fetched || 0
+        if (data.warnings && data.warnings.length > 0) {
+          for (const w of data.warnings) {
+            allWarnings.push(`[${mkt}] ${w}`)
           }
-        } catch {
-          anyError = true
+          setDownloadWarnings([...allWarnings])
         }
+      } catch {
+        anyError = true
       }
 
       if (anyError && totalCandles === 0) {
@@ -343,7 +300,8 @@ export default function DataExplorer() {
         progress[i].status = 'no data found'
       } else {
         const fundingInfo = totalFunding > 0 ? ` + ${totalFunding} funding` : ''
-        progress[i].status = `${totalCandles.toLocaleString()} candles${fundingInfo}`
+        const venueList = selectedExecutionVenues.map(v => v.charAt(0).toUpperCase() + v.slice(1)).join(', ')
+        progress[i].status = `${totalCandles.toLocaleString()} candles${fundingInfo} — venues: ${venueList}`
       }
       setDownloadProgress([...progress])
     }
@@ -587,71 +545,61 @@ export default function DataExplorer() {
               )}
             </div>
 
-            {/* Candle source venues (multi-select) */}
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <span className="text-[10px] text-ghost tracking-[0.15em]">CANDLE SOURCE</span>
-                <span className="text-[9px] text-ghost/40">{selectedCandleVenues.length} selected — OHLCV venue(s) to download candle data from</span>
-                <button onClick={() => setSelectedCandleVenues(CANDLE_VENUES.map(v => v.id))}
-                  className="text-[9px] text-ghost/40 hover:text-amber ml-auto">All</button>
-                <button onClick={() => setSelectedCandleVenues(DEFAULT_CANDLE_VENUES)}
-                  className="text-[9px] text-ghost/40 hover:text-amber">Default</button>
-                <button onClick={() => setSelectedCandleVenues([])}
-                  className="text-[9px] text-ghost/40 hover:text-terminal">None</button>
+            {/* Execution Venues */}
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-ghost text-[10px] tracking-wider">
+                  EXECUTION VENUES <span className="text-ghost/40">— venues to simulate trading on</span>
+                </label>
+                <div className="flex gap-2 text-[9px]">
+                  <button onClick={() => setSelectedExecutionVenues(DEX_VENUES.map(v => v.id))}
+                          className="text-ghost/60 hover:text-ghost">All DEX</button>
+                  <button onClick={() => setSelectedExecutionVenues(CEX_VENUES.map(v => v.id))}
+                          className="text-ghost/60 hover:text-ghost">All CEX</button>
+                  <button onClick={() => setSelectedExecutionVenues(EXECUTION_VENUES.map(v => v.id))}
+                          className="text-ghost/60 hover:text-ghost">All</button>
+                  <button onClick={() => setSelectedExecutionVenues([])}
+                          className="text-ghost/60 hover:text-ghost">None</button>
+                </div>
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {CANDLE_VENUES.map(v => {
-                  const sel = selectedCandleVenues.includes(v.id)
+              <div className="grid grid-cols-3 gap-2">
+                {EXECUTION_VENUES.map(v => {
+                  const selected = selectedExecutionVenues.includes(v.id)
                   return (
-                    <button key={v.id}
-                      onClick={() => setSelectedCandleVenues(prev =>
+                    <button
+                      key={v.id}
+                      onClick={() => setSelectedExecutionVenues(prev =>
                         prev.includes(v.id) ? prev.filter(x => x !== v.id) : [...prev, v.id]
                       )}
-                      className={`px-2.5 py-1.5 text-[9px] tracking-wider border transition-all flex items-center gap-1.5 ${
-                        sel ? 'text-white' : 'border-border text-ghost/40 hover:text-terminal'
+                      className={`p-3 border text-left transition-colors ${
+                        selected ? 'bg-amber-glow/10' : 'border-border hover:border-border-bright'
                       }`}
-                      style={sel ? { borderColor: v.color + '66', background: v.color + '15', color: v.color } : {}}
+                      style={selected ? { borderColor: v.color } : {}}
                     >
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: sel ? v.color : '#555' }} />
-                      {v.label}
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[11px] font-medium" style={selected ? { color: v.color } : { color: '#9ca3af' }}>
+                          {v.label}
+                        </span>
+                        <span className="text-[8px] px-1.5 py-0.5 border border-border/50 text-ghost/50 uppercase">
+                          {v.type}
+                        </span>
+                      </div>
+                      <div className="text-[9px] text-ghost/40">{v.dataType}</div>
+                      <div className="text-[8px] text-ghost/30 mt-1">{v.dataSource}</div>
                     </button>
                   )
                 })}
               </div>
+              <p className="text-ghost/40 text-[9px] mt-1">
+                {selectedExecutionVenues.length} selected — downloads orderbook depth + funding/borrow data per venue
+              </p>
             </div>
 
-            {/* Funding venues */}
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <span className="text-[10px] text-ghost tracking-[0.15em]">FUNDING VENUES</span>
-                <span className="text-[9px] text-ghost/40">{selectedVenues.length} selected — funding rates will be downloaded for perp markets</span>
-                <button onClick={() => setSelectedVenues(ALL_VENUES.map(v => v.id))}
-                  className="text-[9px] text-ghost/40 hover:text-amber ml-auto">All</button>
-                <button onClick={() => setSelectedVenues(DEFAULT_VENUES)}
-                  className="text-[9px] text-ghost/40 hover:text-amber">Defaults</button>
-                <button onClick={() => setSelectedVenues([])}
-                  className="text-[9px] text-ghost/40 hover:text-terminal">None</button>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {ALL_VENUES.map(v => {
-                  const sel = selectedVenues.includes(v.id)
-                  return (
-                    <button key={v.id}
-                      onClick={() => setSelectedVenues(prev =>
-                        prev.includes(v.id) ? prev.filter(x => x !== v.id) : [...prev, v.id]
-                      )}
-                      className={`px-2.5 py-1.5 text-[9px] tracking-wider border transition-all flex items-center gap-1.5 ${
-                        sel ? 'text-white' : 'border-border text-ghost/40 hover:text-terminal'
-                      }`}
-                      style={sel ? { borderColor: v.color + '66', background: v.color + '15', color: v.color } : {}}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: sel ? v.color : '#555' }} />
-                      {v.label}
-                      <span className="text-[8px] opacity-50">{v.freq}</span>
-                    </button>
-                  )
-                })}
-              </div>
+            {/* Price Source Banner */}
+            <div className="mb-6 px-3 py-2 border border-border/30 bg-panel/50">
+              <span className="text-[9px] text-ghost/50">
+                PRICE DATA: <span className="text-amber/60">Pyth Oracle</span> — canonical oracle prices used across all venues
+              </span>
             </div>
 
             {/* Market grid — split by type */}
@@ -811,41 +759,70 @@ export default function DataExplorer() {
       {/* ── interactive price chart ── */}
       {activeTab === 'price' && candles.length > 0 && (
         <div className={loading ? 'opacity-50 pointer-events-none transition-opacity' : 'transition-opacity'} style={{ animation: 'fadeUp 0.3s ease' }}>
-          {/* Venue price selector */}
-          <div className="flex items-center gap-3 mb-3">
-            <span className="text-[9px] text-ghost tracking-wider">PRICE VENUES</span>
-            {['default', 'drift', 'hyperliquid', 'binance', 'okx', 'bybit'].map(v => (
-              <button key={v} onClick={() => {
-                setPriceVenues(prev =>
-                  prev.includes(v) ? prev.filter(x => x !== v) : [...prev.filter(x => x !== 'default'), v]
-                )
-              }}
-                className={`px-2 py-0.5 text-[9px] border transition-all ${
-                  priceVenues.includes(v)
-                    ? 'border-amber/50 bg-amber-glow text-amber'
-                    : 'border-border text-ghost/50 hover:text-ghost'
-                }`}
-              >{v === 'default' ? 'ALL' : v.toUpperCase()}</button>
-            ))}
-
-            {priceVenues.length > 1 && priceVenues[0] !== 'default' && (
-              <div className="flex gap-1 ml-4">
-                <button onClick={() => setPriceViewMode('overlay')}
-                  className={`px-2 py-0.5 text-[9px] border ${priceViewMode === 'overlay' ? 'border-amber/50 text-amber' : 'border-border text-ghost/50'}`}
-                >OVERLAY</button>
-                <button onClick={() => setPriceViewMode('separate')}
-                  className={`px-2 py-0.5 text-[9px] border ${priceViewMode === 'separate' ? 'border-amber/50 text-amber' : 'border-border text-ghost/50'}`}
-                >SEPARATE</button>
-              </div>
-            )}
-          </div>
-
           <InteractiveChart
             candles={candles}
             height={500}
             indicators={chartIndicators}
             fundingRates={chartFundingRates}
           />
+
+          {/* Per-Venue Volume */}
+          {Object.keys(venueVolume).length > 0 && showVolume && (() => {
+            // Pre-compute max total volume across all bars once
+            const maxVol = Math.max(...candles.map(cc => {
+              let sum = 0
+              for (const data of Object.values(venueVolume)) {
+                const m = data.find(d => d.ts === cc.ts)
+                if (m) sum += m.volume
+              }
+              return sum
+            }), 1)
+
+            return (
+              <div className="mt-2 border border-border bg-surface/60 px-3 py-2">
+                <div className="text-[9px] text-ghost/40 tracking-[0.15em] mb-1">VOLUME BY VENUE</div>
+                <div className="flex items-end gap-[1px] h-16 border-b border-border/30">
+                  {candles.map((c) => {
+                    const venueVols: {venue: string, vol: number, color: string}[] = []
+                    for (const [venue, data] of Object.entries(venueVolume)) {
+                      const match = data.find(d => d.ts === c.ts)
+                      if (match && match.volume > 0) {
+                        const color = EXECUTION_VENUES.find(v => v.id === venue)?.color || '#666'
+                        venueVols.push({ venue, vol: match.volume, color })
+                      }
+                    }
+
+                    return (
+                      <div key={c.ts} className="flex-1 flex flex-col justify-end" style={{ height: '100%' }}>
+                        {venueVols.map(({ venue, vol, color }) => (
+                          <div
+                            key={venue}
+                            style={{
+                              height: `${(vol / maxVol) * 100}%`,
+                              backgroundColor: color,
+                              opacity: 0.6,
+                              minHeight: vol > 0 ? '1px' : 0,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="flex gap-3 mt-1">
+                  {Object.keys(venueVolume).map(venue => {
+                    const color = EXECUTION_VENUES.find(v => v.id === venue)?.color || '#666'
+                    return (
+                      <div key={venue} className="flex items-center gap-1 text-[8px] text-ghost/40">
+                        <div className="w-2 h-2" style={{ backgroundColor: color, opacity: 0.6 }} />
+                        {venue}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })()}
 
           {/* stats bar */}
           <div className="mt-4 grid grid-cols-4 gap-3">
@@ -861,72 +838,6 @@ export default function DataExplorer() {
               </div>
             ))}
           </div>
-
-          {/* Multi-venue overlay chart */}
-          {Object.keys(venueCandles).length > 1 && priceViewMode === 'overlay' && (
-            <div className="mt-4 border border-border bg-surface/30 p-4">
-              <div className="text-[9px] text-ghost tracking-wider mb-2">CLOSE PRICE OVERLAY — {Object.keys(venueCandles).length} VENUES</div>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a24" />
-                  <XAxis
-                    dataKey="ts"
-                    type="number"
-                    domain={['auto', 'auto']}
-                    tickFormatter={fmtShort}
-                    tick={TICK}
-                  />
-                  <YAxis tick={TICK} domain={['auto', 'auto']} />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    labelFormatter={(ts: any) => fmtDate(Number(ts))}
-                  />
-                  {Object.entries(venueCandles).map(([venue, data]) => (
-                    <Line
-                      key={venue}
-                      data={data}
-                      dataKey="close"
-                      name={venue.toUpperCase()}
-                      stroke={VENUE_COLORS[venue] || '#888'}
-                      dot={false}
-                      strokeWidth={1.5}
-                      isAnimationActive={false}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-              <div className="flex gap-4 mt-2">
-                {Object.keys(venueCandles).map(v => (
-                  <span key={v} className="text-[9px] flex items-center gap-1">
-                    <span style={{ background: VENUE_COLORS[v] || '#888', width: 8, height: 8, display: 'inline-block', borderRadius: 2 }} />
-                    {v.toUpperCase()}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Multi-venue separate charts */}
-          {Object.keys(venueCandles).length > 1 && priceViewMode === 'separate' && (
-            <div className="mt-4 space-y-4">
-              {Object.entries(venueCandles).map(([venue, data]) => (
-                <div key={venue} className="border border-border bg-surface/30 p-4">
-                  <div className="text-[9px] tracking-wider mb-2" style={{ color: VENUE_COLORS[venue] || '#888' }}>
-                    {venue.toUpperCase()} — {data.length} candles
-                  </div>
-                  <ResponsiveContainer width="100%" height={200}>
-                    <LineChart data={downsample(data, 500)}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1a1a24" />
-                      <XAxis dataKey="ts" tickFormatter={fmtShort} tick={TICK} />
-                      <YAxis tick={TICK} domain={['auto', 'auto']} />
-                      <Tooltip contentStyle={tooltipStyle} labelFormatter={(ts: any) => fmtDate(Number(ts))} />
-                      <Line dataKey="close" stroke={VENUE_COLORS[venue] || '#888'} dot={false} strokeWidth={1.5} isAnimationActive={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

@@ -36,6 +36,7 @@ class OptimizationResult:
     metric: str
     n_trials: int
     trials: List[TrialResult] = field(default_factory=list)
+    study: Any = None  # Optuna Study object for param importance
 
 
 class StrategyOptimizer:
@@ -179,6 +180,7 @@ class StrategyOptimizer:
             metric=self.metric,
             n_trials=len(study.trials),
             trials=sorted(trials, key=lambda t: t.metric_value, reverse=True),
+            study=study,
         )
 
     def walk_forward(

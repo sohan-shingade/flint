@@ -12,7 +12,7 @@ from typing import List, Optional
 
 import duckdb
 
-from .models import Candle, FundingRate, OraclePrice
+from .models import BorrowSnapshot, Candle, FundingRate, OraclePrice
 
 _logger = logging.getLogger("flint.store")
 
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS candles (
     low         DOUBLE  NOT NULL,
     close       DOUBLE  NOT NULL,
     volume      DOUBLE  NOT NULL,
-    venue       VARCHAR NOT NULL DEFAULT 'default',
+    venue       VARCHAR NOT NULL DEFAULT 'pyth',
     PRIMARY KEY (venue, market, resolution_s, ts)
 );
 """
@@ -43,13 +43,14 @@ CREATE TABLE IF NOT EXISTS oracle_prices (
 
 _CREATE_ORDERBOOK_SNAPSHOTS = """
 CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+    venue      VARCHAR  NOT NULL DEFAULT 'pyth',
     market     VARCHAR  NOT NULL,
     ts         BIGINT   NOT NULL,
     bid_prices DOUBLE[],
     bid_sizes  DOUBLE[],
     ask_prices DOUBLE[],
     ask_sizes  DOUBLE[],
-    PRIMARY KEY (market, ts)
+    PRIMARY KEY (venue, market, ts)
 );
 """
 
@@ -295,6 +296,18 @@ CREATE TABLE IF NOT EXISTS tick_snapshots (
 );
 """
 
+_CREATE_JUPITER_BORROW_RATES = """
+CREATE TABLE IF NOT EXISTS jupiter_borrow_rates (
+    market          VARCHAR NOT NULL,
+    ts              BIGINT  NOT NULL,
+    rate_hourly     DOUBLE  NOT NULL,
+    utilization     DOUBLE  NOT NULL,
+    cumulative_rate DOUBLE  NOT NULL,
+    source          VARCHAR NOT NULL DEFAULT 'rpc',
+    PRIMARY KEY (market, ts)
+);
+"""
+
 
 class FlintStore:
     """Thread-safe DuckDB store.
@@ -339,13 +352,13 @@ class FlintStore:
                             low          DOUBLE  NOT NULL,
                             close        DOUBLE  NOT NULL,
                             volume       DOUBLE  NOT NULL,
-                            venue        VARCHAR NOT NULL DEFAULT 'default',
+                            venue        VARCHAR NOT NULL DEFAULT 'pyth',
                             PRIMARY KEY (venue, market, resolution_s, ts)
                         )
                     """)
                     self._conn.execute(
                         "INSERT INTO candles_new "
-                        "SELECT market, resolution_s, ts, open, high, low, close, volume, 'default' "
+                        "SELECT market, resolution_s, ts, open, high, low, close, volume, 'pyth' "
                         "FROM candles"
                     )
                     self._conn.execute("DROP TABLE candles")
@@ -359,6 +372,40 @@ class FlintStore:
             _logger.debug("Candles migration check: %s", e)
         self._conn.execute(_CREATE_ORACLE_PRICES)
         self._conn.execute(_CREATE_ORDERBOOK_SNAPSHOTS)
+        # Migration: add venue column to orderbook_snapshots if missing (existing DBs)
+        try:
+            cols = {r[0] for r in self._conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='orderbook_snapshots'"
+            ).fetchall()}
+            if cols and "venue" not in cols:
+                self._conn.execute("BEGIN TRANSACTION")
+                try:
+                    self._conn.execute("""
+                        CREATE TABLE orderbook_snapshots_new (
+                            venue      VARCHAR  NOT NULL DEFAULT 'pyth',
+                            market     VARCHAR  NOT NULL,
+                            ts         BIGINT   NOT NULL,
+                            bid_prices DOUBLE[],
+                            bid_sizes  DOUBLE[],
+                            ask_prices DOUBLE[],
+                            ask_sizes  DOUBLE[],
+                            PRIMARY KEY (venue, market, ts)
+                        )
+                    """)
+                    self._conn.execute(
+                        "INSERT INTO orderbook_snapshots_new "
+                        "SELECT 'pyth', market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes "
+                        "FROM orderbook_snapshots"
+                    )
+                    self._conn.execute("DROP TABLE orderbook_snapshots")
+                    self._conn.execute("ALTER TABLE orderbook_snapshots_new RENAME TO orderbook_snapshots")
+                    self._conn.execute("COMMIT")
+                    _logger.info("Migrated orderbook_snapshots table: added venue column")
+                except Exception as e:
+                    self._conn.execute("ROLLBACK")
+                    _logger.warning("Orderbook snapshots venue migration failed: %s", e)
+        except Exception as e:
+            _logger.debug("Orderbook snapshots migration check: %s", e)
         self._conn.execute(_CREATE_POOL_SNAPSHOTS)
         self._conn.execute(_CREATE_VENUE_FUNDING)
         # Migrate: if old funding_rates table exists, copy data to venue_funding_rates
@@ -411,6 +458,13 @@ class FlintStore:
         self._conn.execute(_CREATE_DEX_VOLUME)
         self._conn.execute(_CREATE_TOKEN_UNLOCKS)
         self._conn.execute(_CREATE_SYNC_METADATA)
+        # Migrate: remove 'default' venue candles (legacy, now tagged as 'pyth')
+        try:
+            self._conn.execute("DELETE FROM candles WHERE venue = 'default'")
+            self._conn.execute("UPDATE orderbook_snapshots SET venue = 'pyth' WHERE venue = 'default'")
+        except Exception:
+            pass
+
         # Paper trading persistence
         self._conn.execute(_CREATE_PAPER_SESSIONS)
         self._conn.execute(_CREATE_PAPER_EQUITY_HISTORY)
@@ -424,6 +478,8 @@ class FlintStore:
         self._conn.execute(_CREATE_LIVE_EQUITY_HISTORY)
         # CLMM tick snapshots
         self._conn.execute(_CREATE_TICK_SNAPSHOTS)
+        # Jupiter Perps borrow rates
+        self._conn.execute(_CREATE_JUPITER_BORROW_RATES)
 
     # -- candles ---------------------------------------------------------------
 
@@ -431,7 +487,7 @@ class FlintStore:
         if not candles:
             return 0
         rows = [
-            (c.venue or "default", c.market, c.resolution_s, c.ts, c.open, c.high, c.low, c.close, c.volume)
+            (c.venue or "pyth", c.market, c.resolution_s, c.ts, c.open, c.high, c.low, c.close, c.volume)
             for c in candles
         ]
         batch_size = 2000
@@ -475,16 +531,23 @@ class FlintStore:
         if end_ts is not None:
             sql += " AND ts <= ?"
             params.append(end_ts)
-        sql += " ORDER BY ts ASC"
-        if limit is not None:
-            sql += " LIMIT ?"
+        if limit is not None and start_ts is None:
+            sql += " ORDER BY ts DESC LIMIT ?"
             params.append(limit)
-        with self._lock:
-            rows = self._conn.execute(sql, params).fetchall()
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+            rows = rows[::-1]  # reverse to chronological order
+        else:
+            sql += " ORDER BY ts ASC"
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(limit)
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
         return [
             Candle(market=r[0], resolution_s=r[1], ts=r[2], open=r[3],
                    high=r[4], low=r[5], close=r[6], volume=r[7],
-                   venue=r[8] if len(r) > 8 else "default")
+                   venue=r[8] if len(r) > 8 else "pyth")
             for r in rows
         ]
 
@@ -503,6 +566,44 @@ class FlintStore:
         with self._lock:
             row = self._conn.execute("SELECT 1 FROM candles LIMIT 1").fetchone()
             return row is not None
+
+    def get_markets_needing_pyth_migration(self) -> list:
+        """Return market names that have non-Pyth candles but no Pyth candles.
+
+        These are candidates for back-filling with Pyth oracle price data.
+        """
+        with self._lock:
+            rows = self._conn.execute("""
+                SELECT DISTINCT market FROM candles
+                WHERE venue != 'pyth'
+                AND market NOT IN (
+                    SELECT DISTINCT market FROM candles WHERE venue = 'pyth'
+                )
+            """).fetchall()
+        return [r[0] for r in rows]
+
+    def get_market_date_range(self, market: str):
+        """Return (min_ts, max_ts) for all candles of a market, or None if no data."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT MIN(ts), MAX(ts) FROM candles WHERE market = ?", [market]
+            ).fetchall()
+        if rows and rows[0][0] is not None:
+            return (rows[0][0], rows[0][1])
+        return None
+
+    def query_candles_with_fallback(
+        self,
+        market: str,
+        resolution_s: int,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
+    ) -> List[Candle]:
+        """Query candles preferring venue='pyth'; falls back to any venue if none found."""
+        candles = self.query_candles(market, resolution_s, start_ts, end_ts, venue="pyth")
+        if candles:
+            return candles
+        return self.query_candles(market, resolution_s, start_ts, end_ts)
 
     # -- funding rates ---------------------------------------------------------
 
@@ -598,6 +699,76 @@ class FlintStore:
             result[venue].append({"ts": r[1], "rate": r[2], "mark_price": r[3], "index_price": r[4]})
         return result
 
+    # -- Jupiter borrow rates --------------------------------------------------
+
+    def upsert_borrow_rates(self, snapshots: List[BorrowSnapshot]) -> int:
+        """Upsert Jupiter Perps borrow rate snapshots.
+
+        Uses the same lock+transaction pattern as upsert_funding_rates.
+        On conflict (market, ts), the row is replaced with the new data.
+        """
+        if not snapshots:
+            return 0
+        rows = [
+            (s.market, s.ts, s.rate_hourly, s.utilization, s.cumulative_rate, s.source)
+            for s in snapshots
+        ]
+        batch_size = 2000
+        with self._lock:
+            self._conn.execute("BEGIN TRANSACTION")
+            try:
+                for i in range(0, len(rows), batch_size):
+                    batch = rows[i:i + batch_size]
+                    self._conn.executemany(
+                        "INSERT OR REPLACE INTO jupiter_borrow_rates "
+                        "(market, ts, rate_hourly, utilization, cumulative_rate, source) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        batch,
+                    )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        return len(rows)
+
+    def query_borrow_rates(
+        self,
+        market: str,
+        start_ts: int,
+        end_ts: int,
+    ) -> List[BorrowSnapshot]:
+        """Query borrow rate snapshots for a market within [start_ts, end_ts]."""
+        sql = (
+            "SELECT market, ts, rate_hourly, utilization, cumulative_rate, source "
+            "FROM jupiter_borrow_rates "
+            "WHERE market = ? AND ts >= ? AND ts <= ? "
+            "ORDER BY ts ASC"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, [market, start_ts, end_ts]).fetchall()
+        return [
+            BorrowSnapshot(
+                market=r[0], ts=r[1], rate_hourly=r[2],
+                utilization=r[3], cumulative_rate=r[4], source=r[5],
+            )
+            for r in rows
+        ]
+
+    def query_borrow_cumulative(
+        self,
+        market: str,
+        ts: int,
+    ) -> Optional[float]:
+        """Return the cumulative_rate at or before ts, or None if no data exists."""
+        sql = (
+            "SELECT cumulative_rate FROM jupiter_borrow_rates "
+            "WHERE market = ? AND ts <= ? "
+            "ORDER BY ts DESC LIMIT 1"
+        )
+        with self._lock:
+            row = self._conn.execute(sql, [market, ts]).fetchone()
+        return row[0] if row else None
+
     # -- oracle prices ---------------------------------------------------------
 
     def upsert_oracle_prices(self, prices: List[OraclePrice]) -> int:
@@ -643,14 +814,22 @@ class FlintStore:
         if not snapshots:
             return 0
         rows = [
-            (s["market"], s["ts"], s["bid_prices"], s["bid_sizes"], s["ask_prices"], s["ask_sizes"])
+            (
+                s.get("venue", "pyth"),
+                s["market"],
+                s["ts"],
+                s["bid_prices"],
+                s["bid_sizes"],
+                s["ask_prices"],
+                s["ask_sizes"],
+            )
             for s in snapshots
         ]
         with self._lock:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO orderbook_snapshots "
-                "(market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(venue, market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
         return len(rows)
@@ -680,6 +859,31 @@ class FlintStore:
             asks = tuple(OrderbookLevel(price=p, size=s) for p, s in zip(r[4] or [], r[5] or []))
             result.append(OrderbookSnapshot(market=r[0], ts=r[1], bids=bids, asks=asks))
         return result
+
+    def query_nearest_orderbook(
+        self,
+        venue: str,
+        market: str,
+        ts: int,
+    ) -> Optional["OrderbookSnapshot"]:
+        """Return the most recent orderbook snapshot for (venue, market) at or before ts.
+
+        Returns None if no snapshot exists at or before the given timestamp.
+        """
+        from .models import OrderbookLevel, OrderbookSnapshot
+        sql = (
+            "SELECT market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes "
+            "FROM orderbook_snapshots "
+            "WHERE venue = ? AND market = ? AND ts <= ? "
+            "ORDER BY ts DESC LIMIT 1"
+        )
+        with self._lock:
+            row = self._conn.execute(sql, [venue, market, ts]).fetchone()
+        if row is None:
+            return None
+        bids = tuple(OrderbookLevel(price=p, size=sz) for p, sz in zip(row[2] or [], row[3] or []))
+        asks = tuple(OrderbookLevel(price=p, size=sz) for p, sz in zip(row[4] or [], row[5] or []))
+        return OrderbookSnapshot(market=row[0], ts=row[1], bids=bids, asks=asks)
 
     # -- pool snapshots --------------------------------------------------------
 

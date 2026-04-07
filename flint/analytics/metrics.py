@@ -31,6 +31,8 @@ class MetricsSummary:
     total_pnl: float
     best_trade: float
     worst_trade: float
+    # volatility
+    annualized_volatility_pct: float = 0.0
 
 
 def compute_metrics(
@@ -60,6 +62,7 @@ def compute_metrics(
     # --- Sharpe (sample std, ddof=1) ---
     ret_std = float(np.std(returns, ddof=1)) if len(returns) > 1 else 0.0
     sharpe = float(np.mean(returns) / ret_std * np.sqrt(periods_per_year)) if ret_std > 1e-12 else 0.0
+    annualized_vol = float(ret_std * np.sqrt(periods_per_year) * 100) if ret_std > 0 else 0.0
 
     # --- Sortino (downside deviation over ALL returns, squaring only negatives) ---
     downside_returns = np.minimum(returns, 0)
@@ -114,6 +117,7 @@ def compute_metrics(
         total_pnl=result.total_pnl,
         best_trade=best,
         worst_trade=worst,
+        annualized_volatility_pct=annualized_vol,
     )
 
 

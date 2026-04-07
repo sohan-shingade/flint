@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { EXECUTION_VENUES, getVenue } from '../constants/venues'
 import { useBacktest } from '../hooks/useBacktest'
 import { useStrategies } from '../hooks/useStrategies'
 import { useOptimize } from '../hooks/useOptimize'
@@ -51,6 +52,8 @@ const FEE_PRESETS: Record<string, { label: string; rate: number; venue: string }
   // Bybit
   'bybit_taker':     { label: 'Bybit Taker (5.5bps)',   rate: 0.00055, venue: 'bybit' },
   'bybit_maker':     { label: 'Bybit Maker (2bps)',      rate: 0.0002,  venue: 'bybit' },
+  // Jupiter Perps
+  'jupiter':         { label: 'Jupiter Perps (6bps)',    rate: 0.0006,  venue: 'jupiter' },
   // Generic
   'flat_5bps':       { label: 'Flat 5bps',              rate: 0.0005,  venue: 'generic' },
   'flat_1bps':       { label: 'Flat 1bps',              rate: 0.0001,  venue: 'generic' },
@@ -92,13 +95,15 @@ function extractMarketsFromCode(code: string): string[] {
 
 interface StrategyProfile {
   type: 'single' | 'multi_venue' | 'multi_market' | 'cross_venue_multi_market'
-  venues: string[]           // Detected venues (empty = uses default/any)
-  markets: string[]          // Extra markets detected
+  venues: string[]              // Specific venues detected (e.g., ["drift", "jupiter"])
+  markets: string[]             // Extra markets detected
   needsFunding: boolean
   needsCrossVenueFunding: boolean
+  needsBorrowRate: boolean      // uses get_borrow_rate (needs Jupiter)
   needsOracle: boolean
   needsOrderbook: boolean
-  usesAllVenues: boolean     // Uses get_funding_by_venue without specific venues
+  usesAllVenues: boolean        // Uses get_funding_by_venue without specific venues
+  venueRequirement: 'specific' | 'any_dex' | 'any_cex' | 'any' | 'none'
 }
 
 function detectStrategyProfile(code: string): StrategyProfile {
@@ -113,6 +118,7 @@ function detectStrategyProfile(code: string): StrategyProfile {
   // Detect data needs
   const needsFunding = /get_funding_rates?\s*\(/.test(code)
   const needsCrossVenueFunding = /get_funding_by_venue\s*\(/.test(code)
+  const needsBorrowRate = /get_borrow_rate/.test(code)
   const needsOracle = /get_oracle_price\s*\(/.test(code)
   const needsOrderbook = /get_orderbook\s*\(/.test(code)
 
@@ -128,7 +134,18 @@ function detectStrategyProfile(code: string): StrategyProfile {
   else if (isMultiVenue) type = 'multi_venue'
   else if (isMultiMarket) type = 'multi_market'
 
-  return { type, venues, markets, needsFunding, needsCrossVenueFunding, needsOracle, needsOrderbook, usesAllVenues }
+  // Determine venue requirement
+  let venueRequirement: StrategyProfile['venueRequirement'] = 'none'
+  if (venues.length > 0) {
+    venueRequirement = 'specific'
+  } else if (usesAllVenues) {
+    venueRequirement = 'any'
+  } else if (needsBorrowRate) {
+    venueRequirement = 'specific' // needs Jupiter
+    if (!venues.includes('jupiter')) venues.push('jupiter')
+  }
+
+  return { type, venues, markets, needsFunding, needsCrossVenueFunding, needsBorrowRate, needsOracle, needsOrderbook, usesAllVenues, venueRequirement }
 }
 
 /* ── date range presets ─────────────────────────────────── */
@@ -171,7 +188,7 @@ export default function BacktestLab() {
 
   // Config state
   const [market, setMarket] = useState('SOL-PERP')
-  const [venue, setVenue] = useState('default')
+  const [venue, setVenue] = useState('drift')
   const [resolution, setResolution] = useState('1h')
   const [startDate, setStartDate] = useState('2025-01-01')
   const [endDate, setEndDate] = useState('2025-01-31')
@@ -225,6 +242,9 @@ export default function BacktestLab() {
   const [deployVenue, setDeployVenue] = useState('drift')
   const [deploying, setDeploying] = useState(false)
 
+  // Venue data availability per venue
+  const [venueDataStatus, setVenueDataStatus] = useState<Record<string, { has_candles: boolean; has_funding: boolean; has_orderbook: boolean }>>({})
+
   const codeRef = useRef(code)
   codeRef.current = code
 
@@ -234,10 +254,85 @@ export default function BacktestLab() {
     setStratProfile(profile)
   }, [activeTemplateKey])
 
+  // Debounced strategy re-detection on code edits
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const profile = detectStrategyProfile(code)
+      setStratProfile(profile)
+    }, 800)
+    return () => clearTimeout(timer)
+  }, [code])
+
   // Auto-enable margin tracking for multi-venue strategies
   useEffect(() => {
     if (stratProfile && (stratProfile.type === 'multi_venue' || stratProfile.type === 'cross_venue_multi_market')) {
       setMarginTracking(true)
+    }
+  }, [stratProfile])
+
+  // Check venue data availability for the selected market
+  useEffect(() => {
+    const checkVenueData = async () => {
+      try {
+        // Check funding data per venue
+        const fRes = await fetch(`/api/v1/data/funding?market=${encodeURIComponent(market)}`)
+        const fData = await fRes.json()
+        const fundingVenues = Object.keys(fData.venues || {})
+
+        // Check volume/candle data per venue
+        const vRes = await fetch(`/api/v1/data/volume?market=${encodeURIComponent(market)}`)
+        const vData = await vRes.json()
+        const volumeVenues = Object.keys(vData.venues || {})
+
+        // Check Jupiter borrow rate data
+        let hasBorrowData = false
+        try {
+          const bRes = await fetch(`/api/v1/data/borrow-rates?market=${encodeURIComponent(market)}`)
+          const bData = await bRes.json()
+          hasBorrowData = (bData.count || 0) > 0
+        } catch {}
+
+        const status: Record<string, { has_candles: boolean; has_funding: boolean; has_orderbook: boolean }> = {}
+        for (const v of EXECUTION_VENUES) {
+          status[v.id] = {
+            has_candles: volumeVenues.includes(v.id),
+            has_funding: v.id === 'jupiter' ? hasBorrowData : fundingVenues.includes(v.id),
+            has_orderbook: volumeVenues.includes(v.id),
+          }
+        }
+        setVenueDataStatus(status)
+      } catch { /* ignore — data status is advisory */ }
+    }
+    if (market) checkVenueData()
+
+    // Re-check when page becomes visible (user returns from Data Explorer after downloading)
+    const onFocus = () => { if (market) checkVenueData() }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [market, availableMarkets])
+
+  // Auto-set venue when strategy profile changes
+  useEffect(() => {
+    if (!stratProfile) return
+
+    if (stratProfile.venueRequirement === 'specific' && stratProfile.venues.length > 0) {
+      // Auto-select the first required venue
+      setVenue(stratProfile.venues[0])
+      // Auto-set fee rate
+      const info = getVenue(stratProfile.venues[0])
+      if (info) {
+        const bps = parseFloat(info.takerFee)
+        if (!isNaN(bps)) setFeeRate(bps / 10000)
+      }
+    }
+
+    // Auto-set market if strategy declares specific markets
+    if (stratProfile.markets.length > 0 && !stratProfile.markets.includes(market)) {
+      // Current market not in strategy — switch to first detected
+      const firstMarket = stratProfile.markets[0]
+      if (availableMarkets.includes(firstMarket)) {
+        setMarket(firstMarket)
+      }
     }
   }, [stratProfile])
 
@@ -592,6 +687,36 @@ export default function BacktestLab() {
 
   /* ── style helpers ─────────────────────────────────── */
 
+  /* ── computed venue / market sets ───────────────────── */
+
+  const validVenues = useMemo(() => {
+    if (!stratProfile) return EXECUTION_VENUES.map(v => v.id)
+
+    if (stratProfile.venueRequirement === 'specific' && stratProfile.venues.length > 0) {
+      // Strategy requires specific venues — those are the only options
+      return stratProfile.venues
+    }
+
+    // Filter venues that have data for the selected market
+    return EXECUTION_VENUES
+      .filter(v => {
+        const status = venueDataStatus[v.id]
+        if (!status) return true // no data check yet, allow
+        // Venue should have at least candle/price data
+        return true // always valid — synthetic depth handles missing orderbook
+      })
+      .map(v => v.id)
+  }, [stratProfile, venueDataStatus])
+
+  const validMarkets = useMemo(() => {
+    if (!stratProfile || stratProfile.markets.length === 0) {
+      return availableMarkets
+    }
+    // Strategy declares specific markets — only show those + available ones
+    const required = [market, ...stratProfile.markets]
+    return availableMarkets.length > 0 ? availableMarkets : required
+  }, [stratProfile, availableMarkets, market])
+
   const inputClass = 'w-full bg-void border border-border text-terminal text-xs px-2.5 py-2 focus:border-amber/50 focus:outline-none transition-colors'
   const labelClass = 'block text-[10px] text-ghost tracking-[0.15em] mb-1.5'
 
@@ -795,33 +920,26 @@ export default function BacktestLab() {
             {/* Strategy profile detection panel */}
             {stratProfile && stratProfile.type !== 'single' && (
               <div className="mx-3 mt-3 border border-amber/30 bg-amber/5 p-3 space-y-2" style={{ animation: 'fadeUp 0.3s ease' }}>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] tracking-wider text-amber">
-                    {stratProfile.type === 'multi_venue' ? 'MULTI-VENUE STRATEGY' :
-                     stratProfile.type === 'multi_market' ? 'MULTI-MARKET STRATEGY' :
-                     stratProfile.type === 'cross_venue_multi_market' ? 'CROSS-VENUE MULTI-MARKET' : ''}
-                  </span>
+                <div className="text-[9px] px-2 py-1 border border-border/50 text-ghost/60 inline-block">
+                  {stratProfile.type === 'multi_venue' ? 'MULTI-VENUE' :
+                   stratProfile.type === 'multi_market' ? 'MULTI-MARKET' :
+                   stratProfile.type === 'cross_venue_multi_market' ? 'CROSS-VENUE MULTI-MARKET' : ''}
+                  {stratProfile.venues.length > 0 && ` — ${stratProfile.venues.join(', ').toUpperCase()}`}
+                  {stratProfile.markets.length > 0 && ` — ${stratProfile.markets.join(', ')}`}
                 </div>
 
-                {stratProfile.venues.length > 0 && (
-                  <div className="text-[9px] text-ghost">
-                    Venues: {stratProfile.venues.map(v => v.toUpperCase()).join(', ')}
-                  </div>
-                )}
                 {stratProfile.usesAllVenues && (
                   <div className="text-[9px] text-ghost">
                     Uses cross-venue funding data (all downloaded venues)
-                  </div>
-                )}
-                {stratProfile.markets.length > 0 && (
-                  <div className="text-[9px] text-ghost">
-                    Extra markets: {stratProfile.markets.join(', ')}
                   </div>
                 )}
 
                 {/* Data requirement warnings */}
                 {stratProfile.needsFunding && (
                   <div className="text-[9px] text-amber/70">Requires funding rate data -- download in Data Explorer</div>
+                )}
+                {stratProfile.needsBorrowRate && (
+                  <div className="text-[9px] text-amber/70">Requires borrow rate data (Jupiter)</div>
                 )}
                 {stratProfile.needsOracle && (
                   <div className="text-[9px] text-amber/70">Uses oracle price (Drift only)</div>
@@ -846,8 +964,8 @@ export default function BacktestLab() {
                   <label className="text-[9px] text-ghost tracking-wider">PRIMARY</label>
                   <select value={market} onChange={(e) => setMarket(e.target.value)}
                     className="bg-void border border-border text-[11px] text-terminal px-2 py-0.5 w-36">
-                    {(availableMarkets.length > 0 ? availableMarkets : [...PERP_MARKETS, ...SPOT_MARKETS]).map(m =>
-                      <option key={m}>{m}</option>
+                    {(validMarkets.length > 0 ? validMarkets : availableMarkets.length > 0 ? availableMarkets : [...PERP_MARKETS, ...SPOT_MARKETS]).map(m =>
+                      <option key={m} value={m}>{m}</option>
                     )}
                   </select>
                 </div>
@@ -886,12 +1004,10 @@ export default function BacktestLab() {
                   <div className="mt-2 p-2 border border-border bg-surface/30">
                     <div className="text-[9px] text-ghost tracking-wider mb-1">VENUE FEES (per venue config)</div>
                     {(stratProfile.venues.length > 0 ? stratProfile.venues : ['drift', 'hyperliquid']).map(v => {
-                      const fees: Record<string, string> = {
-                        drift: '10 bps', hyperliquid: '3.5 bps', binance: '4.5 bps', okx: '5 bps', bybit: '5.5 bps'
-                      }
+                      const info = getVenue(v)
                       return (
-                        <div key={v} className="text-[9px] text-terminal">
-                          {v.toUpperCase()}: {fees[v] || '5 bps'} taker
+                        <div key={v} className="text-[9px] text-ghost/50">
+                          {v.toUpperCase()}: {info?.takerFee || '?'} taker / {info?.fillModel || 'default'}
                         </div>
                       )
                     })}
@@ -909,41 +1025,137 @@ export default function BacktestLab() {
                 <label className={labelClass}>CAPITAL</label>
                 <input type="number" value={capital} onChange={(e) => setCapital(+e.target.value)} className={inputClass} />
               </div>
+              {/* Execution Venue */}
               <div>
-                <label className={labelClass}>FEE.MODEL</label>
-                <select value={feePreset} onChange={(e) => setFeePreset(e.target.value)} className={inputClass}>
-                  <optgroup label="Drift Protocol">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'drift').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Hyperliquid">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'hyperliquid').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Binance Futures">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'binance').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="OKX">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'okx').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Bybit">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'bybit').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Generic">
-                    {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'generic').map(([key, p]) => (
-                      <option key={key} value={key}>{p.label}</option>
-                    ))}
-                  </optgroup>
-                </select>
+                <label className="text-[9px] text-ghost tracking-wider">EXECUTION VENUE</label>
+                {stratProfile && stratProfile.venueRequirement === 'specific' && stratProfile.venues.length > 1 ? (
+                  // Multi-venue: show all required venues (auto-detected, read-only)
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {stratProfile.venues.map(v => {
+                      const info = getVenue(v)
+                      const status = venueDataStatus[v]
+                      const hasData = status?.has_candles || status?.has_funding
+                      return (
+                        <span key={v} className="px-2 py-1 text-[10px] border" style={{ borderColor: info?.color || '#666', color: info?.color || '#9ca3af' }}>
+                          {info?.label || v}
+                          {status && (
+                            <span className={`ml-1 text-[8px] ${hasData ? 'text-green-500' : 'text-red-400'}`}>
+                              {hasData ? '\u25CF' : '\u25CB'}
+                            </span>
+                          )}
+                        </span>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  // Single venue: dropdown with valid options
+                  <select
+                    value={venue}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setVenue(v)
+                      const info = getVenue(v)
+                      if (info) {
+                        const bps = parseFloat(info.takerFee)
+                        if (!isNaN(bps)) setFeeRate(bps / 10000)
+                      }
+                    }}
+                    className={inputClass}
+                  >
+                    <optgroup label="DEX">
+                      {EXECUTION_VENUES.filter(v => v.type === 'dex' && validVenues.includes(v.id)).map(v => {
+                        const status = venueDataStatus[v.id]
+                        const indicator = status ? (status.has_candles || status.has_funding ? ' \u25CF' : ' \u25CB') : ''
+                        return <option key={v.id} value={v.id}>{v.label}{indicator}</option>
+                      })}
+                    </optgroup>
+                    <optgroup label="CEX">
+                      {EXECUTION_VENUES.filter(v => v.type === 'cex' && validVenues.includes(v.id)).map(v => {
+                        const status = venueDataStatus[v.id]
+                        const indicator = status ? (status.has_candles || status.has_funding ? ' \u25CF' : ' \u25CB') : ''
+                        return <option key={v.id} value={v.id}>{v.label}{indicator}</option>
+                      })}
+                    </optgroup>
+                  </select>
+                )}
               </div>
+              {(() => {
+                const venueInfo = getVenue(venue)
+                if (!venueInfo) return null
+                return (
+                  <div className="col-span-2 p-2 border border-border/30 bg-panel/50 text-[9px]">
+                    <div className="text-ghost/60 mb-1">EXECUTION PROFILE</div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-ghost/40">
+                      <span>Fill Model:</span><span className="text-ghost/70">{venueInfo.fillModel}</span>
+                      <span>Taker Fee:</span><span className="text-ghost/70">{venueInfo.takerFee}</span>
+                      <span>Maker Fee:</span><span className="text-ghost/70">{venueInfo.makerFee}</span>
+                      <span>Latency:</span><span className="text-ghost/70">{venueInfo.latency}</span>
+                      <span>Depth:</span><span className="text-ghost/70">{venueInfo.dataSource}</span>
+                      <span>Funding:</span><span className="text-ghost/70">{venueInfo.fundingType === 'borrow' ? 'Borrow fees (continuous)' : `Funding rates (${venueInfo.fundingType})`}</span>
+                      <span>{venue === 'jupiter' ? 'Borrow Rates:' : 'Funding:'}</span>
+                      <span className={venueDataStatus[venue]?.has_funding ? 'text-green-400' : 'text-amber/60'}>
+                        {venueDataStatus[venue]?.has_funding
+                          ? (venue === 'jupiter' ? 'Borrow rate data available' : 'Funding data available')
+                          : (venue === 'jupiter' ? 'No data — download with Jupiter selected in Data Explorer' : 'No data — download from Data Explorer')}
+                      </span>
+                      {venue !== 'jupiter' && (
+                        <>
+                          <span>Orderbook:</span>
+                          <span className={venueDataStatus[venue]?.has_orderbook ? 'text-green-400' : 'text-ghost/50'}>
+                            {venueDataStatus[venue]?.has_orderbook
+                              ? 'Real orderbook data'
+                              : (venueInfo.type === 'cex' ? 'Synthetic depth (set FLINT_TARDIS_API_KEY for real data)' : 'Synthetic depth')}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
+              <details className="col-span-2">
+                <summary className="text-[9px] text-ghost/40 cursor-pointer hover:text-ghost/60">
+                  Advanced: Override fee rate manually
+                </summary>
+                <div className="mt-2">
+                  <select value={feePreset} onChange={(e) => setFeePreset(e.target.value)} className={inputClass}>
+                    <optgroup label="Drift Protocol">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'drift').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Hyperliquid">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'hyperliquid').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Binance Futures">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'binance').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="OKX">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'okx').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Bybit">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'bybit').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Jupiter Perps">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'jupiter').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Generic">
+                      {Object.entries(FEE_PRESETS).filter(([,p]) => p.venue === 'generic').map(([key, p]) => (
+                        <option key={key} value={key}>{p.label}</option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+              </details>
               <div className="col-span-2 flex items-center gap-4 bg-panel/80 border border-border/50 px-3 py-2">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -1189,7 +1401,7 @@ export default function BacktestLab() {
                 ))}
               </div>
               {/* Top 3 trials */}
-              {optResults.trials.slice(0, 3).map((t, i) => (
+              {(optResults.top_trials || optResults.trials || []).slice(0, 3).map((t, i) => (
                 <div key={i} className="flex items-center justify-between text-[10px] py-0.5 border-t border-border/20">
                   <span className="text-ghost/50">#{i+1}</span>
                   <span className="text-terminal">{t.metric_value.toFixed(3)}</span>
@@ -1501,7 +1713,7 @@ export default function BacktestLab() {
                 </div>
               ))}
             </div>
-            {optResults.trials.length > 0 && (
+            {(optResults.top_trials || optResults.trials || []).length > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full text-[11px] font-mono">
                   <thead>
@@ -1517,7 +1729,7 @@ export default function BacktestLab() {
                     </tr>
                   </thead>
                   <tbody>
-                    {optResults.trials.slice(0, 10).map((t, i) => (
+                    {(optResults.top_trials || optResults.trials || []).slice(0, 10).map((t, i) => (
                       <tr key={i} className="border-t border-border/20 hover:bg-amber-glow/30">
                         <td className="px-2 py-1 text-ghost/50">{i + 1}</td>
                         <td className="px-2 py-1 text-right text-terminal">{t.metric_value.toFixed(4)}</td>
@@ -1639,8 +1851,8 @@ export default function BacktestLab() {
                 <label className="text-xs text-zinc-400 block mb-1">Venue</label>
                 <select value={deployVenue} onChange={e => setDeployVenue(e.target.value)}
                         className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm">
-                  {['drift', 'hyperliquid', 'binance', 'okx', 'bybit', 'dydx'].map(v => (
-                    <option key={v} value={v}>{v}</option>
+                  {EXECUTION_VENUES.map(v => (
+                    <option key={v.id} value={v.id}>{v.label}</option>
                   ))}
                 </select>
               </div>

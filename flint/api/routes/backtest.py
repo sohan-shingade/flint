@@ -6,6 +6,7 @@ import re
 import uuid
 import time
 import threading
+from dataclasses import dataclass, field
 from datetime import datetime as dt, timezone as tz
 from typing import Dict, List, Optional
 
@@ -36,6 +37,11 @@ from ...strategy import (
     ATRBreakoutStrategy,
     MultiVenueFundingStrategy,
     RSIMACDComboStrategy,
+    FundingMeanReversionStrategy,
+    MomentumBreakoutStrategy,
+    FundingArbStrategy,
+    BasisTradeStrategy,
+    MevArbMonitor,
 )
 from ...strategy.loader import load_user_strategy, StrategyLoadError
 
@@ -45,15 +51,24 @@ router = APIRouter()
 
 # In-memory state — protected by _state_lock, capped at 200 entries
 _MAX_ENTRIES = 200
+_MAX_AGE_S = 3600
 _state_lock = threading.Lock()
-_results: Dict[str, dict] = {}
-_status: Dict[str, str] = {}
-_progress: Dict[str, dict] = {}
 
 # Concurrency and timeout limits
 _MAX_CONCURRENT = 5
 _MAX_BACKTEST_SECONDS = 300
 _concurrency: Dict[str, int] = {"active": 0}
+
+
+@dataclass
+class _BacktestEntry:
+    status: str
+    result: Optional[dict] = None
+    progress: dict = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+
+
+_entries: Dict[str, _BacktestEntry] = {}
 
 
 def configure_concurrency(max_concurrent: int):
@@ -63,31 +78,38 @@ def configure_concurrency(max_concurrent: int):
 
 
 def _evict_old():
-    """Remove oldest entries if over cap. Called inside _state_lock."""
-    if len(_status) > _MAX_ENTRIES:
-        oldest = list(_status.keys())[:len(_status) - _MAX_ENTRIES]
-        for k in oldest:
-            _status.pop(k, None)
-            _results.pop(k, None)
-            _progress.pop(k, None)
+    """Remove oldest/expired entries. Called inside _state_lock."""
+    now = time.time()
+    expired = [k for k, v in _entries.items() if now - v.created_at > _MAX_AGE_S]
+    for k in expired:
+        _entries.pop(k, None)
+    if len(_entries) > _MAX_ENTRIES:
+        by_age = sorted(_entries.keys(), key=lambda k: _entries[k].created_at)
+        for k in by_age[:len(_entries) - _MAX_ENTRIES]:
+            _entries.pop(k, None)
 
 
 def _set_status(run_id: str, status: str):
     with _state_lock:
-        _status[run_id] = status
+        if run_id in _entries:
+            _entries[run_id].status = status
+        else:
+            _entries[run_id] = _BacktestEntry(status=status)
         _evict_old()
 
 
 def _set_progress(run_id: str, **kwargs):
     with _state_lock:
-        if run_id not in _progress:
-            _progress[run_id] = {}
-        _progress[run_id].update(kwargs)
+        if run_id not in _entries:
+            _entries[run_id] = _BacktestEntry(status="running")
+        _entries[run_id].progress.update(kwargs)
 
 
 def _set_result(run_id: str, result: dict):
     with _state_lock:
-        _results[run_id] = result
+        if run_id not in _entries:
+            _entries[run_id] = _BacktestEntry(status="running")
+        _entries[run_id].result = result
 
 
 class BacktestRequest(BaseModel):
@@ -196,6 +218,40 @@ def _build_strategy(name: str, params: Dict, code: str = None):
             rsi_oversold=float(p.get("rsi_oversold", 30)),
             rsi_overbought=float(p.get("rsi_overbought", 70)),
         ),
+        "funding_mean_reversion": lambda p: FundingMeanReversionStrategy(
+            bb_lookback=int(p.get("bb_lookback", 24)),
+            bb_std=float(p.get("bb_std", 2.0)),
+            max_hold_hours=int(p.get("max_hold_hours", 12)),
+            position_size_pct=float(p.get("position_size_pct", 0.5)),
+            candle_resolution_s=int(p.get("candle_resolution_s", 3600)),
+        ),
+        "momentum_breakout": lambda p: MomentumBreakoutStrategy(
+            breakout_lookback=int(p.get("breakout_lookback", 20)),
+            trailing_stop_pct=float(p.get("trailing_stop_pct", 0.02)),
+            oracle_confirmation=int(p.get("oracle_confirmation", 1)),
+            candle_resolution_s=int(p.get("candle_resolution_s", 3600)),
+        ),
+        "funding_arb": lambda p: FundingArbStrategy(
+            min_spread_bps=float(p.get("min_spread_bps", 5.0)),
+            exit_spread_bps=float(p.get("exit_spread_bps", 1.0)),
+            max_hold_hours=int(p.get("max_hold_hours", 24)),
+            position_size_usd=float(p.get("position_size_usd", 1000.0)),
+            min_spread_duration=int(p.get("min_spread_duration", 1)),
+            candle_resolution_s=int(p.get("candle_resolution_s", 60)),
+        ),
+        "basis_trade": lambda p: BasisTradeStrategy(
+            entry_basis_bps=float(p.get("entry_basis_bps", 30.0)),
+            exit_basis_bps=float(p.get("exit_basis_bps", 5.0)),
+            max_hold_hours=int(p.get("max_hold_hours", 12)),
+            position_size_usd=float(p.get("position_size_usd", 1000.0)),
+            candle_resolution_s=int(p.get("candle_resolution_s", 3600)),
+        ),
+        "mev_arb_monitor": lambda p: MevArbMonitor(
+            min_profit_bps=float(p.get("min_profit_bps", 10.0)),
+            max_hops=int(p.get("max_hops", 3)),
+            alert_enabled=int(p.get("alert_enabled", 0)),
+            candle_resolution_s=int(p.get("candle_resolution_s", 60)),
+        ),
     }
     builder = builders.get(name)
     return builder(params) if builder else None
@@ -217,6 +273,11 @@ _DEFAULTS = {
     "atr_breakout": {"period": 20, "atr_period": 14, "multiplier": 2.0},
     "multi_venue_funding": {"entry_threshold": 0.00003, "exit_threshold": 0.000005, "lookback": 12},
     "rsi_macd_combo": {"rsi_period": 14, "macd_fast": 12, "macd_slow": 26, "macd_signal": 9, "rsi_oversold": 30, "rsi_overbought": 70},
+    "funding_mean_reversion": {"bb_lookback": 24, "bb_std": 2.0, "max_hold_hours": 12, "position_size_pct": 0.5, "candle_resolution_s": 3600},
+    "momentum_breakout": {"breakout_lookback": 20, "trailing_stop_pct": 0.02, "oracle_confirmation": 1, "candle_resolution_s": 3600},
+    "funding_arb": {"min_spread_bps": 5.0, "exit_spread_bps": 1.0, "max_hold_hours": 24, "position_size_usd": 1000.0, "min_spread_duration": 1, "candle_resolution_s": 60},
+    "basis_trade": {"entry_basis_bps": 30.0, "exit_basis_bps": 5.0, "max_hold_hours": 12, "position_size_usd": 1000.0, "candle_resolution_s": 3600},
+    "mev_arb_monitor": {"min_profit_bps": 10.0, "max_hops": 3, "alert_enabled": 0, "candle_resolution_s": 60},
 }
 
 
@@ -568,7 +629,7 @@ def run_backtest(req: BacktestRequest, request: Request):
                 all_candles=tearsheet_candles,
             )
 
-            _set_progress(run_id, phase="done", pct=100,
+            _set_progress(run_id, phase="complete", pct=100,
                           detail=f"Complete — {result.total_trades} trades, PnL ${result.total_pnl:+,.2f}")
 
             # Embed data quality and Monte Carlo into tearsheet
@@ -588,7 +649,8 @@ def run_backtest(req: BacktestRequest, request: Request):
             # Run Monte Carlo if enough trades
             if result.total_trades >= 5:
                 trade_pnls = [p.pnl for p in result.positions]
-                mc = run_monte_carlo(trade_pnls, req.initial_capital, n_simulations=500)
+                mc = run_monte_carlo(trade_pnls, req.initial_capital, n_simulations=500,
+                                     period_seconds=req.end_ts - req.start_ts)
                 ts_dict["monte_carlo"] = {
                     "n_simulations": mc.n_simulations,
                     "sharpe_ci": [round(mc.sharpe_ci_lower, 2), round(mc.sharpe_ci_upper, 2)],
@@ -621,10 +683,19 @@ def run_backtest(req: BacktestRequest, request: Request):
                     logger.warning("Journal save failed: %s", journal_err)
 
         except Exception as e:
+            import traceback
             logger.exception("Backtest %s failed", run_id)
+            tb = traceback.format_exc()
+            user_lines = [
+                l.strip() for l in tb.split('\n')
+                if '<string>' in l
+            ]
+            error_detail = f"{type(e).__name__}: {e}"
+            if user_lines:
+                error_detail += f"\n  in strategy code: {user_lines[-1]}"
             _set_status(run_id, "failed")
-            _set_result(run_id, {"error": f"{type(e).__name__}: {e}"})
-            _set_progress(run_id, phase="error", pct=0, detail=f"{type(e).__name__}: {e}")
+            _set_result(run_id, {"error": error_detail})
+            _set_progress(run_id, phase="error", pct=0, detail=error_detail)
         finally:
             with _state_lock:
                 _concurrency["active"] = max(0, _concurrency["active"] - 1)
@@ -640,13 +711,12 @@ def list_backtests():
     """List all tracked backtest runs with their statuses."""
     with _state_lock:
         runs = []
-        for run_id, status in _status.items():
-            progress = _progress.get(run_id, {})
+        for run_id, entry in _entries.items():
             runs.append({
                 "id": run_id,
-                "status": status,
-                "phase": progress.get("phase", ""),
-                "detail": progress.get("detail", ""),
+                "status": entry.status,
+                "phase": entry.progress.get("phase", ""),
+                "detail": entry.progress.get("detail", ""),
             })
     return {"runs": runs}
 
@@ -654,23 +724,24 @@ def list_backtests():
 @router.get("/{run_id}/status")
 def get_status(run_id: str):
     with _state_lock:
-        if run_id not in _status:
+        if run_id not in _entries:
             raise HTTPException(404, "Backtest not found")
-        return {"id": run_id, "status": _status[run_id]}
+        return {"id": run_id, "status": _entries[run_id].status}
 
 
 @router.get("/{run_id}/results")
 def get_results(run_id: str):
-    with _state_lock:
-        if run_id not in _status:
-            raise HTTPException(404, "Backtest not found")
-        status = _status[run_id]
-        progress = dict(_progress.get(run_id, {}))
-        # Deep-copy result inside the lock to avoid race conditions
-        raw_result = _results.get(run_id)
-        result = dict(raw_result) if isinstance(raw_result, dict) else raw_result
-
+    import json
+    from starlette.responses import JSONResponse
     try:
+        with _state_lock:
+            if run_id not in _entries:
+                raise HTTPException(404, "Backtest not found")
+            entry = _entries[run_id]
+            status = entry.status
+            progress = dict(entry.progress)
+            result = dict(entry.result) if isinstance(entry.result, dict) else entry.result
+
         elapsed = time.time() - progress.get("started_at", time.time())
         progress_out = {
             "phase": progress.get("phase", "init"),
@@ -690,24 +761,31 @@ def get_results(run_id: str):
 
         if status == "running":
             return {"id": run_id, "status": "running", "results": None, "progress": progress_out}
-        return {"id": run_id, "status": status, "results": result, "progress": progress_out}
+
+        response = {"id": run_id, "status": status, "results": result, "progress": progress_out}
+        # Pre-validate JSON serializability to catch errors before FastAPI tries
+        json.dumps(response)
+        return response
+    except HTTPException:
+        raise
     except Exception as e:
-        import logging
-        logging.getLogger("flint.backtest").exception("Error serializing results for %s", run_id)
-        return {"id": run_id, "status": "error",
-                "results": {"error": f"Serialization failed: {type(e).__name__}: {e}"},
-                "progress": {}}
+        logging.getLogger("flint.backtest").exception("Error in get_results for %s", run_id)
+        return JSONResponse(status_code=500, content={
+            "id": run_id, "status": "error",
+            "results": {"error": f"Results retrieval failed: {type(e).__name__}: {e}"},
+            "progress": {},
+        })
 
 
 @router.post("/{run_id}/cancel")
 def cancel_backtest(run_id: str):
     """Mark a backtest as cancelled. The thread will continue but results are discarded."""
     with _state_lock:
-        if run_id not in _status:
+        if run_id not in _entries:
             raise HTTPException(404, "Backtest not found")
-        if _status[run_id] != "running":
-            return {"id": run_id, "status": _status[run_id], "message": "Not running"}
-        _status[run_id] = "cancelled"
+        if _entries[run_id].status != "running":
+            return {"id": run_id, "status": _entries[run_id].status, "message": "Not running"}
+        _entries[run_id].status = "cancelled"
     _set_progress(run_id, phase="cancelled", detail="Cancelled by user")
     return {"id": run_id, "status": "cancelled"}
 
@@ -719,8 +797,9 @@ def compare_backtests(ids: str):
     results = []
     with _state_lock:
         for rid in run_ids:
-            if rid in _results and _status.get(rid) == "complete":
-                r = _results[rid]
+            entry = _entries.get(rid)
+            if entry and entry.status == "complete" and entry.result:
+                r = entry.result
                 results.append({
                     "id": rid,
                     "strategy": r.get("strategy_name", ""),

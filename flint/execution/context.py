@@ -182,6 +182,14 @@ class ExecutionContext(abc.ABC):
         """
         return {}
 
+    def get_borrow_rate(self, market: str = None, venue: str = None):
+        """Current hourly borrow rate. Returns None for venues using funding rates."""
+        return None
+
+    def get_borrow_rates(self, market: str = None, venue: str = None, lookback: int = 24) -> list:
+        """Historical borrow rates as [(ts, rate), ...]. Empty for non-borrow venues."""
+        return []
+
     def get_orderbook(self, market: Optional[str] = None):
         """Get the most recent orderbook snapshot for a market.
 

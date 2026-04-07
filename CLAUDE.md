@@ -66,7 +66,7 @@ ui/                # React 19 + Vite + Tailwind
 | GeckoTerminal | providers/gecko.py | None | DEX pool OHLCV |
 | Jupiter | providers/jupiter.py | None | Swap quotes |
 | CoinGecko | providers/coingecko.py | None | Spot candles (BTC, ETH, etc.) |
-| CCXT | providers/ccxt_provider.py | Optional | 100+ CEX exchanges |
+| CCXT | providers/ccxt_provider.py | None (bundled) | 100+ CEX exchanges, volume data |
 | Cross-venue funding | providers/funding_rates.py | None | 10 venues normalized to 1h |
 
 **Funding venues** (all free, no keys): Drift, Binance, Hyperliquid, OKX, Bybit, Gate.io, Bitget, dYdX + CCXT (mexc, phemex, bitmex).

@@ -68,6 +68,15 @@ def generate_tearsheet(
 ) -> Tearsheet:
     metrics = compute_metrics(result, initial_capital)
 
+    # Inject margin tracking metrics if present
+    metrics_dict = asdict(metrics)
+    if hasattr(result, 'margin_stats') and result.margin_stats is not None:
+        ms = result.margin_stats
+        metrics_dict["max_leverage"] = round(ms.max_leverage, 2)
+        metrics_dict["avg_leverage"] = round(ms.avg_leverage, 2)
+        metrics_dict["margin_calls"] = ms.margin_calls
+        metrics_dict["max_margin_utilization_pct"] = round(ms.max_utilization_pct, 1)
+
     # Timestamps from candles
     timestamps = [c.ts for c in candles]
     market = candles[0].market if candles else ""
@@ -148,7 +157,7 @@ def generate_tearsheet(
         period_start=timestamps[0] if timestamps else 0,
         period_end=timestamps[-1] if timestamps else 0,
         initial_capital=initial_capital,
-        metrics=asdict(metrics),
+        metrics=metrics_dict,
         equity_curve=equity_curve,
         drawdown_curve=drawdown_curve,
         monthly_returns=monthly,

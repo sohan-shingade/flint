@@ -13,6 +13,8 @@ from ...analytics.correlation import compute_correlation_matrix
 
 router = APIRouter()
 
+_ccxt_warned: set = set()
+
 
 def _get_store(request: Request) -> Optional[FlintStore]:
     """Get the shared store from app state. Never create a new one."""
@@ -34,6 +36,27 @@ def get_ohlcv(
         return {"market": market, "resolution_s": resolution_s, "count": 0, "candles": []}
     try:
         candles = store.query_candles(market, resolution_s, start_ts, end_ts, limit=limit, venue=venue)
+
+        # When querying all venues, deduplicate by timestamp.
+        # Prefer pyth (best prices), take highest volume across venues.
+        if venue is None:
+            by_ts: dict = {}
+            for c in candles:
+                existing = by_ts.get(c.ts)
+                if existing is None:
+                    by_ts[c.ts] = c
+                elif c.venue == "pyth":
+                    # Pyth has best prices — use it, but keep higher volume
+                    vol = max(c.volume, existing.volume)
+                    by_ts[c.ts] = type(c)(
+                        ts=c.ts, open=c.open, high=c.high, low=c.low,
+                        close=c.close, volume=vol, market=c.market,
+                        resolution_s=c.resolution_s, venue=c.venue,
+                    )
+                elif existing.venue != "pyth" and c.volume > existing.volume:
+                    by_ts[c.ts] = c
+            candles = sorted(by_ts.values(), key=lambda c: c.ts)
+
         return {
             "market": market,
             "resolution_s": resolution_s,
@@ -42,12 +65,43 @@ def get_ohlcv(
             "candles": [
                 {"ts": c.ts, "open": c.open, "high": c.high,
                  "low": c.low, "close": c.close, "volume": c.volume,
-                 "venue": getattr(c, 'venue', 'default')}
+                 "venue": getattr(c, 'venue', 'pyth')}
                 for c in candles
             ],
         }
     except Exception as e:
         return {"market": market, "resolution_s": resolution_s, "count": 0, "candles": [], "error": str(e)}
+
+
+@router.get("/volume")
+def get_volume(
+    request: Request,
+    market: str = Query("SOL-PERP"),
+    resolution_s: int = Query(3600),
+    start_ts: Optional[int] = Query(None),
+    end_ts: Optional[int] = Query(None),
+):
+    """Get per-venue volume data for a market."""
+    store = _get_store(request)
+    if store is None:
+        return {"market": market, "venues": {}, "count": 0}
+    try:
+        # Get all venues that have candle data for this market (exclude pyth — no volume)
+        result: Dict[str, list] = {}
+        with store._lock:
+            venues_rows = store._conn.execute(
+                "SELECT DISTINCT venue FROM candles WHERE market = ? AND venue NOT IN ('pyth', 'default')",
+                [market]
+            ).fetchall()
+
+        for (venue_name,) in venues_rows:
+            candles = store.query_candles(market, resolution_s, start_ts, end_ts, venue=venue_name)
+            result[venue_name] = [{"ts": c.ts, "volume": c.volume} for c in candles]
+
+        total = sum(len(v) for v in result.values())
+        return {"market": market, "venues": result, "count": total}
+    except Exception as e:
+        return {"market": market, "venues": {}, "count": 0, "error": str(e)}
 
 
 @router.get("/funding")
@@ -58,6 +112,11 @@ def get_funding(
     end_ts: Optional[int] = Query(None),
 ):
     """Get funding rates for a market, grouped by venue."""
+    import time as _time
+    if end_ts is None:
+        end_ts = int(_time.time())
+    if start_ts is None:
+        start_ts = end_ts - 30 * 86400
     store = _get_store(request)
     if store is None:
         return {"market": market, "venues": {}, "count": 0}
@@ -67,6 +126,32 @@ def get_funding(
         return {"market": market, "venues": by_venue, "count": total}
     except Exception as e:
         return {"market": market, "venues": {}, "count": 0, "error": str(e)}
+
+
+@router.get("/borrow-rates")
+def get_borrow_rates(
+    request: Request,
+    market: str = Query("SOL-PERP"),
+    start_ts: Optional[int] = Query(None),
+    end_ts: Optional[int] = Query(None),
+):
+    """Get Jupiter borrow rate history for a market."""
+    store = _get_store(request)
+    if store is None:
+        return {"market": market, "rates": [], "count": 0}
+    try:
+        import time as _time
+        start = start_ts or 0
+        end = end_ts or int(_time.time())
+        snapshots = store.query_borrow_rates(market, start, end)
+        rates = [
+            {"ts": s.ts, "rate_hourly": s.rate_hourly, "utilization": s.utilization,
+             "cumulative_rate": s.cumulative_rate, "source": s.source}
+            for s in snapshots
+        ]
+        return {"market": market, "rates": rates, "count": len(rates)}
+    except Exception as e:
+        return {"market": market, "rates": [], "count": 0, "error": str(e)}
 
 
 @router.delete("/market/{market}")
@@ -131,20 +216,18 @@ def list_markets(request: Request):
         return {"markets": [], "error": str(e)}
 
 
-@router.get("/check")
-def check_data(
-    request: Request,
-    market: str = Query(...),
-    resolution_s: int = Query(3600),
-    start_ts: int = Query(...),
-    end_ts: int = Query(...),
-):
-    """Check if data exists for a given market/timeframe/date range."""
+def _check_single_market(
+    store: Optional[FlintStore],
+    market: str,
+    resolution_s: int,
+    start_ts: int,
+    end_ts: int,
+) -> dict:
+    """Check data availability for a single market. Returns a dict."""
     if start_ts < 0 or end_ts < 0 or start_ts >= end_ts:
         return {"market": market, "resolution_s": resolution_s, "has_data": False,
                 "covers_range": False, "will_download": True, "candle_count": 0,
                 "total_in_db": 0, "first_ts": None, "last_ts": None}
-    store = _get_store(request)
     if store is None:
         return {
             "market": market, "resolution_s": resolution_s,
@@ -161,12 +244,16 @@ def check_data(
 
         # Expected candle count for coverage calculation
         expected_count = max(1, (end_ts - start_ts) // resolution_s)
-        coverage_pct = round(len(candles) / expected_count * 100, 1) if expected_count else 0
+        coverage_pct = min(round(len(candles) / expected_count * 100, 1), 100.0) if expected_count else 0
 
         # Check if local data covers the full requested range
+        # Must check BOTH ends: first candle near start AND last candle near end
+        # AND coverage must be at least 80%
         covers_range = False
         if candles:
-            covers_range = candles[-1].ts >= end_ts - 86400  # within 1 day of end
+            end_ok = candles[-1].ts >= end_ts - 86400  # within 1 day of end
+            start_ok = candles[0].ts <= start_ts + 86400  # within 1 day of start
+            covers_range = end_ok and start_ok and coverage_pct >= 80
 
         will_download = not covers_range
 
@@ -239,6 +326,45 @@ def check_data(
         }
 
 
+@router.get("/check")
+def check_data(
+    request: Request,
+    market: Optional[str] = Query(None),
+    markets: Optional[str] = Query(None),
+    resolution_s: int = Query(3600),
+    start_ts: int = Query(...),
+    end_ts: int = Query(...),
+):
+    """Check if data exists for a given market/timeframe/date range.
+
+    Accepts either ``market`` (single) or ``markets`` (comma-separated).
+    Single-market requests return the flat dict (backward compatible).
+    Multi-market requests return ``{"results": [...]}``.
+    """
+    # Build market list from either param
+    if markets:
+        market_list = [m.strip() for m in markets.split(",") if m.strip()]
+    elif market:
+        market_list = [market]
+    else:
+        from fastapi import HTTPException
+        raise HTTPException(400, "Provide 'market' or 'markets' query parameter")
+
+    store = _get_store(request)
+
+    # Single market — preserve original response shape
+    if len(market_list) == 1:
+        return _check_single_market(store, market_list[0], resolution_s, start_ts, end_ts)
+
+    # Multiple markets — wrap in results list
+    return {
+        "results": [
+            _check_single_market(store, m, resolution_s, start_ts, end_ts)
+            for m in market_list
+        ]
+    }
+
+
 @router.post("/check-markets")
 def check_markets_data(
     request: Request,
@@ -267,7 +393,14 @@ def check_markets_data(
         try:
             candles = store.query_candles(m, resolution_s, start_ts, end_ts)
             has_data = len(candles) > 0
-            covers = candles[-1].ts >= end_ts - 86400 if candles else False
+            if candles:
+                expected = max(1, (end_ts - start_ts) // resolution_s)
+                cov = len(candles) / expected * 100
+                covers = (candles[-1].ts >= end_ts - 86400 and
+                          candles[0].ts <= start_ts + 86400 and
+                          cov >= 80)
+            else:
+                covers = False
             result[m] = {
                 "has_data": has_data,
                 "covers_range": covers,
@@ -488,12 +621,21 @@ def download_market_data(request: Request, body: dict):
     resolution_s = body.get("resolution_s", 3600)
     start_ts = body.get("start_ts")
     end_ts = body.get("end_ts")
-    funding_venues = body.get("funding_venues")  # optional list of venue IDs
-    venue = body.get("venue", "")  # optional venue filter (drift, hyperliquid, binance, okx, bybit)
+    # execution_venues controls which venues supply supplementary data (funding, borrow rates).
+    # funding_venues is accepted as an alias for backward compatibility.
+    execution_venues = body.get("execution_venues") or body.get("funding_venues")
+    venue = body.get("venue", "")  # deprecated — candles always come from Pyth now
+
+    # Convenience: accept 'days' as alternative to start_ts/end_ts
+    days = body.get("days")
+    if days and (not start_ts or not end_ts):
+        import time as _time
+        end_ts = int(_time.time())
+        start_ts = end_ts - int(days) * 86400
 
     if not start_ts or not end_ts or start_ts >= end_ts:
         from fastapi import HTTPException
-        raise HTTPException(400, "Invalid date range — start_ts and end_ts required, start < end")
+        raise HTTPException(400, "Invalid date range — provide days (e.g. 90) or start_ts + end_ts with start < end")
 
     store = _get_store(request)
     if store is None:
@@ -525,12 +667,31 @@ def download_market_data(request: Request, body: dict):
                 try:
                     funding_fetched = _download_funding_all_venues(
                         store, market, start_ts, end_ts, logger,
-                        venues=funding_venues, warnings=download_warnings,
+                        venues=execution_venues, warnings=download_warnings,
                     )
                 except Exception as e:
                     msg = f"Funding sync failed: {e}"
                     logger.warning("Funding sync failed for %s: %s", market, e)
                     download_warnings.append(msg)
+
+            # Download per-venue candles (volume data) if not already populated
+            volume_merged = 0
+            has_venue_data = False
+            try:
+                with store._lock:
+                    vc = store._conn.execute(
+                        "SELECT COUNT(*) FROM candles WHERE market = ? AND venue NOT IN ('pyth', 'default') "
+                        "AND ts >= ? AND ts <= ?",
+                        [market, start_ts, end_ts],
+                    ).fetchone()
+                has_venue_data = vc and vc[0] > 100
+            except Exception:
+                pass
+            if not has_venue_data:
+                volume_merged = _download_venue_volume(
+                    store, market, resolution_s, start_ts, end_ts, logger, download_warnings
+                )
+
             # Update sync_metadata for freshness tracking
             try:
                 from ...models import SyncMetadata
@@ -560,12 +721,14 @@ def download_market_data(request: Request, body: dict):
                 "market": market,
                 "resolution_s": resolution_s,
                 "downloaded": 0,
-                "cached": 0,
+                "cached": existing_count,
                 "existing": existing_count,
                 "total": existing_count,
                 "funding_fetched": funding_fetched,
+                "volume_merged": volume_merged,
                 "source": "local",
                 "skipped": True,
+                "message": "All candles already cached for this range",
                 "warnings": download_warnings,
             }
 
@@ -575,19 +738,39 @@ def download_market_data(request: Request, body: dict):
         source = "none"
         errors: list = []
 
+        if venue:
+            logger.warning(
+                "download: 'venue' param is deprecated for candle source selection; "
+                "candles now always come from Pyth. Use 'execution_venues' to control "
+                "which venues supply supplementary data (funding, borrow rates)."
+            )
+
         for gap_start, gap_end in gaps:
-            if venue:
-                fetched, err = _download_range_for_venue(market, resolution_s, gap_start, gap_end, venue, logger)
-                source = venue
-            else:
-                fetched, err = _download_range(market, resolution_s, gap_start, gap_end, logger)
-                source = "drift_api"
+            fetched, err = _download_pyth_candles(market, resolution_s, gap_start, gap_end)
+            source = "pyth"
             if fetched:
                 total_fetched += len(fetched)
                 total_cached += store.upsert_candles(fetched)
             if err:
                 errors.append(err)
                 download_warnings.append(f"Candle download ({source}): {err}")
+
+        # Merge volume from Hyperliquid into Pyth candles (Pyth has price-only, volume=0)
+        venue_candle_count = _download_venue_volume(
+            store, market, resolution_s, start_ts, end_ts, logger, download_warnings
+        )
+
+        # Also download venue candles if explicitly requested
+        for ev in (execution_venues or []):
+            if ev in ("jupiter",):
+                continue
+            try:
+                venue_candles, _ = _download_range_for_venue(market, resolution_s, start_ts, end_ts, ev, logger)
+                if venue_candles:
+                    store.upsert_candles(venue_candles)
+                    venue_candle_count += len(venue_candles)
+            except Exception as e:
+                download_warnings.append(f"{ev} volume: {e}")
 
         # Re-count total
         final_count = len(store.query_candles(market, resolution_s, start_ts, end_ts))
@@ -598,12 +781,52 @@ def download_market_data(request: Request, body: dict):
             try:
                 funding_fetched = _download_funding_all_venues(
                     store, market, start_ts, end_ts, logger,
-                    venues=funding_venues, warnings=download_warnings,
+                    venues=execution_venues, warnings=download_warnings,
                 )
             except Exception as e:
                 msg = f"Funding sync failed: {e}"
                 logger.warning("Funding sync failed for %s: %s", market, e)
                 download_warnings.append(msg)
+
+        # Download Jupiter borrow rates if Jupiter is in execution_venues
+        if execution_venues and "jupiter" in execution_venues and "-PERP" in market:
+            try:
+                from ...models import BorrowSnapshot
+                _JUPITER_MINTS = {
+                    "SOL-PERP": "So11111111111111111111111111111111111111112",
+                    "ETH-PERP": "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+                    "BTC-PERP": "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",
+                }
+                mint = _JUPITER_MINTS.get(market)
+                if mint:
+                    import httpx as _httpx
+                    resp = _httpx.get(
+                        f"https://perps-api.jup.ag/v1/pool-info?mint={mint}",
+                        timeout=15,
+                    )
+                    resp.raise_for_status()
+                    pool = resp.json()
+                    # Average long/short borrow rate as hourly rate
+                    long_rate = float(pool.get("longBorrowRatePercent", 0)) / 100
+                    short_rate = float(pool.get("shortBorrowRatePercent", 0)) / 100
+                    avg_rate = (long_rate + short_rate) / 2
+                    utilization = (
+                        float(pool.get("longUtilizationPercent", 0))
+                        + float(pool.get("shortUtilizationPercent", 0))
+                    ) / 200  # average of both sides, normalized to 0-1
+                    now_ts = int(time.time())
+                    snapshot = BorrowSnapshot(
+                        market=market, ts=now_ts, rate_hourly=avg_rate,
+                        utilization=utilization, cumulative_rate=0.0, source="jupiter_api",
+                    )
+                    store.upsert_borrow_rates([snapshot])
+                    logger.info("Jupiter borrow rate for %s: %.6f hourly (util %.1f%%)",
+                                market, avg_rate, utilization * 100)
+                else:
+                    download_warnings.append(f"Jupiter borrow rates: {market} not supported (only SOL/ETH/BTC)")
+            except Exception as e:
+                logger.warning("Jupiter borrow rate failed for %s: %s", market, e)
+                download_warnings.append(f"Jupiter borrow rates: {e}")
 
         # Update sync_metadata for freshness tracking
         try:
@@ -639,6 +862,7 @@ def download_market_data(request: Request, body: dict):
             "existing": existing_count,
             "total": final_count,
             "funding_fetched": funding_fetched,
+            "venue_candle_count": venue_candle_count,
             "source": source,
             "warnings": download_warnings,
         }
@@ -659,6 +883,146 @@ def download_market_data(request: Request, body: dict):
             "error": str(e),
             "warnings": download_warnings,
         }
+
+
+# Venues to download volume from, in priority order.
+# Each stores candles under its own venue tag.
+_VOLUME_VENUES = [
+    ("hyperliquid", "native"),  # native = use HyperliquidCandleProvider directly
+    ("jupiter", "dune"),        # dune = use DuneVolumeBackfill (requires FLINT_DUNE_API_KEY)
+    ("okx", "ccxt"),
+    ("gate", "ccxt"),
+    ("binanceus", "ccxt"),
+]
+
+
+def _download_venue_volume(store, market, resolution_s, start_ts, end_ts, logger, warnings):
+    """Download candles from multiple venues and store per-venue.
+
+    Like funding rates, volume is stored per-venue so you can compare
+    Drift vs Hyperliquid vs OKX volume. Also merges the best available
+    volume into zero-volume Pyth candles.
+
+    Returns total number of venue candles stored.
+    """
+    from ...models import Candle as CandleModel
+    total_stored = 0
+
+    for venue_name, provider_type in _VOLUME_VENUES:
+        try:
+            venue_candles = []
+
+            if provider_type == "native" and venue_name == "hyperliquid":
+                from ...providers.hyperliquid_candles import HyperliquidCandleProvider, _FLINT_TO_HL
+                if market not in _FLINT_TO_HL:
+                    continue
+                hl = HyperliquidCandleProvider()
+                try:
+                    interval_map = {60: "1m", 300: "5m", 900: "15m", 3600: "1h", 14400: "4h", 86400: "1d"}
+                    interval = interval_map.get(resolution_s, "1h")
+                    venue_candles = hl.fetch_candles(market, start_ts, end_ts, resolution=interval)
+                finally:
+                    hl._client.close()
+
+            elif provider_type == "dune" and venue_name == "jupiter":
+                import os
+                # Try Helius first (faster, more reliable), fall back to Dune
+                helius_key = os.environ.get("HELIUS_API_KEY", "")
+                if helius_key and "-PERP" in market:
+                    from ...providers.jupiter_borrow import HeliusJupiterVolume
+                    hv = HeliusJupiterVolume(helius_key)
+                    try:
+                        venue_candles = hv.fetch_hourly_volume(market, start_ts, end_ts)
+                    finally:
+                        hv.close()
+                elif not helius_key:
+                    # Fall back to Dune if available
+                    dune_key = os.environ.get("FLINT_DUNE_API_KEY", "")
+                    if dune_key and "-PERP" in market:
+                        from ...providers.jupiter_borrow import DuneVolumeBackfill
+                        dune = DuneVolumeBackfill(dune_key)
+                        try:
+                            venue_candles = dune.fetch(market, start_ts, end_ts)
+                        finally:
+                            dune.close()
+
+            elif provider_type == "ccxt":
+                from ...providers.ccxt_provider import CCXTProvider
+                provider = CCXTProvider(exchange=venue_name)
+                try:
+                    venue_candles = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+                finally:
+                    provider.close()
+
+            if venue_candles:
+                # Tag with venue name and store (primary key includes venue)
+                tagged = [
+                    CandleModel(
+                        ts=c.ts, open=c.open, high=c.high, low=c.low,
+                        close=c.close, volume=c.volume, market=c.market,
+                        resolution_s=c.resolution_s, venue=venue_name,
+                    )
+                    for c in venue_candles if c.volume > 0
+                ]
+                if tagged:
+                    stored = store.upsert_candles(tagged)
+                    total_stored += stored
+                    logger.info("%s: stored %d candles for %s", venue_name, stored, market)
+
+        except Exception as e:
+            logger.debug("%s volume download failed for %s: %s", venue_name, market, e)
+
+    # Merge best volume into zero-volume Pyth candles
+    # Priority: use highest-volume venue per timestamp
+    pyth_candles = store.query_candles(market, resolution_s, start_ts, end_ts, venue="pyth")
+    if not pyth_candles:
+        # Fall back to default venue
+        pyth_candles = store.query_candles(market, resolution_s, start_ts, end_ts)
+
+    zero_vol = [c for c in pyth_candles if c.volume == 0]
+    if zero_vol:
+        # Collect volume from all venues
+        vol_by_ts: dict = {}  # ts → (volume, venue)
+        for venue_name, _ in _VOLUME_VENUES:
+            venue_data = store.query_candles(market, resolution_s, start_ts, end_ts, venue=venue_name)
+            for c in venue_data:
+                if c.volume > 0:
+                    existing = vol_by_ts.get(c.ts)
+                    if existing is None or c.volume > existing[0]:
+                        vol_by_ts[c.ts] = (c.volume, venue_name)
+
+        updated = []
+        for c in zero_vol:
+            entry = vol_by_ts.get(c.ts)
+            if entry:
+                vol, _ = entry
+                updated.append(CandleModel(
+                    ts=c.ts, open=c.open, high=c.high, low=c.low,
+                    close=c.close, volume=vol, market=c.market,
+                    resolution_s=c.resolution_s, venue=c.venue,
+                ))
+        if updated:
+            store.upsert_candles(updated)
+            logger.info("Merged volume into %d Pyth candles for %s", len(updated), market)
+            total_stored += len(updated)
+
+    return total_stored
+
+
+def _download_pyth_candles(market: str, resolution_s: int, start_ts: int, end_ts: int):
+    """Download candles from Pyth Benchmarks API.
+
+    Returns (List[Candle], Optional[error_msg])
+    """
+    from ...providers.pyth_candles import PythCandleProvider
+    provider = PythCandleProvider()
+    try:
+        candles = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+        return candles, None
+    except Exception as e:
+        return [], str(e)
+    finally:
+        provider.close()
 
 
 def _download_range(market: str, resolution_s: int, start_ts: int, end_ts: int, logger):
@@ -1157,7 +1521,7 @@ def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int,
         return 0
 
     from ...providers.funding_rates import (
-        DriftFundingProvider, HyperliquidFundingProvider,
+        BinanceFundingProvider, DriftFundingProvider, HyperliquidFundingProvider,
         OKXFundingProvider, BybitFundingProvider,
         GateioFundingProvider, BitgetFundingProvider, DydxFundingProvider,
         CCXTFundingProvider, CCXT_FUNDING_EXCHANGES,
@@ -1166,6 +1530,7 @@ def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int,
     native_providers: dict = {
         "drift": DriftFundingProvider,
         "hyperliquid": HyperliquidFundingProvider,
+        "binance": BinanceFundingProvider,
         "okx": OKXFundingProvider,
         "bybit": BybitFundingProvider,
         "gateio": GateioFundingProvider,
@@ -1232,7 +1597,10 @@ def _download_funding_all_venues(store, market: str, start_ts: int, end_ts: int,
         except Exception as e:
             logger.warning("ccxt/%s funding failed for %s: %s", exchange, market, e)
             if warnings is not None:
-                warnings.append(f"ccxt/{exchange} funding unavailable: {e}")
+                warn_key = f"ccxt/{exchange}"
+                if warn_key not in _ccxt_warned:
+                    _ccxt_warned.add(warn_key)
+                    warnings.append(f"ccxt/{exchange} funding unavailable: {e}")
 
     # Also fetch per-venue open interest alongside funding
     OI_VENUES = {"binance", "okx", "bybit", "hyperliquid"}

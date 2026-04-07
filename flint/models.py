@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class Signal(enum.Enum):
@@ -120,6 +120,9 @@ class BacktestResult:
     per_venue_trades: Dict[str, int] = field(default_factory=dict)
     per_venue_funding_income: Dict[str, float] = field(default_factory=dict)
     total_tx_costs: float = 0.0
+    jupiter_borrow_paid: float = 0.0
+    borrow_payments: List = field(default_factory=list)
+    margin_stats: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +195,23 @@ class FundingRate:
     mark_price: float
     slot: int = 0
     source: str = "drift"  # "drift", "hyperliquid", "drift_s3"
+
+
+@dataclass(frozen=True)
+class BorrowSnapshot:
+    """Jupiter Perps borrow rate snapshot.
+
+    Unlike FundingRate (periodic, can be negative), borrow rates are
+    continuous and always positive. The cumulative_rate field tracks
+    the monotonically increasing on-chain counter used to compute
+    position borrow costs.
+    """
+    market: str
+    ts: int
+    rate_hourly: float
+    utilization: float
+    cumulative_rate: float
+    source: str = "rpc"
 
 
 @dataclass(frozen=True)

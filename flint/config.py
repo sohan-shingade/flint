@@ -156,6 +156,22 @@ class FlintConfig(BaseSettings):
     clmm_tick_fetch_enabled: bool = False
     clmm_tick_persist_interval_s: int = 300
 
+    # --- Jupiter Perps ---
+    jupiter_perps_enabled: bool = False
+    jupiter_perps_sidecar_port: int = 8401
+    jupiter_perps_rpc_url: str = ""
+    jupiter_perps_wallet_path: str = ""
+
+    # --- Dune Analytics (for borrow rate backfill) ---
+    dune_api_key: str = ""
+
+    # --- Price source ---
+    price_source: str = "pyth"
+
+    # --- Tardis.dev (for CEX orderbook data) ---
+    tardis_api_key: str = ""
+    tardis_max_gb_per_request: float = 1.0
+
 
 def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""

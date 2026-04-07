@@ -171,7 +171,7 @@ class TestVenueFunding:
 class TestDownloadEndpoint:
     def test_download_new_market(self, app_client, store):
         candles = _make_candles("ETH-PERP", 1700000000, 24)
-        with patch("flint.api.routes.data._download_range", return_value=(candles, None)), \
+        with patch("flint.api.routes.data._download_pyth_candles", return_value=(candles, None)), \
              patch("flint.api.routes.data._download_funding_all_venues", return_value=10):
             resp = app_client.post("/api/v1/data/download", json={
                 "market": "ETH-PERP", "resolution_s": 3600,
@@ -186,7 +186,7 @@ class TestDownloadEndpoint:
         candles = _make_candles("SOL-PERP", 1700000000, 24)
         store.upsert_candles(candles)
 
-        with patch("flint.api.routes.data._download_range") as mock_dl, \
+        with patch("flint.api.routes.data._download_pyth_candles") as mock_dl, \
              patch("flint.api.routes.data._download_funding_all_venues", return_value=0):
             resp = app_client.post("/api/v1/data/download", json={
                 "market": "SOL-PERP", "resolution_s": 3600,
@@ -202,7 +202,7 @@ class TestDownloadEndpoint:
         store.upsert_candles(existing)
 
         new_candles = _make_candles("SOL-PERP", 1700043200, 12)
-        with patch("flint.api.routes.data._download_range", return_value=(new_candles, None)), \
+        with patch("flint.api.routes.data._download_pyth_candles", return_value=(new_candles, None)), \
              patch("flint.api.routes.data._download_funding_all_venues", return_value=5):
             resp = app_client.post("/api/v1/data/download", json={
                 "market": "SOL-PERP", "resolution_s": 3600,
@@ -213,7 +213,7 @@ class TestDownloadEndpoint:
         assert data["existing"] == 12
 
     def test_download_all_providers_fail(self, app_client):
-        with patch("flint.api.routes.data._download_range", return_value=([], "all failed")), \
+        with patch("flint.api.routes.data._download_pyth_candles", return_value=([], "all failed")), \
              patch("flint.api.routes.data._download_funding_all_venues", return_value=0):
             resp = app_client.post("/api/v1/data/download", json={
                 "market": "FAKE-PERP", "resolution_s": 3600,
@@ -404,7 +404,7 @@ class TestFundingEndpoint:
         ]
         store.upsert_venue_funding(snapshots)
 
-        resp = app_client.get("/api/v1/data/funding?market=SOL-PERP")
+        resp = app_client.get("/api/v1/data/funding?market=SOL-PERP&start_ts=1699900000&end_ts=1700100000")
         data = resp.json()
         assert data["count"] == 2
         assert "drift" in data["venues"]

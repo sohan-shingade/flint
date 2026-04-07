@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     params_json    VARCHAR,
     created_at     BIGINT NOT NULL,
     total_pnl      DOUBLE,
+    total_return_pct DOUBLE DEFAULT 0,
     win_rate       DOUBLE,
     sharpe_ratio   DOUBLE,
     max_drawdown   DOUBLE,
@@ -55,6 +56,13 @@ class JournalStorage:
         with store._lock:
             store._conn.execute(_CREATE_RUNS)
             store._conn.execute(_CREATE_TRADES)
+            # Migration: add total_return_pct for existing databases
+            try:
+                store._conn.execute(
+                    "ALTER TABLE backtest_runs ADD COLUMN total_return_pct DOUBLE DEFAULT 0"
+                )
+            except Exception:
+                pass  # column already exists
 
     def save_run(self, run_id, strategy_name, market, resolution_s,
                  start_ts, end_ts, initial_capital, params=None, result=None):
@@ -66,13 +74,14 @@ class JournalStorage:
         trades = result.total_trades if result else 0
         fees = getattr(result, "total_fees", 0)
         funding = getattr(result, "funding_paid", 0)
+        total_return_pct = (total_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
 
         with self._store._lock:
             self._store._conn.execute(
-                "INSERT OR REPLACE INTO backtest_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO backtest_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [run_id, strategy_name, market, resolution_s, start_ts, end_ts,
                  initial_capital, params_json, int(time.time()),
-                 total_pnl, win_rate, sharpe, max_dd, trades, fees, funding],
+                 total_pnl, total_return_pct, win_rate, sharpe, max_dd, trades, fees, funding],
             )
             if result and result.positions:
                 for idx, pos in enumerate(result.positions):
@@ -120,7 +129,7 @@ class JournalStorage:
         with self._store._lock:
             for rid in run_ids:
                 row = self._store._conn.execute(
-                    "SELECT run_id, strategy_name, market, total_pnl, win_rate, "
+                    "SELECT run_id, strategy_name, market, total_pnl, total_return_pct, win_rate, "
                     "sharpe_ratio, max_drawdown, total_trades, total_fees "
                     "FROM backtest_runs WHERE run_id = ?", [rid],
                 ).fetchone()

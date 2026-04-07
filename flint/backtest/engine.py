@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import inspect
 import time as _time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -69,10 +69,12 @@ class BacktestEngine:
         funding_rates: Optional[List[FundingRate]] = None,
         orderbook_snapshots: Optional[list] = None,
         open_interest: Optional[list] = None,
+        borrow_snapshots: Optional[list] = None,
         risk_manager=None,
         margin_engine=None,
         capital_allocator=None,
         max_runtime_s: float = 300,
+        venue_fill_models: Optional[Dict[str, FillModel]] = None,
     ) -> None:
         self.strategy = strategy
         self.initial_capital = initial_capital
@@ -83,10 +85,12 @@ class BacktestEngine:
         self._funding_rates = funding_rates or []
         self._orderbook_snapshots = orderbook_snapshots or []
         self._open_interest = open_interest or []
+        self._borrow_snapshots = borrow_snapshots or []
         self._margin_engine = margin_engine
         self._capital_allocator = capital_allocator
         self._risk_manager = risk_manager
         self._max_runtime_s = max_runtime_s
+        self._venue_fill_models: Dict[str, FillModel] = venue_fill_models or {}
 
     def run(self, candles, extra_markets: dict = None) -> BacktestResult:
         """Run backtest.
@@ -139,6 +143,7 @@ class BacktestEngine:
             risk_manager=self._risk_manager,
             margin_engine=self._margin_engine,
             capital_allocator=self._capital_allocator,
+            venue_fill_models=self._venue_fill_models,
         )
 
         has_ctx = _strategy_uses_context(self.strategy)
@@ -168,6 +173,10 @@ class BacktestEngine:
         sorted_oi = sorted(self._open_interest, key=lambda o: o.ts)
         oi_cursor = 0
 
+        # Pre-sort borrow snapshots (Jupiter Perps) for cursor-based feeding
+        sorted_borrow = sorted(self._borrow_snapshots, key=lambda b: b.ts)
+        borrow_cursor = 0
+
         # Pre-sort extra market candles for efficient sync
         extra_sorted: dict = {}
         extra_cursors: dict = {}
@@ -176,6 +185,15 @@ class BacktestEngine:
                 extra_sorted[mkt] = sorted(mkt_candles, key=lambda c: c.ts)
                 extra_cursors[mkt] = 0
         extra_histories: dict = {m: [] for m in (extra_markets or {})}
+
+        # Warn if all candle volumes are zero (Pyth price-only data)
+        volume_warnings = []
+        sample = candles[:min(100, len(candles))]
+        if sample and all(c.volume == 0 for c in sample):
+            volume_warnings.append(
+                "All candles have zero volume (Pyth price-only data). "
+                "Volume-dependent indicators (VWAP, volume breakout) will be unreliable."
+            )
 
         _deadline = _time.monotonic() + self._max_runtime_s if self._max_runtime_s > 0 else float('inf')
 
@@ -207,6 +225,10 @@ class BacktestEngine:
             # 1b. Check liquidations BEFORE anything else
             ctx.check_liquidations(candle)
 
+            # 1c. Update margin stats (leverage, utilization) for this bar
+            if self._margin_engine is not None:
+                self._margin_engine.update_stats(ctx.positions, ctx.account.cash)
+
             # 2. Process pending stop/limit orders BEFORE strategy
             ctx.process_pending_orders(candle)
 
@@ -227,6 +249,11 @@ class BacktestEngine:
                 ctx.add_open_interest(sorted_oi[oi_cursor])
                 oi_cursor += 1
 
+            # 3b3. Feed borrow snapshots (Jupiter Perps) up to current timestamp
+            while borrow_cursor < len(sorted_borrow) and sorted_borrow[borrow_cursor].ts <= candle.ts:
+                ctx.add_borrow_rate(sorted_borrow[borrow_cursor])
+                borrow_cursor += 1
+
             # 3c. Process pending capital transfers
             ctx.process_transfers(candle.ts)
 
@@ -234,6 +261,13 @@ class BacktestEngine:
             if isinstance(self._fill_model, (OrderbookFillModel, FillPipeline)):
                 book = ctx.get_orderbook(candle.market)
                 self._fill_model.set_orderbook(book)
+
+            # 3e. Feed orderbooks and candle buffers to venue-specific fill models
+            for _vname, _vfm in self._venue_fill_models.items():
+                if hasattr(_vfm, 'set_orderbook'):
+                    _vfm.set_orderbook(ctx.get_orderbook(candle.market))
+                if hasattr(_vfm, 'set_candle_buffer'):
+                    _vfm.set_candle_buffer(candles[_ci:])
 
             # 4. Call strategy
             history.append(candle)
@@ -265,10 +299,11 @@ class BacktestEngine:
             equity_curve[-1] = ctx.account.equity
 
         res_s = candles[0].resolution_s if candles else 3600
-        return self._build_result(ctx, equity_curve, res_s)
+        return self._build_result(ctx, equity_curve, res_s, volume_warnings=volume_warnings)
 
-    def _build_result(self, ctx: BacktestContext, equity_curve: List[float], resolution_s: int = 3600) -> BacktestResult:
+    def _build_result(self, ctx: BacktestContext, equity_curve: List[float], resolution_s: int = 3600, volume_warnings: Optional[List[str]] = None) -> BacktestResult:
         """Build BacktestResult from context state."""
+        volume_warnings = volume_warnings or []
         trades = ctx.closed_trades
         positions = []
         for t in trades:
@@ -324,11 +359,14 @@ class BacktestEngine:
             total_fees=ctx.total_fees,
             funding_paid=ctx.total_funding,
             total_tx_costs=total_tx_costs,
-            strategy_warnings=[m for m in ctx.log_messages
+            strategy_warnings=volume_warnings + [m for m in ctx.log_messages
                                if "WARNING" in m or "LIQUIDATED" in m or "MARGIN REJECTED" in m],
             per_venue_pnl=per_venue_pnl,
             per_venue_trades=per_venue_trades_count,
             per_venue_funding_income=per_venue_funding,
+            jupiter_borrow_paid=ctx.total_borrow_paid,
+            borrow_payments=ctx._borrow_payments,
+            margin_stats=self._margin_engine.stats if self._margin_engine else None,
         )
 
 
