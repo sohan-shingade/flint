@@ -348,22 +348,24 @@ flint live --paper                                  # paper trade with live pric
 
 ## Live Trading
 
-Deploy any strategy to Drift or Hyperliquid with the same code you backtested. Flint handles order submission, fill confirmation, position tracking, and risk management. Start on devnet/testnet, validate with parity testing, then go live on mainnet.
-
-- **Drift**: driftpy SDK, Solana keypair signing, devnet/mainnet toggle, vAMM-aware execution
-- **Hyperliquid**: native REST API + EIP-712 signing, API wallets, testnet/mainnet
-- **Multi-venue**: `MultiVenueLiveContext` routes orders to the right venue -- same strategy code, different deployment targets
-- **Kill switch**: `EquityMonitor` flattens all positions across all venues the instant drawdown breaches your threshold
-- **Safety rails**: per-market position limits, drawdown circuit breaker, daily loss cap, order rate limiter, mandatory dry-run mode for first deployment
-- **Parity testing**: run the same strategy through backtest and paper engines on the same time window, get a divergence report before risking capital
+Live trading is available on **Drift devnet** and **Hyperliquid testnet** today. Mainnet deployment requires explicit configuration and is experimental -- validate thoroughly on devnet/testnet, then dry-run on mainnet, before risking real capital.
 
 ```bash
-flint live --strategy my_strategy.py --venue drift --network devnet    # devnet first
-flint live --strategy my_strategy.py --venue drift --dry-run           # dry-run on mainnet
-flint live --strategy my_strategy.py --venue drift                     # real execution
+flint live --strategy my_strategy.py --venue drift --network devnet    # start here
+flint live --strategy my_strategy.py --venue drift --dry-run           # then dry-run on mainnet
+flint live --strategy my_strategy.py --venue drift                     # only after validation
 ```
 
-See the [Live Deployment Guide](docs/guides/live-deployment.md) for wallet setup, risk configuration, and the full deployment checklist.
+The default network is `devnet` (see `live_network` in `flint.yaml`). Switching to mainnet requires explicitly passing `--network mainnet` or setting `live_network: mainnet` in config.
+
+- **Drift**: driftpy SDK, Solana keypair signing, devnet by default (mainnet is experimental)
+- **Hyperliquid**: native REST API + EIP-712 signing, API wallets (recommended), testnet by default (mainnet is experimental)
+- **Multi-venue**: `MultiVenueLiveContext` routes orders to the right venue -- same strategy code, different deployment targets
+- **Kill switch**: `EquityMonitor` flattens all positions across all venues the instant drawdown breaches your threshold
+- **Safety rails**: per-market position limits, drawdown circuit breaker, daily loss cap, order rate limiter, dry-run mode (`--dry-run` or `live_dry_run: true`)
+- **Parity testing**: run the same strategy through backtest and paper engines on the same time window, get a divergence report before risking capital
+
+See the [Live Deployment Guide](docs/guides/live-deployment.md) for wallet setup, risk configuration, and the full deployment checklist. See the [Safety Rails](docs/validation/safety-rails.md) document for a detailed overview of all safety mechanisms.
 
 ### Venue Execution Pipelines
 
@@ -469,7 +471,7 @@ claude mcp add flint -- python -m flint.mcp_server
 - **Single-machine, single-user.** DuckDB is single-writer. Flint is a personal trading lab, not a team platform. This is by design -- it keeps the stack simple and your data local.
 - **Backtests are not predictions.** Overfitting is easy. Use walk-forward validation and Monte Carlo to stress-test before trusting any result.
 - **Fill models are approximations.** The 4-tier pipeline is far more realistic than close-price fills, but it cannot capture real-time liquidity dynamics, queue priority, or MEV. Calibrate from live data for best accuracy.
-- **Live trading carries real risk.** Always validate with dry-run, devnet, and parity testing. The kill switch and risk guards are there for a reason -- use them.
+- **Live trading is experimental on mainnet.** Devnet/testnet is the recommended starting point. Mainnet execution on Drift and Hyperliquid is functional but carries real financial risk. Always validate with devnet, dry-run on mainnet, and parity testing before deploying capital. The kill switch and risk guards are there for a reason -- use them.
 - **Local-first means local-only.** No cloud sync, no remote access, no mobile app. Your machine, your data, your responsibility.
 
 ---
@@ -484,6 +486,8 @@ claude mcp add flint -- python -m flint.mcp_server
 | [Live Deployment](docs/guides/live-deployment.md) | Drift + Hyperliquid setup, risk config, multi-venue live trading |
 | [Architecture](docs/guides/architecture.md) | Execution hierarchy, fill pipeline, margin engine, WebSocket feeds |
 | [Slippage Models](docs/guides/slippage-models.md) | 4-tier impact model, vAMM, calibration, transaction costs, CLMM |
+| [Safety Rails](docs/validation/safety-rails.md) | Kill switch, risk guards, dry-run, order lifecycle, failure scenarios |
+| [Devnet Testing](docs/validation/devnet-testing-guide.md) | End-to-end devnet validation pipeline, mainnet readiness checklist |
 
 ---
 
