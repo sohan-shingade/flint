@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use crate::types::*;
-use crate::engine::{fees::FeeModel, metrics, orders, positions::PositionManager};
+use crate::engine::{fees::FeeModel, metrics, orders, positions::PositionManager, venue_fills::VenueFiller};
 
 /// Configuration for a backtest run.
 pub struct RunConfig {
@@ -43,6 +43,9 @@ pub struct BacktestRunner {
     extra_markets: HashMap<MarketId, Vec<CandleBar>>,
     extra_cursors: HashMap<MarketId, usize>,
 
+    // Venue-specific fill pipelines (indexed by VenueId)
+    venue_fillers: HashMap<VenueId, VenueFiller>,
+
     order_counter: u64,
 }
 
@@ -63,12 +66,18 @@ impl BacktestRunner {
             candles: Vec::new(),
             extra_markets: HashMap::new(),
             extra_cursors: HashMap::new(),
+            venue_fillers: HashMap::new(),
             order_counter: 0,
         }
     }
 
     pub fn load_candles(&mut self, candles: Vec<CandleBar>) {
         self.candles = candles;
+    }
+
+    /// Register a venue-specific fill pipeline.
+    pub fn register_venue_filler(&mut self, venue_id: VenueId, filler: VenueFiller) {
+        self.venue_fillers.insert(venue_id, filler);
     }
 
     pub fn load_extra_markets(&mut self, extra: HashMap<MarketId, Vec<CandleBar>>) {
@@ -155,13 +164,14 @@ impl BacktestRunner {
     pub fn post_bar(&mut self, bar_idx: usize) {
         let candle = self.candles[bar_idx];
 
-        // Process market orders
+        // Process market orders (dispatches to venue-specific fills in Pipeline mode)
         let fills = orders::process_market_orders(
             &mut self.market_orders_queue,
             &candle,
             &self.config.fee_model,
             self.config.fill_model_type,
             self.config.slippage_bps,
+            &mut self.venue_fillers,
         );
         for fill in &fills {
             self.pos_mgr.apply_fill(fill);

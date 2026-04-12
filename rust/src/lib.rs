@@ -101,7 +101,18 @@ impl RustEngine {
                 ts, open, high, low, close, volume, resolution_s, market_id, venue_id,
             });
         }
+        // Auto-register venue-specific fill pipelines for all venues seen
+        let mut seen_venues = std::collections::HashSet::new();
+        for bar in &bars {
+            seen_venues.insert(bar.venue_id);
+        }
         self.runner.load_candles(bars);
+        for vid in seen_venues {
+            let name = self.registry.venue_name(vid).to_string();
+            use crate::engine::venue_fills::VenueFiller;
+            let filler = VenueFiller::for_venue(&name, 42);
+            self.runner.register_venue_filler(vid, filler);
+        }
         Ok(())
     }
 

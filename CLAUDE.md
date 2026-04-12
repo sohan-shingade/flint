@@ -9,8 +9,13 @@ pip install -e .              # install
 flint init                    # download data + sample backtest
 flint serve                   # API + UI at localhost:8000
 flint serve --dev             # dev mode: API only, run UI separately
-pytest tests/ -v              # 536 tests (~90s, all mocked)
+pytest tests/ -v              # 1545 tests (~7min, all mocked)
 cd ui && npm run dev          # dev UI at localhost:5173 (proxies API)
+
+# Rust engine (optional — 10-50x faster backtests)
+pip install maturin           # install build tool
+cd rust && maturin develop    # build + install flint_core
+pytest tests/test_rust_parity_benchmark.py -v -s  # verify + benchmark
 ```
 
 ## Architecture
@@ -20,6 +25,8 @@ flint/
   strategy/        # Strategy ABC, 15 templates, loader (strategies/user/ for user code)
   execution/       # ExecutionContext ABC, BacktestContext, fill/fee models, margin, capital
   backtest/        # Event-driven engine, accepts List[Candle] or Dict[str, List[Candle]]
+                   # Auto-dispatches to Rust engine (flint_core) when installed
+  regimes.py       # 8 market regime definitions for multi-regime backtesting
   optimization/    # Optuna optimizer, walk-forward
   paper/           # Paper trading engine + broker
   risk/            # Risk guards (max drawdown, position limits, daily loss)
@@ -33,6 +40,20 @@ flint/
   config.py        # Pydantic settings (flint.yaml + .env + FLINT_ env prefix)
   cli.py           # Typer CLI (8 commands)
   api/main.py      # FastAPI app (30+ endpoints, serves built UI from ui/dist/)
+
+rust/                # Rust backtesting engine (PyO3 → flint_core)
+  src/runner.rs      # Main backtest loop orchestration
+  src/lib.rs         # PyO3 Python bindings (RustEngine class)
+  src/engine/
+    fills.rs         # Generic fill models (close, slippage, sqrt impact)
+    venue_fills.rs   # Per-venue pipelines (Drift 3-tier, HL CLOB, Jupiter, 10 CEX)
+    orders.rs        # Order processing with venue dispatch
+    positions.rs     # Position state machine
+    fees.rs          # Fee computation
+    margin.rs        # Margin/liquidation engine
+    capital.rs       # Multi-venue capital allocation
+    venue_config.rs  # Per-venue fee/margin/latency configs
+    synthetic_depth.rs # Synthetic orderbook generation
   models.py        # All dataclasses: Candle, FundingRate, Signal, Order, Fill, etc.
 
 ui/                # React 19 + Vite + Tailwind

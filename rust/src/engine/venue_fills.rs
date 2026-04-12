@@ -1,7 +1,10 @@
 //! Per-venue fill pipelines (Drift, Hyperliquid, Jupiter, CEX).
+//!
+//! Each pipeline models venue-specific execution mechanics. The [`VenueFiller`]
+//! enum unifies them so the runner can dispatch by venue_id.
 
 use crate::types::*;
-use super::fills::walk_book;
+use super::fills::{self, walk_book};
 use super::synthetic_depth::*;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
@@ -306,5 +309,72 @@ impl CexFillPipeline {
             impact_bps: 0.0,
             tx_cost: 0.0,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unified venue dispatch enum
+// ---------------------------------------------------------------------------
+
+/// Wraps all venue-specific fill pipelines into a single dispatchable type.
+pub enum VenueFiller {
+    Drift(DriftFillPipeline),
+    Hyperliquid(HyperliquidFillPipeline),
+    Jupiter(JupiterFillPipeline),
+    Cex(CexFillPipeline),
+    /// Fallback: generic sqrt impact model.
+    Generic { impact_coefficient: f64 },
+}
+
+impl VenueFiller {
+    /// Create the appropriate filler for a venue name.
+    pub fn for_venue(name: &str, seed: u64) -> Self {
+        match name {
+            "drift" => VenueFiller::Drift(DriftFillPipeline::new(seed)),
+            "hyperliquid" => VenueFiller::Hyperliquid(HyperliquidFillPipeline::new()),
+            "jupiter" => VenueFiller::Jupiter(JupiterFillPipeline::new(seed)),
+            "binance" | "okx" | "bybit" | "coinbase" | "kraken"
+            | "kucoin" | "gate" | "bitget" | "mexc" | "htx" => {
+                VenueFiller::Cex(CexFillPipeline::new(name))
+            }
+            _ => VenueFiller::Generic { impact_coefficient: 0.005 },
+        }
+    }
+
+    /// Execute a market fill using the venue-specific model.
+    pub fn fill_market(&mut self, order: &OrderData, candle: &CandleBar) -> FillResult {
+        match self {
+            VenueFiller::Drift(p) => p.fill_market(order, candle),
+            VenueFiller::Hyperliquid(p) => p.fill_market(order, candle),
+            VenueFiller::Jupiter(p) => p.fill_market(order, candle, None),
+            VenueFiller::Cex(p) => p.fill_market(order, candle)
+                .unwrap_or_else(|| Self::generic_fill(order, candle, 0.005)),
+            VenueFiller::Generic { impact_coefficient } => {
+                Self::generic_fill(order, candle, *impact_coefficient)
+            }
+        }
+    }
+
+    fn generic_fill(order: &OrderData, candle: &CandleBar, k: f64) -> FillResult {
+        let impact_bps = fills::sqrt_impact_bps(order.size, candle.volume, k);
+        let pct = impact_bps / 10_000.0;
+        let price = match order.side {
+            Side::Long => candle.close * (1.0 + pct),
+            Side::Short => candle.close * (1.0 - pct),
+        };
+        FillResult {
+            order_id: order.order_id.clone(),
+            market_id: order.market_id,
+            venue_id: order.venue_id,
+            side: order.side,
+            price,
+            size: order.size,
+            fee: 0.0,
+            ts: candle.ts,
+            is_partial: false,
+            latency_ms: 0.0,
+            impact_bps,
+            tx_cost: 0.0,
+        }
     }
 }
