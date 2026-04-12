@@ -17,6 +17,13 @@ _VENUE_FILL_CLASSES: Dict[str, str] = {
     "binance": "flint.execution.fill_cex:BinanceFillModel",
     "okx": "flint.execution.fill_cex:OkxFillModel",
     "bybit": "flint.execution.fill_cex:BybitFillModel",
+    "coinbase": "flint.execution.fill_cex:CoinbaseFillModel",
+    "kraken": "flint.execution.fill_cex:KrakenFillModel",
+    "kucoin": "flint.execution.fill_cex:KucoinFillModel",
+    "gate": "flint.execution.fill_cex:GateFillModel",
+    "bitget": "flint.execution.fill_cex:BitgetFillModel",
+    "mexc": "flint.execution.fill_cex:MexcFillModel",
+    "htx": "flint.execution.fill_cex:HtxFillModel",
 }
 
 

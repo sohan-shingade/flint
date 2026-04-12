@@ -1,0 +1,316 @@
+//! flint-core: Rust backtesting engine exposed to Python via PyO3.
+
+mod engine;
+mod runner;
+mod types;
+
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
+use std::collections::HashMap;
+
+use engine::fees::FeeModel;
+use runner::{BacktestRunner, RunConfig};
+use types::*;
+
+/// Convert Python side string to Rust Side enum.
+fn parse_side(s: &str) -> Side {
+    match s {
+        "long" => Side::Long,
+        "short" => Side::Short,
+        _ => Side::Long,
+    }
+}
+
+fn side_to_str(s: Side) -> &'static str {
+    match s {
+        Side::Long => "long",
+        Side::Short => "short",
+    }
+}
+
+fn parse_order_type(s: &str) -> OrderType {
+    match s {
+        "market" => OrderType::Market,
+        "limit" => OrderType::Limit,
+        "stop_loss" => OrderType::StopLoss,
+        "take_profit" => OrderType::TakeProfit,
+        _ => OrderType::Market,
+    }
+}
+
+fn parse_fill_model(s: &str) -> FillModelType {
+    match s {
+        "close" => FillModelType::ClosePrice,
+        "next_bar_open" => FillModelType::NextBarOpen,
+        "slippage" => FillModelType::Slippage,
+        "orderbook" => FillModelType::Orderbook,
+        "pipeline" => FillModelType::Pipeline,
+        _ => FillModelType::Pipeline,
+    }
+}
+
+/// The main Python-facing engine class.
+#[pyclass]
+struct RustEngine {
+    runner: BacktestRunner,
+    registry: NameRegistry,
+}
+
+#[pymethods]
+impl RustEngine {
+    #[new]
+    #[pyo3(signature = (initial_capital=10000.0, fee_bps=5.0, fill_model="pipeline", slippage_bps=5.0))]
+    fn new(
+        initial_capital: f64,
+        fee_bps: f64,
+        fill_model: &str,
+        slippage_bps: f64,
+    ) -> Self {
+        let config = RunConfig {
+            initial_capital,
+            fee_model: FeeModel::Flat { fee_bps },
+            fill_model_type: parse_fill_model(fill_model),
+            slippage_bps,
+            max_runtime_s: 300.0,
+        };
+        Self {
+            runner: BacktestRunner::new(config),
+            registry: NameRegistry::new(),
+        }
+    }
+
+    /// Load candles from Python list of dicts or tuples.
+    /// Each candle: (ts, open, high, low, close, volume, market, resolution_s, venue)
+    fn load_candles(&mut self, candles: &Bound<'_, PyList>) -> PyResult<()> {
+        let mut bars = Vec::with_capacity(candles.len());
+        for item in candles.iter() {
+            let ts: i64 = item.getattr("ts")?.extract()?;
+            let open: f64 = item.getattr("open")?.extract()?;
+            let high: f64 = item.getattr("high")?.extract()?;
+            let low: f64 = item.getattr("low")?.extract()?;
+            let close: f64 = item.getattr("close")?.extract()?;
+            let volume: f64 = item.getattr("volume")?.extract()?;
+            let market: String = item.getattr("market")?.extract()?;
+            let resolution_s: i32 = item.getattr("resolution_s")?.extract()?;
+            let venue: String = item.getattr("venue")?.extract()?;
+
+            let market_id = self.registry.get_or_insert_market(&market);
+            let venue_id = self.registry.get_or_insert_venue(&venue);
+
+            bars.push(CandleBar {
+                ts, open, high, low, close, volume, resolution_s, market_id, venue_id,
+            });
+        }
+        self.runner.load_candles(bars);
+        Ok(())
+    }
+
+    /// Load funding rates from Python list.
+    fn load_funding(&mut self, rates: &Bound<'_, PyList>) -> PyResult<()> {
+        let mut data = Vec::with_capacity(rates.len());
+        for item in rates.iter() {
+            let ts: i64 = item.getattr("ts")?.extract()?;
+            let rate: f64 = item.getattr("rate")?.extract()?;
+            let market: String = item.getattr("market")?.extract()?;
+            let source: String = item.getattr("source")?.extract()?;
+            let oracle_price: f64 = item.getattr("oracle_price")?.extract()?;
+
+            let market_id = self.registry.get_or_insert_market(&market);
+            let venue_id = self.registry.get_or_insert_venue(&source);
+
+            data.push(FundingRateData { ts, rate, market_id, venue_id, oracle_price });
+        }
+        self.runner.load_funding(data);
+        Ok(())
+    }
+
+    /// Number of candles loaded.
+    fn num_candles(&self) -> usize {
+        self.runner.num_candles()
+    }
+
+    /// Pre-bar processing. Returns dict with bar state.
+    fn pre_bar(&mut self, py: Python<'_>, bar_idx: usize) -> PyResult<PyObject> {
+        let state = self.runner.pre_bar(bar_idx);
+        let dict = PyDict::new(py);
+        dict.set_item("bar_index", state.bar_index)?;
+        dict.set_item("equity", state.equity)?;
+        dict.set_item("cash", state.cash)?;
+        dict.set_item("unrealized_pnl", state.unrealized_pnl)?;
+        dict.set_item("num_positions", state.num_positions)?;
+        dict.set_item("num_pending_orders", state.num_pending_orders)?;
+        Ok(dict.into())
+    }
+
+    /// Submit a market order.
+    fn submit_market_order(
+        &mut self,
+        market: &str,
+        side: &str,
+        size: f64,
+        venue: &str,
+    ) -> String {
+        let oid = self.runner.next_order_id();
+        let market_id = self.registry.get_or_insert_market(market);
+        let venue_id = self.registry.get_or_insert_venue(venue);
+        self.runner.submit_market_order(OrderData {
+            order_id: oid.clone(),
+            market_id,
+            venue_id,
+            side: parse_side(side),
+            order_type: OrderType::Market,
+            size,
+            price: 0.0,
+            ts: 0,
+            reduce_only: false,
+            time_in_force: TimeInForce::Ioc,
+        });
+        oid
+    }
+
+    /// Submit a limit order.
+    fn submit_limit_order(
+        &mut self,
+        market: &str,
+        side: &str,
+        size: f64,
+        price: f64,
+        venue: &str,
+    ) -> String {
+        let oid = self.runner.next_order_id();
+        let market_id = self.registry.get_or_insert_market(market);
+        let venue_id = self.registry.get_or_insert_venue(venue);
+        self.runner.submit_limit_order(OrderData {
+            order_id: oid.clone(),
+            market_id,
+            venue_id,
+            side: parse_side(side),
+            order_type: OrderType::Limit,
+            size,
+            price,
+            ts: 0,
+            reduce_only: false,
+            time_in_force: TimeInForce::Gtc,
+        });
+        oid
+    }
+
+    /// Submit a stop order.
+    fn submit_stop_order(
+        &mut self,
+        market: &str,
+        side: &str,
+        size: f64,
+        trigger_price: f64,
+        venue: &str,
+    ) -> String {
+        let oid = self.runner.next_order_id();
+        let market_id = self.registry.get_or_insert_market(market);
+        let venue_id = self.registry.get_or_insert_venue(venue);
+        self.runner.submit_stop_order(OrderData {
+            order_id: oid.clone(),
+            market_id,
+            venue_id,
+            side: parse_side(side),
+            order_type: OrderType::StopLoss,
+            size,
+            price: trigger_price,
+            ts: 0,
+            reduce_only: false,
+            time_in_force: TimeInForce::Gtc,
+        });
+        oid
+    }
+
+    /// Post-bar processing.
+    fn post_bar(&mut self, bar_idx: usize) {
+        self.runner.post_bar(bar_idx);
+    }
+
+    /// Finalize and return results as a dict.
+    fn finish(&mut self, py: Python<'_>) -> PyResult<PyObject> {
+        let result = self.runner.finish();
+        let dict = PyDict::new(py);
+
+        dict.set_item("total_pnl", result.total_pnl)?;
+        dict.set_item("win_rate", result.win_rate)?;
+        dict.set_item("max_drawdown", result.max_drawdown)?;
+        dict.set_item("sharpe_ratio", result.sharpe_ratio)?;
+        dict.set_item("total_trades", result.total_trades)?;
+        dict.set_item("winning_trades", result.winning_trades)?;
+        dict.set_item("losing_trades", result.losing_trades)?;
+        dict.set_item("equity_curve", result.equity_curve)?;
+        dict.set_item("total_fees", result.total_fees)?;
+        dict.set_item("funding_paid", result.funding_paid)?;
+        dict.set_item("total_tx_costs", result.total_tx_costs)?;
+
+        // Per-venue PnL
+        let pv_pnl = PyDict::new(py);
+        for (vid, pnl) in &result.per_venue_pnl {
+            pv_pnl.set_item(self.registry.venue_name(*vid), pnl)?;
+        }
+        dict.set_item("per_venue_pnl", pv_pnl)?;
+
+        // Per-venue trades
+        let pv_trades = PyDict::new(py);
+        for (vid, count) in &result.per_venue_trades {
+            pv_trades.set_item(self.registry.venue_name(*vid), count)?;
+        }
+        dict.set_item("per_venue_trades", pv_trades)?;
+
+        // Per-venue funding
+        let pv_funding = PyDict::new(py);
+        for (vid, amount) in &result.per_venue_funding {
+            pv_funding.set_item(self.registry.venue_name(*vid), amount)?;
+        }
+        dict.set_item("per_venue_funding", pv_funding)?;
+
+        // Closed trades as list of dicts
+        let trades_list = PyList::empty(py);
+        for trade in &result.closed_trades {
+            let td = PyDict::new(py);
+            td.set_item("market", self.registry.market_name(trade.market_id))?;
+            td.set_item("venue", self.registry.venue_name(trade.venue_id))?;
+            td.set_item("side", side_to_str(trade.side))?;
+            td.set_item("size", trade.size)?;
+            td.set_item("entry_price", trade.entry_price)?;
+            td.set_item("exit_price", trade.exit_price)?;
+            td.set_item("entry_ts", trade.entry_ts)?;
+            td.set_item("exit_ts", trade.exit_ts)?;
+            td.set_item("pnl", trade.pnl)?;
+            td.set_item("funding_paid", trade.funding_paid)?;
+            trades_list.append(td)?;
+        }
+        dict.set_item("closed_trades", trades_list)?;
+
+        dict.set_item("log_messages", result.log_messages)?;
+
+        Ok(dict.into())
+    }
+
+    /// Get current positions as list of dicts.
+    fn get_positions(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let list = PyList::empty(py);
+        for (vid, mid, side, size, entry_price, upnl) in self.runner.get_position_info() {
+            let d = PyDict::new(py);
+            d.set_item("market", self.registry.market_name(mid))?;
+            d.set_item("venue", self.registry.venue_name(vid))?;
+            d.set_item("side", side_to_str(side))?;
+            d.set_item("size", size)?;
+            d.set_item("entry_price", entry_price)?;
+            d.set_item("unrealized_pnl", upnl)?;
+            list.append(d)?;
+        }
+        Ok(list.into())
+    }
+
+    fn cash(&self) -> f64 { self.runner.cash() }
+    fn equity(&self) -> f64 { self.runner.equity() }
+}
+
+/// Python module definition.
+#[pymodule]
+fn flint_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<RustEngine>()?;
+    Ok(())
+}

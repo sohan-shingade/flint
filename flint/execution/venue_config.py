@@ -80,6 +80,41 @@ VENUE_DEFAULTS: Dict[str, VenueConfig] = {
         base_latency_s=12.0,
         latency_jitter_s=8.0,
     ),
+    "coinbase": VenueConfig(
+        name="coinbase", taker_fee_bps=6, maker_fee_bps=4,
+        initial_margin=0.10, maintenance_margin=0.05, max_leverage=10,
+        impact_coefficient=0.003, base_latency_s=0.15, latency_jitter_s=0.05,
+    ),
+    "kraken": VenueConfig(
+        name="kraken", taker_fee_bps=4, maker_fee_bps=1.6,
+        initial_margin=0.02, maintenance_margin=0.01, max_leverage=50,
+        impact_coefficient=0.004, base_latency_s=0.3, latency_jitter_s=0.1,
+    ),
+    "kucoin": VenueConfig(
+        name="kucoin", taker_fee_bps=6, maker_fee_bps=2,
+        initial_margin=0.02, maintenance_margin=0.01, max_leverage=50,
+        impact_coefficient=0.004, base_latency_s=0.3, latency_jitter_s=0.15,
+    ),
+    "gate": VenueConfig(
+        name="gate", taker_fee_bps=7.5, maker_fee_bps=3.5,
+        initial_margin=0.02, maintenance_margin=0.01, max_leverage=50,
+        impact_coefficient=0.005, base_latency_s=0.3, latency_jitter_s=0.15,
+    ),
+    "bitget": VenueConfig(
+        name="bitget", taker_fee_bps=6, maker_fee_bps=2,
+        initial_margin=0.02, maintenance_margin=0.01, max_leverage=50,
+        impact_coefficient=0.003, base_latency_s=0.3, latency_jitter_s=0.15,
+    ),
+    "mexc": VenueConfig(
+        name="mexc", taker_fee_bps=0, maker_fee_bps=0,
+        initial_margin=0.02, maintenance_margin=0.01, max_leverage=50,
+        impact_coefficient=0.006, base_latency_s=0.3, latency_jitter_s=0.15,
+    ),
+    "htx": VenueConfig(
+        name="htx", taker_fee_bps=5, maker_fee_bps=2,
+        initial_margin=0.02, maintenance_margin=0.01, max_leverage=50,
+        impact_coefficient=0.005, base_latency_s=0.3, latency_jitter_s=0.15,
+    ),
     # Default venue (used when no venue specified) — Drift-like defaults
     "default": VenueConfig(
         name="default", taker_fee_bps=5, maker_fee_bps=0,
