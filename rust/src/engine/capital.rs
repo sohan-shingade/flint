@@ -66,7 +66,7 @@ impl VenueAllocator {
         let bal = self.balances.get(&from).copied().unwrap_or(0.0);
         if bal < total { return None; }
 
-        *self.balances.get_mut(&from).unwrap() -= total;
+        *self.balances.get_mut(&from).expect("balance checked above") -= total;
         let t = Transfer {
             from_venue: from,
             to_venue: to,

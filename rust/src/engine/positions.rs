@@ -79,7 +79,7 @@ impl PositionManager {
             }
             Some(ref p) if p.side == fill.side => {
                 // DCA — add to existing position
-                let pos_mut = self.positions.get_mut(&key).unwrap();
+                let pos_mut = self.positions.get_mut(&key).expect("position must exist after match");
                 let total_cost = pos_mut.entry_price * pos_mut.size + fill.price * fill.size;
                 pos_mut.size += fill.size;
                 pos_mut.entry_price = if pos_mut.size > 0.0001 {
@@ -157,7 +157,7 @@ impl PositionManager {
                         partial: true,
                     });
 
-                    let pos_mut = self.positions.get_mut(&key).unwrap();
+                    let pos_mut = self.positions.get_mut(&key).expect("position must exist after match");
                     pos_mut.size -= fill.size;
                 }
             }
@@ -186,7 +186,7 @@ impl PositionManager {
     pub fn close_all(&mut self, prices: &HashMap<MarketId, f64>, ts: i64) {
         let keys: Vec<PosKey> = self.positions.keys().cloned().collect();
         for key in keys {
-            let pos = self.positions.get(&key).unwrap().clone();
+            let pos = self.positions.get(&key).expect("position must exist for key in iter").clone();
             let price = prices.get(&pos.market_id).copied().unwrap_or(pos.entry_price);
             let fill = FillResult {
                 order_id: String::new(),

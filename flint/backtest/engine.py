@@ -23,7 +23,7 @@ from ..models import (
 )
 from ..execution.backtest_context import BacktestContext
 from ..execution.fee_models import FeeModel, FlatFeeModel
-from ..execution.fill_models import FillModel, FillPipeline, OrderbookFillModel
+from ..execution.fill_models import FillModel, FillPipeline, OrderbookFillModel, ClosePriceFill
 from ..strategy.base import Strategy
 
 
@@ -223,8 +223,13 @@ class BacktestEngine:
         if can_use_rust:
             try:
                 return self._run_rust(candles, extra_markets)
-            except Exception:
-                pass
+            except ImportError:
+                pass  # flint_core not installed — use Python
+            except Exception as e:
+                import logging
+                logging.getLogger("flint.backtest").warning(
+                    "Rust engine failed, falling back to Python: %s", e
+                )
 
         return self._run_python(candles, extra_markets)
 
@@ -237,13 +242,13 @@ class BacktestEngine:
         slippage_bps = 5.0
         if isinstance(self._fill_model, FillPipeline):
             fill_type = "pipeline"
-        elif type(self._fill_model).__name__ == "ClosePriceFill":
+        elif isinstance(self._fill_model, ClosePriceFill):
             fill_type = "close"
         elif type(self._fill_model).__name__ == "NextBarOpenFill":
             fill_type = "next_bar_open"
         elif type(self._fill_model).__name__ == "SlippageFill":
             fill_type = "slippage"
-            slippage_bps = getattr(self._fill_model, 'slippage_pct', 0.0005) * 10_000
+            slippage_bps = getattr(self._fill_model, 'slippage_bps', 5.0)
 
         engine = RustEngine(
             initial_capital=self.initial_capital,

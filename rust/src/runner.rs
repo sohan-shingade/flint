@@ -176,7 +176,7 @@ impl BacktestRunner {
     pub fn finish(&mut self) -> EngineResult {
         // Force-close all open positions at last candle
         if !self.candles.is_empty() && !self.pos_mgr.positions.is_empty() {
-            let last = self.candles.last().unwrap();
+            let last = self.candles.last().expect("candles non-empty checked above");
             let mut prices = HashMap::new();
             prices.insert(last.market_id, last.close);
             self.pos_mgr.close_all(&prices, last.ts);
