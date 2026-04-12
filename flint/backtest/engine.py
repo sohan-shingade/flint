@@ -15,6 +15,7 @@ import numpy as np
 from ..models import (
     BacktestResult,
     Candle,
+    Fill,
     FundingRate,
     Position,
     Signal,
@@ -49,6 +50,74 @@ def _strategy_uses_context(strategy: Strategy) -> bool:
     # Both have ctx now, but we always pass it. The adapter handles v1 signal
     # conversion. So we just always pass ctx and handle Signal returns.
     return "ctx" in params
+
+
+class _RustContextAdapter:
+    """Lightweight adapter that exposes the ExecutionContext interface
+    for Python strategies, backed by the Rust engine."""
+
+    def __init__(self, engine):
+        self._engine = engine
+
+    @property
+    def account(self):
+        from ..models import AccountState
+        return AccountState(
+            equity=self._engine.equity(),
+            cash=self._engine.cash(),
+        )
+
+    @property
+    def positions(self):
+        return self._engine.get_positions()
+
+    @property
+    def current_candle(self):
+        return None
+
+    @property
+    def timestamp(self):
+        return 0
+
+    def market_order(self, market, side, size, reduce_only=False, tag="", venue="default"):
+        side_str = "long" if side == Side.LONG else "short"
+        return self._engine.submit_market_order(market, side_str, size, venue)
+
+    def limit_order(self, market, side, size, price, reduce_only=False, tag="", venue="default"):
+        side_str = "long" if side == Side.LONG else "short"
+        return self._engine.submit_limit_order(market, side_str, size, price, venue)
+
+    def stop_order(self, market, side, size, trigger_price, tag="", venue="default"):
+        side_str = "long" if side == Side.LONG else "short"
+        return self._engine.submit_stop_order(market, side_str, size, trigger_price, venue)
+
+    def take_profit_order(self, market, side, size, trigger_price, tag="", venue="default"):
+        # Reuse stop order mechanism for now
+        side_str = "long" if side == Side.LONG else "short"
+        return self._engine.submit_stop_order(market, side_str, size, trigger_price, venue)
+
+    def close_position(self, market, venue="default"):
+        positions = self._engine.get_positions()
+        for p in positions:
+            if isinstance(p, dict) and p.get("market") == market and p.get("venue", "default") == venue:
+                opposite = "short" if p["side"] == "long" else "long"
+                return self._engine.submit_market_order(market, opposite, p["size"], venue)
+        return None
+
+    def cancel(self, order_id):
+        return False
+
+    def cancel_all(self, market=None):
+        return 0
+
+    def get_candles(self, market, lookback=50):
+        return []
+
+    def get_funding_rate(self, market=None):
+        return None
+
+    def log(self, message):
+        pass
 
 
 class BacktestEngine:
@@ -133,6 +202,157 @@ class BacktestEngine:
                 total_pnl=0, win_rate=0, max_drawdown=0, sharpe_ratio=0,
                 total_trades=0, winning_trades=0, losing_trades=0,
             )
+
+        # Try Rust backend first (10-50x faster).
+        # Only use Rust for compatible configurations:
+        # - No custom fee model (must be FlatFeeModel or default)
+        # - No margin engine (Rust margin is incomplete)
+        # - No capital allocator
+        # - No risk manager
+        # - No venue-specific fill models (Rust doesn't dispatch to venue pipelines from Python yet)
+        # - No orderbook snapshots (Rust doesn't load book data from Python yet)
+        can_use_rust = (
+            isinstance(self._fee_model, FlatFeeModel)
+            and self._margin_engine is None
+            and self._capital_allocator is None
+            and self._risk_manager is None
+            and not self._venue_fill_models
+            and not self._orderbook_snapshots
+            and not self._borrow_snapshots
+        )
+        if can_use_rust:
+            try:
+                return self._run_rust(candles, extra_markets)
+            except Exception:
+                pass
+
+        return self._run_python(candles, extra_markets)
+
+    def _run_rust(self, candles: List[Candle], extra_markets: dict = None) -> BacktestResult:
+        """Run backtest using the Rust engine core."""
+        from flint_core import RustEngine
+
+        # Determine fill model type string
+        fill_type = "pipeline"
+        slippage_bps = 5.0
+        if isinstance(self._fill_model, FillPipeline):
+            fill_type = "pipeline"
+        elif type(self._fill_model).__name__ == "ClosePriceFill":
+            fill_type = "close"
+        elif type(self._fill_model).__name__ == "NextBarOpenFill":
+            fill_type = "next_bar_open"
+        elif type(self._fill_model).__name__ == "SlippageFill":
+            fill_type = "slippage"
+            slippage_bps = getattr(self._fill_model, 'slippage_pct', 0.0005) * 10_000
+
+        engine = RustEngine(
+            initial_capital=self.initial_capital,
+            fee_bps=self.fee_rate * 10_000,
+            fill_model=fill_type,
+            slippage_bps=slippage_bps,
+        )
+
+        # Load candles
+        engine.load_candles(candles)
+
+        # Load funding rates
+        if self._funding_rates:
+            engine.load_funding(self._funding_rates)
+
+        # Reset strategy
+        self.strategy.reset()
+        has_ctx = _strategy_uses_context(self.strategy)
+
+        # Create a lightweight context adapter for strategy callbacks
+        ctx_adapter = _RustContextAdapter(engine)
+        history: List[Candle] = []
+
+        for i in range(engine.num_candles()):
+            candle = candles[i]
+
+            # Pre-bar: Rust processes pending orders, funding, etc.
+            engine.pre_bar(i)
+
+            # Strategy callback (Python)
+            history.append(candle)
+            if has_ctx:
+                signal = self.strategy.on_candle(candle, history, ctx=ctx_adapter)
+            else:
+                signal = self.strategy.on_candle(candle, history)
+
+            # v1 Signal adapter
+            if signal == Signal.BUY:
+                positions = engine.get_positions()
+                if not positions:
+                    size = (engine.cash() * self.position_size) / candle.close
+                    if size > 0:
+                        engine.submit_market_order(candle.market, "long", size, "default")
+            elif signal == Signal.SELL:
+                positions = engine.get_positions()
+                for p in positions:
+                    if isinstance(p, dict) and p.get("market") == candle.market:
+                        engine.submit_market_order(
+                            candle.market, "short" if p["side"] == "long" else "long",
+                            p["size"], p.get("venue", "default"))
+                        break
+
+            # Post-bar: Rust processes market orders, records equity
+            engine.post_bar(i)
+
+        # Finalize
+        result_dict = engine.finish()
+
+        # Build BacktestResult from Rust output
+        trades = result_dict.get("closed_trades", [])
+        positions = []
+        fills = []
+        for t in trades:
+            side_enum = Side.LONG if t["side"] == "long" else Side.SHORT
+            pos = Position(
+                entry_price=t["entry_price"],
+                size=t["size"] if t["side"] == "long" else -t["size"],
+                entry_ts=t["entry_ts"],
+                exit_price=t["exit_price"],
+                exit_ts=t["exit_ts"],
+                pnl=t["pnl"],
+                closed=True,
+            )
+            positions.append(pos)
+            # Synthesize entry and exit fills for compatibility
+            fills.append(Fill(
+                market=t["market"], side=side_enum, price=t["entry_price"],
+                size=t["size"], fee=0.0, ts=t["entry_ts"],
+                venue=t.get("venue", "default"),
+            ))
+            exit_side = Side.SHORT if side_enum == Side.LONG else Side.LONG
+            fills.append(Fill(
+                market=t["market"], side=exit_side,
+                price=t["exit_price"], size=t["size"], fee=0.0, ts=t["exit_ts"],
+                venue=t.get("venue", "default"),
+            ))
+
+        return BacktestResult(
+            total_pnl=result_dict["total_pnl"],
+            win_rate=result_dict["win_rate"],
+            max_drawdown=result_dict["max_drawdown"],
+            sharpe_ratio=result_dict["sharpe_ratio"],
+            total_trades=result_dict["total_trades"],
+            winning_trades=result_dict["winning_trades"],
+            losing_trades=result_dict["losing_trades"],
+            positions=positions,
+            equity_curve=result_dict["equity_curve"],
+            fills=fills,
+            total_fees=result_dict["total_fees"],
+            funding_paid=result_dict["funding_paid"],
+            total_tx_costs=result_dict.get("total_tx_costs", 0),
+            per_venue_pnl=result_dict.get("per_venue_pnl", {}),
+            per_venue_trades=result_dict.get("per_venue_trades", {}),
+            per_venue_funding_income=result_dict.get("per_venue_funding", {}),
+            strategy_warnings=result_dict.get("log_messages", []),
+        )
+
+    def _run_python(self, candles: List[Candle], extra_markets: dict = None) -> BacktestResult:
+        """Run backtest using the pure-Python engine (fallback)."""
 
         self.strategy.reset()
         ctx = BacktestContext(

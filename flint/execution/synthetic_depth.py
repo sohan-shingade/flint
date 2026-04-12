@@ -23,8 +23,15 @@ class DepthProfile:
 
 VENUE_PROFILES: Dict[str, DepthProfile] = {
     "binance": DepthProfile(20_000_000, 20_000_000, 0.7, 0.5),
+    "coinbase": DepthProfile(15_000_000, 15_000_000, 0.65, 0.8),
     "okx": DepthProfile(10_000_000, 10_000_000, 0.6, 1.0),
     "bybit": DepthProfile(8_000_000, 8_000_000, 0.6, 1.0),
+    "kraken": DepthProfile(4_000_000, 4_000_000, 0.55, 1.5),
+    "kucoin": DepthProfile(6_000_000, 6_000_000, 0.55, 1.2),
+    "bitget": DepthProfile(6_000_000, 6_000_000, 0.55, 1.2),
+    "gate": DepthProfile(3_000_000, 3_000_000, 0.5, 2.0),
+    "mexc": DepthProfile(2_000_000, 2_000_000, 0.45, 2.5),
+    "htx": DepthProfile(3_000_000, 3_000_000, 0.5, 2.0),
     "hyperliquid": DepthProfile(5_000_000, 5_000_000, 0.5, 1.5),
     "drift": DepthProfile(2_000_000, 2_000_000, 0.4, 3.0),
 }

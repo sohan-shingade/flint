@@ -257,3 +257,73 @@ class BybitFillModel(CexFillModel):
             price_cap = candle.close * (1 - band_pct)
 
         return self._walk_book(order, candle, levels, price_cap=price_cap, max_size=max_size)
+
+
+class CoinbaseFillModel(CexFillModel):
+    """Coinbase perpetuals fill model.
+
+    Uses standard L2 book walk with a 6 bps taker fee.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(venue="coinbase", taker_fee_bps=6.0)
+
+
+class KrakenFillModel(CexFillModel):
+    """Kraken perpetuals fill model.
+
+    Uses standard L2 book walk with a 4 bps taker fee.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(venue="kraken", taker_fee_bps=4.0)
+
+
+class KucoinFillModel(CexFillModel):
+    """KuCoin perpetuals fill model.
+
+    Uses standard L2 book walk with a 6 bps taker fee.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(venue="kucoin", taker_fee_bps=6.0)
+
+
+class GateFillModel(CexFillModel):
+    """Gate.io perpetuals fill model.
+
+    Uses standard L2 book walk with a 7.5 bps taker fee.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(venue="gate", taker_fee_bps=7.5)
+
+
+class BitgetFillModel(CexFillModel):
+    """Bitget perpetuals fill model.
+
+    Uses standard L2 book walk with a 6 bps taker fee.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(venue="bitget", taker_fee_bps=6.0)
+
+
+class MexcFillModel(CexFillModel):
+    """MEXC perpetuals fill model.
+
+    Zero taker fee (maker+taker promotion). Thinner depth.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(venue="mexc", taker_fee_bps=0.0)
+
+
+class HtxFillModel(CexFillModel):
+    """HTX (Huobi) perpetuals fill model.
+
+    Uses standard L2 book walk with a 5 bps taker fee.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(venue="htx", taker_fee_bps=5.0)
