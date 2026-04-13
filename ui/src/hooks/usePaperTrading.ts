@@ -55,7 +55,14 @@ export function usePaperPortfolio(pollInterval = 2000) {
           setError(null)
         }
       } catch (e) {
-        if (active) setError(String(e))
+        if (active) {
+          const msg = String(e)
+          if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+            setError('Cannot connect to server \u2014 is flint serve running?')
+          } else {
+            setError(msg)
+          }
+        }
       }
     }
     poll()

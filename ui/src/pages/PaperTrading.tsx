@@ -467,7 +467,8 @@ function DeployPanel() {
       if (strats.length > 0 && !strategy) setStrategy(strats[0].name)
     }).catch(() => {})
     fetch('/api/v1/data/markets').then(r => r.json()).then(d => {
-      const mkts = d.markets || []
+      const raw = d.markets || []
+      const mkts = raw.map((m: any) => typeof m === 'string' ? m : m.market)
       setMarkets(mkts)
       if (mkts.length > 0 && !market) setMarket(mkts[0])
     }).catch(() => {})
