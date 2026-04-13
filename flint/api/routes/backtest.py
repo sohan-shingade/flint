@@ -721,6 +721,129 @@ def list_backtests():
     return {"runs": runs}
 
 
+@router.get("/regimes")
+def list_regimes():
+    """Return all available regime definitions."""
+    from ...regimes import REGIMES
+    return {"regimes": [r.to_dict() for r in REGIMES]}
+
+
+@router.post("/run-regimes")
+def run_regime_backtest(request: Request, body: dict):
+    """Run a separate backtest per regime. Returns an ID to poll for results."""
+    from ...regimes import get_regime, REGIMES as ALL_REGIMES
+
+    regime_ids = body.get("regime_ids", [])
+    if not regime_ids:
+        raise HTTPException(400, "regime_ids required")
+    regimes = []
+    for rid in regime_ids:
+        r = get_regime(rid)
+        if r is None:
+            raise HTTPException(400, f"Unknown regime: {rid}")
+        regimes.append(r)
+
+    store = getattr(request.app.state, "store", None)
+    run_id = uuid.uuid4().hex[:8]
+    with _state_lock:
+        if sum(1 for e in _entries.values() if e.status == "running") >= _MAX_CONCURRENT:
+            raise HTTPException(429, "Too many concurrent backtests")
+        _entries[run_id] = _BacktestEntry(status="running", progress={"phase": "init", "pct": 0, "started_at": time.time()})
+
+    def _run():
+        try:
+            code = body.get("code", "")
+            market = body.get("market", "SOL-PERP")
+            resolution_s = body.get("resolution_s", 3600)
+            initial_capital = body.get("initial_capital", 10000.0)
+            fee_rate = body.get("fee_rate", 0.0005)
+            margin_tracking = body.get("margin_tracking", False)
+
+            from ...strategy.loader import load_user_strategy
+            per_regime = {}
+            summaries = []
+
+            for idx, regime in enumerate(regimes):
+                _set_progress(run_id, phase="backtest", pct=int((idx / len(regimes)) * 100),
+                              detail=f"Running regime {idx+1}/{len(regimes)}: {regime.label}...")
+
+                try:
+                    strategy = load_user_strategy(code)
+                    candles = store.query_candles_with_fallback(market, resolution_s, regime.start_ts, regime.end_ts) if store else []
+                    if not candles or len(candles) < 50:
+                        per_regime[regime.id] = {"error": f"No data for {market} in {regime.label} ({regime.start_date} to {regime.end_date})", "regime": regime.to_dict()}
+                        summaries.append({"id": regime.id, "label": regime.label, "regime_type": regime.regime_type, "sharpe": 0, "max_drawdown": 0, "total_pnl": 0, "total_trades": 0, "has_error": True})
+                        continue
+
+                    funding = store.query_funding_rates(market, regime.start_ts, regime.end_ts) if store else []
+
+                    from ...execution.fill_models import FillPipeline
+                    fill_model = FillPipeline(impact_coefficient=0.005)
+                    margin_eng = None
+                    if margin_tracking:
+                        from ...execution.margin import MarginEngine
+                        from ...execution.venue_config import VENUE_DEFAULTS
+                        margin_eng = MarginEngine(VENUE_DEFAULTS)
+
+                    from ...backtest.engine import BacktestEngine
+                    engine = BacktestEngine(strategy, initial_capital, fee_rate,
+                                            fill_model=fill_model, funding_rates=funding,
+                                            margin_engine=margin_eng, max_runtime_s=_MAX_BACKTEST_SECONDS)
+                    result = engine.run(candles)
+
+                    # Build tearsheet
+                    import math
+                    def _safe(v):
+                        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): return 0.0
+                        return v
+
+                    tearsheet = {
+                        "strategy_name": strategy.name, "market": market,
+                        "resolution_s": resolution_s, "period_start": regime.start_date,
+                        "period_end": regime.end_date, "initial_capital": initial_capital,
+                        "metrics": {
+                            "total_pnl": _safe(result.total_pnl), "sharpe_ratio": _safe(result.sharpe_ratio),
+                            "max_drawdown": _safe(result.max_drawdown), "total_trades": result.total_trades,
+                            "winning_trades": result.winning_trades, "losing_trades": result.losing_trades,
+                            "win_rate": _safe(result.win_rate),
+                        },
+                        "equity_curve": [[c.ts, eq] for c, eq in zip(candles, result.equity_curve)] if result.equity_curve else [],
+                    }
+                    per_regime[regime.id] = tearsheet
+                    summaries.append({
+                        "id": regime.id, "label": regime.label, "regime_type": regime.regime_type,
+                        "sharpe": _safe(result.sharpe_ratio), "max_drawdown": _safe(result.max_drawdown),
+                        "total_pnl": _safe(result.total_pnl), "total_trades": result.total_trades, "has_error": False,
+                    })
+                except Exception as ex:
+                    per_regime[regime.id] = {"error": str(ex), "regime": regime.to_dict()}
+                    summaries.append({"id": regime.id, "label": regime.label, "regime_type": regime.regime_type, "sharpe": 0, "max_drawdown": 0, "total_pnl": 0, "total_trades": 0, "has_error": True})
+
+            valid = [s for s in summaries if not s["has_error"] and s["total_trades"] > 0]
+            avg_sharpe = sum(s["sharpe"] for s in valid) / len(valid) if valid else 0
+            worst_dd = max((s["max_drawdown"] for s in valid), default=0)
+            best = max(valid, key=lambda s: s["sharpe"])["id"] if valid else None
+            worst = min(valid, key=lambda s: s["sharpe"])["id"] if valid else None
+
+            _set_result(run_id, {
+                "mode": "regime_test",
+                "per_regime": per_regime,
+                "aggregate": {
+                    "avg_sharpe": avg_sharpe, "worst_drawdown": worst_dd,
+                    "best_regime": best, "worst_regime": worst,
+                    "regime_summary": summaries,
+                },
+            })
+            _set_status(run_id, "complete")
+            _set_progress(run_id, phase="done", pct=100, detail="Complete")
+        except Exception as ex:
+            _set_result(run_id, {"error": str(ex)})
+            _set_status(run_id, "failed")
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"id": run_id, "status": "running"}
+
+
 @router.get("/{run_id}/status")
 def get_status(run_id: str):
     with _state_lock:

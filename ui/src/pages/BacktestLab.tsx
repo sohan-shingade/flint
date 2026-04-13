@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { EXECUTION_VENUES, getVenue } from '../constants/venues'
+import { REGIMES } from '../constants/regimes'
 import { useBacktest } from '../hooks/useBacktest'
+import { useRegimeBacktest } from '../hooks/useRegimeBacktest'
+import { RegimeSelector } from '../components/RegimeSelector'
+import { RegimeResults } from '../components/RegimeResults'
 import { useStrategies } from '../hooks/useStrategies'
 import { useOptimize } from '../hooks/useOptimize'
 import { useJournal } from '../hooks/useJournal'
@@ -150,10 +154,10 @@ function detectStrategyProfile(code: string): StrategyProfile {
 
 /* ── date range presets ─────────────────────────────────── */
 
-type RangePreset = '1M' | '3M' | '6M' | '1Y' | '3Y' | 'CUSTOM'
+type RangePreset = '1M' | '3M' | '6M' | '1Y' | '3Y' | 'CUSTOM' | 'REGIMES'
 
 function getPresetDates(preset: RangePreset): { start: string; end: string } | null {
-  if (preset === 'CUSTOM') return null
+  if (preset === 'CUSTOM' || preset === 'REGIMES') return null
   const end = new Date()
   const start = new Date()
   switch (preset) {
@@ -217,6 +221,11 @@ export default function BacktestLab() {
 
   // Date range preset
   const [rangePreset, setRangePreset] = useState<RangePreset>('CUSTOM')
+
+  // Regime testing
+  const [selectedRegimes, setSelectedRegimes] = useState<string[]>(REGIMES.map(r => r.id))
+  const [regimeMode, setRegimeMode] = useState(false)
+  const regimeBacktest = useRegimeBacktest()
 
   // Multi-market data check
   const [multiMarketCheck, setMultiMarketCheck] = useState<{
@@ -551,8 +560,25 @@ export default function BacktestLab() {
   const handleRun = useCallback(async () => {
     // Re-detect strategy profile before submitting
     setStratProfile(detectStrategyProfile(codeRef.current))
-
     setValidationError(null)
+
+    // Regime mode: submit to run-regimes endpoint
+    if (regimeMode && selectedRegimes.length > 0) {
+      const res_s = parseInt(resolution.replace('m','').replace('h','').replace('d','')) * (resolution.includes('h') ? 3600 : resolution.includes('d') ? 86400 : 60)
+      regimeBacktest.run({
+        strategy: 'custom',
+        code: codeRef.current,
+        market,
+        markets: undefined,
+        resolution_s: res_s || 3600,
+        regime_ids: selectedRegimes,
+        initial_capital: capital,
+        fee_rate: Math.max(feeRate, 0),
+        margin_tracking: marginTracking,
+      })
+      return
+    }
+
     const startTs = Math.floor(new Date(startDate + 'T00:00:00Z').getTime() / 1000)
     const endTs = Math.floor(new Date(endDate + 'T23:59:59Z').getTime() / 1000)
 
@@ -638,6 +664,7 @@ export default function BacktestLab() {
 
   const handleRangePreset = useCallback((preset: RangePreset) => {
     setRangePreset(preset)
+    setRegimeMode(preset === 'REGIMES')
     const dates = getPresetDates(preset)
     if (dates) {
       setStartDate(dates.start)
@@ -1173,7 +1200,7 @@ export default function BacktestLab() {
               <div className="col-span-2">
                 <label className={labelClass}>DATE RANGE</label>
                 <div className="flex gap-1 mb-2">
-                  {(['1M', '3M', '6M', '1Y', '3Y', 'CUSTOM'] as RangePreset[]).map(p => (
+                  {(['1M', '3M', '6M', '1Y', '3Y', 'CUSTOM', 'REGIMES'] as RangePreset[]).map(p => (
                     <button
                       key={p}
                       onClick={() => handleRangePreset(p)}
@@ -1187,20 +1214,31 @@ export default function BacktestLab() {
                     </button>
                   ))}
                 </div>
+                {!regimeMode && (
                 <div className="grid grid-cols-2 gap-3">
                   <input
                     type="date"
                     value={startDate}
-                    onChange={(e) => { setStartDate(e.target.value); setRangePreset('CUSTOM') }}
+                    onChange={(e) => { setStartDate(e.target.value); setRangePreset('CUSTOM'); setRegimeMode(false) }}
                     className={`${inputClass} ${configError && configError.includes('date') ? 'border-loss/50' : ''}`}
                   />
                   <input
                     type="date"
                     value={endDate}
-                    onChange={(e) => { setEndDate(e.target.value); setRangePreset('CUSTOM') }}
+                    onChange={(e) => { setEndDate(e.target.value); setRangePreset('CUSTOM'); setRegimeMode(false) }}
                     className={`${inputClass} ${configError && configError.includes('date') ? 'border-loss/50' : ''}`}
                   />
                 </div>
+                )}
+                {regimeMode && (
+                <div className="border border-border bg-surface/60 p-3 mt-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="w-2 h-2 bg-amber/60" />
+                    <span className="text-[10px] text-ghost tracking-[0.2em]">SELECT.REGIMES</span>
+                  </div>
+                  <RegimeSelector selected={selectedRegimes} onChange={setSelectedRegimes} compact />
+                </div>
+                )}
               </div>
             </div>
 
@@ -1281,7 +1319,20 @@ export default function BacktestLab() {
             </div>
 
             <div className="px-3 pb-3">
-              {status === 'running' && progress ? (
+              {/* Regime backtest progress/results */}
+              {regimeMode && regimeBacktest.status === 'running' && regimeBacktest.progress ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-[10px] tracking-wider">
+                    <span className="text-amber animate-pulse">REGIME TESTING</span>
+                    <span className="text-ghost">{regimeBacktest.progress.detail}</span>
+                  </div>
+                  <div className="h-1 bg-border"><div className="h-full bg-amber transition-all" style={{width: `${regimeBacktest.progress.pct}%`}} /></div>
+                </div>
+              ) : regimeMode && regimeBacktest.error ? (
+                <div className="px-2.5 py-1.5 text-[10px] border border-loss/30 bg-loss/5 text-loss/80">[REGIME ERR] {regimeBacktest.error}</div>
+              ) : regimeMode && regimeBacktest.status === 'complete' && regimeBacktest.results ? (
+                <RegimeResults results={regimeBacktest.results} />
+              ) : status === 'running' && progress ? (
                 /* ── progress bar ─────────────────────── */
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-[10px] tracking-wider">
@@ -1332,15 +1383,19 @@ export default function BacktestLab() {
                   <div className="flex gap-2">
                     <button
                       onClick={handleRun}
-                      disabled={!!configError || (multiMarketCheck !== null && !multiMarketCheck.ready) || (dataCheck !== null && !dataCheck.covers_range)}
+                      disabled={regimeMode ? (selectedRegimes.length === 0) : (!!configError || (multiMarketCheck !== null && !multiMarketCheck.ready) || (dataCheck !== null && !dataCheck.covers_range))}
                       className={`flex-1 px-4 py-3 text-sm font-semibold tracking-[0.15em] transition-all duration-200 ${
-                        configError || (multiMarketCheck && !multiMarketCheck.ready) || (dataCheck && !dataCheck.covers_range)
-                          ? 'bg-border text-ghost/40 cursor-not-allowed'
-                          : 'bg-amber text-void hover:bg-amber-dim'
+                        regimeMode
+                          ? (selectedRegimes.length === 0 ? 'bg-border text-ghost/40 cursor-not-allowed' : 'bg-amber text-void hover:bg-amber-dim')
+                          : (configError || (multiMarketCheck && !multiMarketCheck.ready) || (dataCheck && !dataCheck.covers_range)
+                            ? 'bg-border text-ghost/40 cursor-not-allowed'
+                            : 'bg-amber text-void hover:bg-amber-dim')
                       }`}
-                      title={configError || (dataCheck && !dataCheck.covers_range ? 'Download market data from the Data tab first' : (multiMarketCheck && !multiMarketCheck.ready ? 'Download missing market data first' : 'Ctrl+Enter'))}
+                      title={regimeMode ? (selectedRegimes.length === 0 ? 'Select at least one regime' : 'Ctrl+Enter') : (configError || (dataCheck && !dataCheck.covers_range ? 'Download market data from the Data tab first' : (multiMarketCheck && !multiMarketCheck.ready ? 'Download missing market data first' : 'Ctrl+Enter')))}
                     >
-                      {configError ? 'FIX CONFIG'
+                      {regimeMode
+                        ? (selectedRegimes.length > 0 ? `> RUN_REGIMES (${selectedRegimes.length})` : 'SELECT REGIMES')
+                        : configError ? 'FIX CONFIG'
                         : multiMarketCheck && !multiMarketCheck.ready ? 'MISSING DATA'
                         : dataCheck && !dataCheck.covers_range ? 'NEED DATA'
                         : '> RUN_BACKTEST'}
