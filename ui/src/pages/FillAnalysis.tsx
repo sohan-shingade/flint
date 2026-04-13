@@ -60,7 +60,10 @@ export default function FillAnalysis() {
   useEffect(() => {
     fetch('/api/v1/data/markets')
       .then(r => r.json())
-      .then(d => setMarkets(d.markets || []))
+      .then(d => {
+        const raw = d.markets || []
+        setMarkets(raw.map((m: any) => typeof m === 'string' ? m : m.market))
+      })
       .catch(() => {})
   }, [])
 

@@ -1396,8 +1396,9 @@ export default function BacktestLab() {
                       {regimeMode
                         ? (selectedRegimes.length > 0 ? `> RUN_REGIMES (${selectedRegimes.length})` : 'SELECT REGIMES')
                         : configError ? 'FIX CONFIG'
-                        : multiMarketCheck && !multiMarketCheck.ready ? 'MISSING DATA'
-                        : dataCheck && !dataCheck.covers_range ? 'NEED DATA'
+                        : multiMarketCheck && !multiMarketCheck.ready ? `DOWNLOAD ${multiMarketCheck.missing.join(', ')}`
+                        : dataCheck && !dataCheck.has_data ? `DOWNLOAD ${market} IN DATA TAB`
+                        : dataCheck && !dataCheck.covers_range ? `DOWNLOAD ${market} FOR DATE RANGE`
                         : '> RUN_BACKTEST'}
                     </button>
                     <button
@@ -1881,82 +1882,85 @@ export default function BacktestLab() {
 
       {/* ── Deploy to Paper Trading dialog ────────────── */}
       {showDeploy && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowDeploy(false)}>
-          <div className="bg-zinc-800 border border-zinc-700 rounded-xl p-6 w-[420px] space-y-4" onClick={e => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-white">Deploy to Paper Trading</h2>
-            <p className="text-sm text-zinc-400">Strategy will replay historical data then trade live with simulated execution.</p>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowDeploy(false)}>
+          <div className="bg-panel border border-border w-[420px]" onClick={e => e.stopPropagation()} style={{ animation: 'fadeUp 0.2s ease' }}>
+            <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+              <span className="w-2 h-2 bg-amber/60" />
+              <span className="text-[10px] text-ghost tracking-[0.2em]">DEPLOY.TO.PAPER</span>
+            </div>
+            <div className="p-4 space-y-3">
+              <p className="text-[10px] text-ghost/60 tracking-wide">Strategy will replay historical data then trade live with simulated execution.</p>
 
-            <div className="space-y-3">
               <div>
-                <label className="text-xs text-zinc-400 block mb-1">Capital ($)</label>
+                <label className="text-[9px] text-ghost/50 tracking-[0.15em] block mb-1">CAPITAL ($)</label>
                 <input type="number" value={deployCapital} onChange={e => setDeployCapital(Number(e.target.value))}
-                       className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm" />
+                       className="w-full bg-void border border-border text-terminal text-xs px-3 py-2 focus:border-amber/50 focus:outline-none" />
               </div>
               <div>
-                <label className="text-xs text-zinc-400 block mb-1">Max Drawdown (%)</label>
+                <label className="text-[9px] text-ghost/50 tracking-[0.15em] block mb-1">MAX DRAWDOWN (%)</label>
                 <input type="number" value={deployMaxDD} onChange={e => setDeployMaxDD(Number(e.target.value))}
-                       className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm" />
+                       className="w-full bg-void border border-border text-terminal text-xs px-3 py-2 focus:border-amber/50 focus:outline-none" />
               </div>
               <div>
-                <label className="text-xs text-zinc-400 block mb-1">Daily Loss Limit ($)</label>
+                <label className="text-[9px] text-ghost/50 tracking-[0.15em] block mb-1">DAILY LOSS LIMIT ($)</label>
                 <input type="number" value={deployDailyLoss} onChange={e => setDeployDailyLoss(Number(e.target.value))}
-                       className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm" />
+                       className="w-full bg-void border border-border text-terminal text-xs px-3 py-2 focus:border-amber/50 focus:outline-none" />
               </div>
               <div>
-                <label className="text-xs text-zinc-400 block mb-1">Venue</label>
+                <label className="text-[9px] text-ghost/50 tracking-[0.15em] block mb-1">VENUE</label>
                 <select value={deployVenue} onChange={e => setDeployVenue(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-white text-sm">
+                        className="w-full bg-void border border-border text-terminal text-xs px-3 py-2 focus:border-amber/50 focus:outline-none">
                   {EXECUTION_VENUES.map(v => (
                     <option key={v.id} value={v.id}>{v.label}</option>
                   ))}
                 </select>
               </div>
-            </div>
 
-            <div className="flex gap-3 pt-2">
-              <button onClick={() => setShowDeploy(false)}
-                      className="flex-1 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg text-sm">
-                Cancel
-              </button>
-              <button
-                disabled={deploying}
-                onClick={async () => {
-                  setDeploying(true)
-                  try {
-                    const startTs = Math.floor(new Date(startDate + 'T00:00:00Z').getTime() / 1000)
-                    const res = await fetch('/api/v1/paper/deploy', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        strategy_code: code,
-                        strategy_name: currentName || results?.strategy_name || 'Custom',
-                        strategy_params: {},
-                        market: market,
-                        initial_capital: deployCapital,
-                        replay_start_ts: startTs,
-                        venue: deployVenue,
-                        risk_config: {
-                          max_drawdown_pct: deployMaxDD / 100,
-                          daily_loss_limit: deployDailyLoss,
-                          max_position_pct: 0.95,
-                          liquidation_enabled: true,
-                        },
-                      }),
-                    })
-                    if (res.ok) {
-                      setShowDeploy(false)
-                      window.location.href = '/paper'
+              <div className="flex gap-2 pt-2">
+                <button onClick={() => setShowDeploy(false)}
+                        className="flex-1 px-4 py-2.5 border border-border text-ghost text-[10px] tracking-[0.15em] hover:text-terminal hover:border-border-bright transition-colors">
+                  CANCEL
+                </button>
+                <button
+                  disabled={deploying}
+                  onClick={async () => {
+                    setDeploying(true)
+                    try {
+                      const startTs = Math.floor(new Date(startDate + 'T00:00:00Z').getTime() / 1000)
+                      const res = await fetch('/api/v1/paper/deploy', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          strategy_code: code,
+                          strategy_name: currentName || results?.strategy_name || 'Custom',
+                          strategy_params: {},
+                          market: market,
+                          initial_capital: deployCapital,
+                          replay_start_ts: startTs,
+                          venue: deployVenue,
+                          risk_config: {
+                            max_drawdown_pct: deployMaxDD / 100,
+                            daily_loss_limit: deployDailyLoss,
+                            max_position_pct: 0.95,
+                            liquidation_enabled: true,
+                          },
+                        }),
+                      })
+                      if (res.ok) {
+                        setShowDeploy(false)
+                        window.location.href = '/paper'
+                      }
+                    } catch (e) {
+                      console.error('Deploy failed:', e)
+                    } finally {
+                      setDeploying(false)
                     }
-                  } catch (e) {
-                    console.error('Deploy failed:', e)
-                  } finally {
-                    setDeploying(false)
-                  }
-                }}
-                className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
-              >
-                {deploying ? 'Deploying...' : 'Deploy'}
-              </button>
+                  }}
+                  className="flex-1 px-4 py-2.5 bg-amber text-void text-[10px] font-semibold tracking-[0.15em] hover:bg-amber-dim disabled:bg-border disabled:text-ghost transition-all"
+                >
+                  {deploying ? '> DEPLOYING...' : '> DEPLOY'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

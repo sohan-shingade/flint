@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithRouter } from '../test-utils'
 import PaperTrading from '../../pages/PaperTrading'
@@ -78,11 +78,9 @@ describe('PaperTrading', () => {
     renderWithRouter(<PaperTrading />)
 
     await waitFor(() => {
-      // Session detail should show the first live session's strategy name
       expect(screen.getByText('MA Crossover')).toBeInTheDocument()
     })
 
-    // Metrics should be displayed
     await waitFor(() => {
       expect(screen.getByText('EQUITY')).toBeInTheDocument()
       expect(screen.getByText('REALIZED.PNL')).toBeInTheDocument()
@@ -131,82 +129,65 @@ describe('PaperTrading', () => {
     expect(screen.getByText('STOP')).toBeInTheDocument()
   })
 
-  it('BUG: DEPLOY.STRATEGY panel crashes when market API returns objects instead of strings', async () => {
-    // This test documents a real bug: PaperTrading DeployPanel calls
-    // GET /api/v1/data/markets and sets markets state as the raw response
-    // objects, but then renders them as <option>{market}</option> where
-    // market is {market, resolution_s, candle_count, first_ts, last_ts}.
-    // React throws: "Objects are not valid as a React child"
-    //
-    // Root cause: PaperTrading.tsx:469 does setMarkets(mkts) where mkts
-    // is MarketInfo[] objects, but the state type is string[].
-    // The DeployPanel should extract market names: mkts.map(m => m.market || m)
+  it('DEPLOY.STRATEGY panel expands and shows form fields', async () => {
     const user = userEvent.setup()
     renderWithRouter(<PaperTrading />)
 
     const deployBtn = await screen.findByText('DEPLOY.STRATEGY')
+    await user.click(deployBtn)
 
-    // This click triggers the bug — the panel tries to render market objects
-    // as option text, causing a React error
-    try {
-      await user.click(deployBtn)
-      // If it doesn't throw, the panel should show
-      await waitFor(() => {
-        const stratLabel = screen.queryByText('STRATEGY')
-        if (stratLabel) expect(stratLabel).toBeInTheDocument()
-      }, { timeout: 2000 })
-    } catch {
-      // Expected: React error about objects not being valid children
-      // This confirms the bug
-    }
-  })
-
-  it('BUG: deploy panel market selector crashes due to object-as-child rendering', async () => {
-    // Same root cause as the expand/collapse bug above.
-    // The deploy panel fetches strategies (works fine) and markets (crashes).
-    // GET /api/v1/data/markets returns [{market: "SOL-PERP", resolution_s: 3600, ...}]
-    // but DeployPanel does: markets.map(m => <option key={m} value={m}>{m}</option>)
-    // where m is an object, not a string.
-    //
-    // Fix: In PaperTrading.tsx DeployPanel, change line ~469 from:
-    //   setMarkets(mkts)
-    // to:
-    //   setMarkets(mkts.map((m: any) => typeof m === 'string' ? m : m.market))
-    const user = userEvent.setup()
-    renderWithRouter(<PaperTrading />)
-
-    const deployBtn = await screen.findByText('DEPLOY.STRATEGY')
-    try {
-      await user.click(deployBtn)
-      // Strategies should load fine (they're strings)
-      await waitFor(() => {
-        const stratLabel = screen.queryByText('STRATEGY')
-        if (stratLabel) expect(stratLabel).toBeInTheDocument()
-      }, { timeout: 2000 })
-    } catch {
-      // Expected crash due to the bug
-    }
-  })
-
-  it('BUG: deploy button cannot be reached due to market rendering crash', async () => {
-    // The deploy BUTTON itself works (POST /api/v1/paper/start), but the
-    // deploy PANEL crashes before the button is reachable due to the
-    // market selector rendering objects as React children.
-    //
-    // Once the market selector bug is fixed, this test should:
-    // 1. Open deploy panel
-    // 2. Click "> DEPLOY" button
-    // 3. Verify POST /api/v1/paper/start is called with correct body
-    //
-    // For now, verify the API contract directly:
-    const res = await fetch('/api/v1/paper/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ strategy: 'ma_crossover', market: 'SOL-PERP', initial_capital: 10000 }),
+    // After fix: panel should expand without crashing
+    await waitFor(() => {
+      expect(screen.getByText('STRATEGY')).toBeInTheDocument()
+      expect(screen.getByText('MARKET')).toBeInTheDocument()
     })
-    const data = await res.json()
-    expect(data.session_id).toBeDefined()
-    expect(data.status).toBe('running')
+  })
+
+  it('deploy panel populates strategy and market dropdowns', async () => {
+    const user = userEvent.setup()
+    renderWithRouter(<PaperTrading />)
+
+    const deployBtn = await screen.findByText('DEPLOY.STRATEGY')
+    await user.click(deployBtn)
+
+    await waitFor(() => {
+      // Strategy dropdown should contain options from API
+      // Use getAllByText since "MA Crossover" appears in sidebar too
+      const matches = screen.getAllByText('MA Crossover')
+      expect(matches.length).toBeGreaterThanOrEqual(2) // sidebar + dropdown option
+    })
+
+    await waitFor(() => {
+      // Markets should be string names now (after fix), not objects
+      const selects = screen.getAllByRole('combobox')
+      expect(selects.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  it('deploy button calls POST /api/v1/paper/start', async () => {
+    const user = userEvent.setup()
+    let postCalled = false
+    server.use(
+      http.post('/api/v1/paper/start', () => {
+        postCalled = true
+        return HttpResponse.json({ session_id: 'new-sess', status: 'running' })
+      })
+    )
+
+    renderWithRouter(<PaperTrading />)
+
+    const deployToggle = await screen.findByText('DEPLOY.STRATEGY')
+    await user.click(deployToggle)
+
+    await waitFor(() => {
+      expect(screen.getByText('> DEPLOY')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByText('> DEPLOY'))
+
+    await waitFor(() => {
+      expect(postCalled).toBe(true)
+    })
   })
 
   it('shows trade history table when trades exist', async () => {
@@ -216,28 +197,31 @@ describe('PaperTrading', () => {
       expect(screen.getByText('TRADE.HISTORY')).toBeInTheDocument()
     })
 
-    // Should show trade count
     await waitFor(() => {
       expect(screen.getByText(/fills/)).toBeInTheDocument()
     })
   })
 
-  it('shows open positions when session has positions', async () => {
-    // Note: This test may encounter unhandled React errors from the
-    // deploy panel market rendering bug (see BUG tests above).
-    // The core session detail rendering works fine — the error comes
-    // from the DeployPanel component that also renders on this page.
+  it('shows open positions section when positions exist', async () => {
     renderWithRouter(<PaperTrading />)
 
-    // Just verify the session detail loads at all
+    // Wait for session detail to fully load (polled via useSessionStatus)
     await waitFor(() => {
-      // Session detail should show metrics
-      const equity = screen.queryByText('EQUITY')
-      expect(equity).toBeInTheDocument()
+      expect(screen.getByText('EQUITY')).toBeInTheDocument()
+    })
+
+    // Positions section and LONG label should appear from mock data
+    await waitFor(() => {
+      expect(screen.getByText('OPEN.POSITIONS')).toBeInTheDocument()
+    }, { timeout: 5000 })
+
+    await waitFor(() => {
+      const longs = screen.getAllByText('LONG')
+      expect(longs.length).toBeGreaterThanOrEqual(1)
     }, { timeout: 5000 })
   })
 
-  it('displays API error message when portfolio fetch fails', async () => {
+  it('displays user-friendly error message when API is down', async () => {
     server.use(
       http.get('/api/v1/paper/portfolio', () => {
         return HttpResponse.error()
@@ -247,7 +231,10 @@ describe('PaperTrading', () => {
     renderWithRouter(<PaperTrading />)
 
     await waitFor(() => {
-      expect(screen.getByText(/API ERROR/i)).toBeInTheDocument()
+      // After fix: should show friendly message, not raw TypeError
+      const errorEl = screen.getByText(/API ERROR/i)
+      expect(errorEl).toBeInTheDocument()
+      expect(errorEl.textContent).toContain('Cannot connect to server')
     })
   })
 })

@@ -1,12 +1,13 @@
 # Flint UI Bug Report
 
 **Generated**: 2026-04-13
-**Test suite**: 115 tests across 14 files — all passing (bug tests document known issues)
+**Test suite**: 116 tests across 14 files — all passing
+**Status**: All 6 bugs FIXED
 **Methodology**: Vitest + React Testing Library + MSW (Mock Service Worker) simulating all 30+ API endpoints
 
 ---
 
-## Bug #1: PaperTrading DeployPanel crashes — market objects rendered as React children
+## Bug #1: PaperTrading DeployPanel crashes — market objects rendered as React children [FIXED]
 
 **Severity**: Critical
 **Page**: PaperTrading (`/paper`)
@@ -68,7 +69,7 @@ if (names.length > 0 && !market) setMarket(names[0])
 
 ---
 
-## Bug #2: FillAnalysis page crashes — same market object rendering issue
+## Bug #2: FillAnalysis page crashes — same market object rendering issue [FIXED]
 
 **Severity**: High
 **Page**: FillAnalysis (`/fills`)
@@ -112,7 +113,7 @@ Same issue as Bug #1 — the `GET /api/v1/data/markets` response contains object
 
 ---
 
-## Bug #3: PaperTrading DeployPanel duplicate React keys
+## Bug #3: PaperTrading DeployPanel duplicate React keys [FIXED]
 
 **Severity**: Medium
 **Page**: PaperTrading (`/paper`)
@@ -142,7 +143,7 @@ Fixing Bug #1 also fixes this issue.
 
 ---
 
-## Bug #4: Deploy-to-Paper dialog uses inconsistent design system
+## Bug #4: Deploy-to-Paper dialog uses inconsistent design system [FIXED]
 
 **Severity**: Low (UX)
 **Page**: BacktestLab (`/backtest`)
@@ -184,7 +185,7 @@ Restyle the dialog to match the app:
 
 ---
 
-## Bug #5: BacktestLab RUN button disabled state unclear
+## Bug #5: BacktestLab RUN button disabled state unclear [FIXED]
 
 **Severity**: Low (UX)
 **Page**: BacktestLab (`/backtest`)
@@ -210,7 +211,7 @@ Button shows "NEED DATA" or "FIX CONFIG" or "MISSING DATA" — somewhat informat
 
 ---
 
-## Bug #6: PaperTrading page error when portfolio API is down
+## Bug #6: PaperTrading page error when portfolio API is down [FIXED]
 
 **Severity**: Medium
 **Page**: PaperTrading (`/paper`)
