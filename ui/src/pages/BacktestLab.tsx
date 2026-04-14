@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { EXECUTION_VENUES, getVenue } from '../constants/venues'
 import { REGIMES } from '../constants/regimes'
 import { useBacktest } from '../hooks/useBacktest'
@@ -1302,10 +1303,10 @@ export default function BacktestLab() {
                       {dataCheck.first_ts && dataCheck.last_ts && (
                         <> ({new Date(dataCheck.first_ts * 1000).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'2-digit'})} → {new Date(dataCheck.last_ts * 1000).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'2-digit'})})</>
                       )}
-                      . Download the full range from the Data tab first.
+                      . <Link to="/data" className="underline hover:text-amber">Download in Data Explorer</Link>
                     </>
                   ) : (
-                    <>NO.DATA — download {market} from the Data tab before backtesting</>
+                    <>NO.DATA — <Link to="/data" className="underline hover:text-amber">download {market} in Data Explorer</Link> before backtesting</>
                   )}
                 </div>
               )}
@@ -1491,7 +1492,7 @@ export default function BacktestLab() {
                 <div className="ml-auto flex items-center gap-2">
                   <button
                     onClick={() => setShowDeploy(true)}
-                    className="px-2.5 py-1 text-[9px] tracking-[0.1em] border border-purple-500/50 text-purple-400 hover:text-purple-300 hover:border-purple-400/70 transition-all"
+                    className="px-2.5 py-1 text-[9px] tracking-[0.1em] border border-amber/50 text-amber hover:bg-amber/10 hover:border-amber/70 transition-all"
                   >
                     DEPLOY
                   </button>

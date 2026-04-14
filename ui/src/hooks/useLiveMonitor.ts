@@ -23,7 +23,16 @@ export function useLiveMonitor(sessionId: string, pollInterval = 2000) {
         const fillData = await fillRes.json()
         if (eqData.equity) setEquity(eqData.equity)
         if (fillData.fills) setFills(fillData.fills)
-      } catch (e) { if (active) setError(String(e)) }
+      } catch (e) {
+        if (active) {
+          const msg = String(e)
+          if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+            setError('Cannot connect to server \u2014 is flint serve running?')
+          } else {
+            setError(msg)
+          }
+        }
+      }
     }
     poll()
     const id = setInterval(poll, pollInterval)
