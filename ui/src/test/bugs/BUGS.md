@@ -244,21 +244,37 @@ if (active) setError('Cannot connect to server — run flint serve')
 
 ---
 
-## UX Audit Notes (Quant Desk Perspective)
+## UX Audit (Quant Desk Perspective)
 
-### Finding: Data download → Backtest flow requires page switching
-A quant needs to: (1) go to Data Explorer, (2) download data, (3) switch to BacktestLab, (4) hope the data check passes. There's no in-line "download now" option on BacktestLab when data is missing. The "NEED DATA" button should offer a one-click download option.
+### UX #1: DEPLOY button used purple in an amber design system [FIXED]
 
-### Finding: Paper Trading has no way to deploy without BacktestLab
-The DeployPanel on PaperTrading lets you start a built-in strategy, but if a user wants to deploy custom code, they must go through BacktestLab's deploy dialog. There's no code editor on the Paper Trading page. This is fine but should be more clearly communicated.
+The DEPLOY button in BacktestLab results used `border-purple-500/50 text-purple-400` — the only purple element in the entire app. Restyled to amber to match the design system.
 
-### Finding: Keyboard shortcuts not discoverable
-`Ctrl+Enter` to run and `Ctrl+S` to save are mentioned at the bottom of the config panel in tiny text. No keyboard shortcut overlay or `?` help is available. TradingView and QuantConnect both have discoverable shortcut panels.
+**File**: `ui/src/pages/BacktestLab.tsx:1493`
 
-### Finding: Loading states inconsistent
-- BacktestLab: Shows progress bar with phase/percentage
-- DataExplorer: Shows "LOADING..." text
-- PaperTrading: Shows "CONNECTING..." with pulse animation
-- Dashboard: No loading state at all
+### UX #2: No-data state was a dead end — no path to fix it [FIXED]
 
-These should be standardized.
+When BacktestLab shows "NO.DATA" or "DATA.GAP", the text said "download from the Data tab" but wasn't a clickable link. A quant had to manually navigate to `/data`. Now uses `<Link to="/data">` so clicking takes them directly to Data Explorer.
+
+**File**: `ui/src/pages/BacktestLab.tsx:1300-1310`
+
+### UX #3: LiveMonitor showed raw TypeError on disconnect [FIXED]
+
+Same issue as Bug #6 (PaperTrading) — `useLiveMonitor.ts` showed `TypeError: Failed to fetch` when the server was down. Now shows `Cannot connect to server — is flint serve running?`
+
+**File**: `ui/src/hooks/useLiveMonitor.ts:26`
+
+### UX #4: RUN button label now tells you exactly what to download [FIXED]
+
+Previously: `NEED DATA` / `MISSING DATA` (vague).
+Now: `DOWNLOAD SOL-PERP IN DATA TAB` or `DOWNLOAD BTC-PERP, ETH-PERP` (actionable). Fixed in Bug #5 above.
+
+### Remaining UX observations (not fixed — require design decisions)
+
+**Data download → Backtest flow requires page switching**: A quant needs to (1) go to Data Explorer, (2) download data, (3) switch to BacktestLab, (4) verify data check. The no-data indicator now links to Data Explorer (UX #2), but an inline "download now" button on BacktestLab would be even better. This requires wiring up the download API from BacktestLab, which is a larger feature.
+
+**Paper Trading custom code requires BacktestLab**: The DeployPanel on PaperTrading lets you start built-in strategies, but deploying custom code requires going through BacktestLab's deploy dialog. This is by design but could be clearer — add a note like "For custom strategies, deploy from BacktestLab."
+
+**Keyboard shortcuts not discoverable**: `Ctrl+Enter` (run) and `Ctrl+S` (save) are in small text at the bottom of the config panel. TradingView and QuantConnect have `?` shortcut overlays. Consider adding a keyboard shortcut help panel.
+
+**No confirmation on destructive navigation**: Clicking a nav link while a backtest is running or code is unsaved doesn't warn the user. The `dirty` flag exists but only guards template switches, not page navigation.
