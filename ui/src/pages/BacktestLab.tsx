@@ -1110,36 +1110,6 @@ export default function BacktestLab() {
                     )}
                   </select>
                 </div>
-                {/* Single-venue strategy: show venue selector */}
-                {(!stratProfile || stratProfile.type === 'single' || stratProfile.type === 'multi_market') && (
-                  <div className="mt-2 flex items-center gap-2">
-                    <label className="text-[9px] text-ghost tracking-wider">VENUE</label>
-                    <select value={venue} onChange={(e) => {
-                      setVenue(e.target.value)
-                      // Auto-select matching fee preset
-                      const presetMap: Record<string, string> = {
-                        'drift': 'drift_taker',
-                        'hyperliquid': 'hl_taker',
-                        'binance': 'binance_taker',
-                        'okx': 'okx_taker',
-                        'bybit': 'bybit_taker',
-                      }
-                      if (presetMap[e.target.value]) {
-                        setFeePreset(presetMap[e.target.value])
-                        setFeeRate(FEE_PRESETS[presetMap[e.target.value]].rate)
-                      }
-                    }}
-                      className="bg-void border border-border text-[11px] text-terminal px-2 py-0.5 w-36">
-                      <option value="default">Default</option>
-                      <option value="drift">Drift</option>
-                      <option value="hyperliquid">Hyperliquid</option>
-                      <option value="binance">Binance</option>
-                      <option value="okx">OKX</option>
-                      <option value="bybit">Bybit</option>
-                    </select>
-                  </div>
-                )}
-
                 {/* Multi-venue strategy: show per-venue fee info */}
                 {stratProfile && (stratProfile.type === 'multi_venue' || stratProfile.type === 'cross_venue_multi_market') && (
                   <div className="mt-2 p-2 border border-border bg-surface/30">
