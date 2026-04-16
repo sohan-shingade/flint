@@ -54,6 +54,7 @@ class LiveContext(ExecutionContext):
                 entry_price=pos["entry_price"],
                 unrealized_pnl=pos.get("unrealized_pnl", 0),
                 entry_ts=pos.get("entry_ts", 0),
+                venue=pos.get("venue", self._broker.venue),
             ))
         return result
 

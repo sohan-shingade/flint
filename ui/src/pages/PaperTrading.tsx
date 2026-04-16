@@ -547,6 +547,8 @@ function DeployPanel() {
   const [deploying, setDeploying] = useState(false)
   const [deployMsg, setDeployMsg] = useState('')
 
+  const [venues, setVenues] = useState<{id: string, label: string, type: string}[]>([])
+
   useEffect(() => {
     if (!isOpen) return
     fetch('/api/v1/strategies').then(r => r.json()).then(d => {
@@ -559,6 +561,10 @@ function DeployPanel() {
       const mkts = raw.map((m: any) => typeof m === 'string' ? m : m.market)
       setMarkets(mkts)
       if (mkts.length > 0 && !market) setMarket(mkts[0])
+    }).catch(() => {})
+    // Fetch venues from single source of truth
+    fetch('/api/v1/system/venues').then(r => r.json()).then(d => {
+      setVenues(d.venues || [])
     }).catch(() => {})
   }, [isOpen])
 
@@ -636,8 +642,9 @@ function DeployPanel() {
                 ) : (
                   <select value={venue} onChange={e => setVenue(e.target.value)}
                     className="bg-panel border border-border text-terminal text-xs px-3 py-1.5 focus:outline-none focus:border-amber w-36">
-                    {['paper', 'drift', 'hyperliquid', 'binance', 'okx', 'bybit'].map(v =>
-                      <option key={v} value={v}>{v}</option>
+                    {venues.length === 0 && <option value="drift">drift</option>}
+                    {venues.map(v =>
+                      <option key={v.id} value={v.id}>{v.label} ({v.type.toUpperCase()})</option>
                     )}
                   </select>
                 )}

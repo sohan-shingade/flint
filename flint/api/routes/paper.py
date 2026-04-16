@@ -216,9 +216,11 @@ def get_portfolio(request: Request):
     for s in sessions:
         equity = s.get("equity", 0)
         pnl = s.get("pnl", 0)
+        initial = s.get("initial_capital", 0)
         is_active = s.get("status") in ("running", "live")
         if is_active:
             total_equity += equity
+            total_initial += initial
         per_strategy.append({
             "session_id": s["session_id"],
             "strategy_name": s.get("strategy", ""),

@@ -331,6 +331,7 @@ class PaperBroker:
                 "entry_price": fill.price,
                 "entry_ts": fill.ts,
                 "unrealized_pnl": 0.0,
+                "mark_price": fill.price,
             }
         elif pos["side"] == fill.side.value:
             # DCA

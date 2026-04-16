@@ -170,7 +170,6 @@ class PaperTradingEngine:
             replay_start_ts=replay_start,
             venue=venue,
         )
-        return session_id
 
     def stop_session(self, session_id: str) -> bool:
         """Stop a paper trading session."""
@@ -261,18 +260,21 @@ class PaperTradingEngine:
                 # Reconstruct broker with recovered cash (venue defaults to "drift" for backward compat)
                 resumed_venue = full.get("venue", "drift")
                 broker = PaperBroker(initial_capital=cash, venue=resumed_venue)
-                broker.equity_history = [cash]
+                # Restore full equity history for accurate peak/drawdown tracking
+                broker.equity_history = [eq["equity"] for eq in equity_history] if equity_history else [cash]
 
                 # Restore positions from DB
                 positions = ss.load_positions(sid)
                 for p in positions:
                     broker.positions[p["market"]] = {
                         "market": p["market"],
+                        "venue": p.get("venue", resumed_venue),
                         "side": p["side"],
                         "size": p["size"],
                         "entry_price": p["entry_price"],
                         "entry_ts": p.get("entry_ts", 0),
                         "unrealized_pnl": p.get("unrealized_pnl", 0),
+                        "mark_price": p.get("entry_price", 0),
                     }
 
                 # Restore closed trades into broker memory
@@ -372,15 +374,24 @@ class PaperTradingEngine:
         )
 
         # Phase 1: Replay
-        strategy.reset()
-        candles = self.store.query_candles(market, resolution_s, replay_start_ts, now)
+        try:
+            strategy.reset()
+            candles = self.store.query_candles(market, resolution_s, replay_start_ts, now)
+        except Exception as e:
+            # Clean up orphaned session record on failure
+            ss.update_status(session_id, "failed", stop_reason=f"Replay init failed: {e}")
+            raise
 
         replay_equity: List[dict] = []
         final_cash = initial_capital
 
         if candles:
-            engine = BacktestEngine(strategy, initial_capital, fee_rate=0.0005)
-            result = engine.run(candles)
+            try:
+                engine = BacktestEngine(strategy, initial_capital, fee_rate=0.0005)
+                result = engine.run(candles)
+            except Exception as e:
+                ss.update_status(session_id, "failed", stop_reason=f"Replay failed: {e}")
+                raise
 
             # Record replay equity
             for i, eq in enumerate(result.equity_curve):
@@ -488,68 +499,6 @@ class PaperTradingEngine:
         ss.update_status(session_id, "replaced", stopped_at=now_ts, stop_reason=f"redeployed as {new_id}")
 
         return new_id
-
-    async def _run_session(self, session: PaperSession) -> None:
-        """Main loop: poll store for new candles, run strategy."""
-        history: List[Candle] = []
-
-        # Load recent history for warm-up
-        try:
-            warm_up = self.store.query_candles(
-                session.market, session.resolution_s
-            )
-            if warm_up:
-                history = warm_up[-200:]  # last 200 candles for indicator warm-up
-                session.last_candle_ts = history[-1].ts if history else 0
-        except Exception as e:
-            logger.warning("Failed to load warm-up candles: %s", e)
-
-        while session.status == "running":
-            try:
-                # Poll for new candles
-                candles = self.store.query_candles(
-                    session.market,
-                    session.resolution_s,
-                    start_ts=session.last_candle_ts + 1,
-                )
-
-                for candle in candles:
-                    history.append(candle)
-                    session.last_candle_ts = candle.ts
-
-                    # Set candle on context
-                    session.ctx.set_candle(candle)
-
-                    # Process pending orders
-                    session.broker.process_candle(candle)
-
-                    # Run strategy
-                    signal = session.strategy.on_candle(candle, history, ctx=session.ctx)
-
-                    # v1 signal adapter
-                    if signal == Signal.BUY and not session.ctx.positions:
-                        size = (session.ctx.account.cash * 0.95) / candle.close
-                        if size > 0:
-                            session.ctx.market_order(candle.market, Side.LONG, size)
-                    elif signal == Signal.SELL and session.ctx.positions:
-                        session.ctx.close_position(candle.market)
-
-                    # Process any new market orders
-                    session.broker.process_candle(candle)
-
-                    # Record equity
-                    session.equity_history.append({
-                        "ts": candle.ts,
-                        "equity": session.broker.equity,
-                    })
-
-                await asyncio.sleep(10)  # poll every 10s
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error("Paper session %s error: %s", session.session_id, e)
-                await asyncio.sleep(30)
 
     async def _run_live_session(self, session: PaperSession) -> None:
         """Live loop with risk guard checks and persistence."""
