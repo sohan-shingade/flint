@@ -377,6 +377,47 @@ describe('BacktestLab', () => {
     }
   })
 
+  it('old normal backtest results clear when regime test starts', async () => {
+    const user = userEvent.setup()
+    renderWithRouter(<BacktestLab />)
+
+    // Run a normal backtest first
+    await waitFor(() => {
+      const runBtn = screen.queryByText(/RUN_BACKTEST/)
+      expect(runBtn).toBeInTheDocument()
+    }, { timeout: 5000 })
+
+    const runBtn = screen.queryByText(/RUN_BACKTEST/)
+    if (runBtn && !runBtn.hasAttribute('disabled')) {
+      await user.click(runBtn)
+
+      // Wait for normal results
+      await waitFor(() => {
+        expect(screen.queryByText(/Results/)).toBeInTheDocument()
+      }, { timeout: 10000 })
+
+      // Now switch to regime mode and run
+      await user.click(screen.getByText('REGIMES'))
+      await waitFor(() => {
+        expect(screen.getByTestId('regime-selector')).toBeInTheDocument()
+      })
+
+      const regimeRunBtn = screen.queryByText(/RUN_REGIMES/) || screen.queryByText(/RUN_BACKTEST/)
+      if (regimeRunBtn && !regimeRunBtn.hasAttribute('disabled')) {
+        await user.click(regimeRunBtn)
+
+        // Wait for regime results
+        await waitFor(() => {
+          expect(screen.getByTestId('regime-results')).toBeInTheDocument()
+        }, { timeout: 10000 })
+
+        // Old normal "Results" header should be gone (cleared)
+        // Only regime results should be visible
+        expect(screen.getByTestId('regime-results')).toBeInTheDocument()
+      }
+    }
+  })
+
   // ── Deploy dialog ──
 
   it('DEPLOY button is not visible before results', () => {

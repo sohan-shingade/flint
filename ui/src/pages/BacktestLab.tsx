@@ -179,7 +179,7 @@ function getPresetDates(preset: RangePreset): { start: string; end: string } | n
 /* ── component ─────────────────────────────────────────── */
 
 export default function BacktestLab() {
-  const { run, status, results, error, progress } = useBacktest()
+  const { run, reset: resetBacktest, status, results, error, progress } = useBacktest()
   const { run: runOptimize, status: optStatus, results: optResults, error: optError, progress: optProgress } = useOptimize()
   const { run: runWF, status: wfStatus, results: wfResults, error: wfError, progress: wfProgress } = useWalkForward()
   const { runs: journalRuns, refresh: refreshJournal, deleteRun: deleteJournalRun } = useJournal()
@@ -609,6 +609,7 @@ export default function BacktestLab() {
 
     // Regime mode: submit to run-regimes endpoint
     if (regimeMode && selectedRegimes.length > 0) {
+      resetBacktest()  // Clear old normal backtest results
       const res_s = parseInt(resolution.replace('m','').replace('h','').replace('d','')) * (resolution.includes('h') ? 3600 : resolution.includes('d') ? 86400 : 60)
       regimeBacktest.run({
         strategy: 'custom',
@@ -646,6 +647,7 @@ export default function BacktestLab() {
 
     const extraMarkets = extractMarketsFromCode(codeRef.current)
 
+    regimeBacktest.reset()  // Clear old regime results
     run({
       strategy: 'custom',
       code: codeRef.current,

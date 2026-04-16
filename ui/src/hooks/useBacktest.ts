@@ -134,5 +134,15 @@ export function useBacktest() {
     }
   }, [])
 
-  return { run, runId, status, results, error, progress }
+  const reset = useCallback(() => {
+    cancelledRef.current = true
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+    setRunId(null)
+    setStatus('idle')
+    setResults(null)
+    setError(null)
+    setProgress(null)
+  }, [])
+
+  return { run, reset, runId, status, results, error, progress }
 }
