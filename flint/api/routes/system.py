@@ -89,3 +89,33 @@ def save_config(body: ConfigRequest):
 
     env_path.write_text("\n".join(new_lines) + "\n")
     return ConfigResponse(saved=True)
+
+
+@router.get("/venues")
+def list_venues():
+    """List all supported execution venues with their configurations.
+
+    This is the single source of truth for venue data — the UI, MCP server,
+    and backend all read from flint/execution/venue_config.py.
+    """
+    from ...execution.venue_config import VENUE_DEFAULTS
+
+    venues = []
+    for vid, vc in VENUE_DEFAULTS.items():
+        if vid == "default":
+            continue
+        # Classify venue type
+        dex_venues = {"drift", "hyperliquid", "jupiter"}
+        vtype = "dex" if vid in dex_venues else "cex"
+
+        venues.append({
+            "id": vid,
+            "label": vid.capitalize() if vid not in ("okx", "dydx", "htx", "mexc") else vid.upper(),
+            "type": vtype,
+            "taker_fee_bps": vc.taker_fee_bps,
+            "maker_fee_bps": vc.maker_fee_bps,
+            "max_leverage": int(vc.max_leverage),
+            "latency_s": vc.base_latency_s,
+        })
+
+    return {"venues": venues, "count": len(venues)}

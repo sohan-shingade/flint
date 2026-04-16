@@ -278,7 +278,7 @@ export default function Setup() {
                     {v.type}
                   </span>
                 </div>
-                <div className="text-[9px] text-ghost/40">{v.dataSource}</div>
+                <div className="text-[9px] text-ghost/40">{v.takerFeeBps} bps taker &middot; {v.maxLeverage}x max</div>
               </button>
             )
           })}

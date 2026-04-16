@@ -365,8 +365,8 @@ export default function BacktestLab() {
       // Auto-set fee rate
       const info = getVenue(stratProfile.venues[0])
       if (info) {
-        const bps = parseFloat(info.takerFee)
-        if (!isNaN(bps)) setFeeRate(bps / 10000)
+        const bps = info.takerFeeBps
+        if (bps != null) setFeeRate(bps / 10000)
       }
     }
 
@@ -1148,7 +1148,7 @@ export default function BacktestLab() {
                       const info = getVenue(v)
                       return (
                         <div key={v} className="text-[9px] text-ghost/50">
-                          {v.toUpperCase()}: {info?.takerFee || '?'} taker / {info?.fillModel || 'default'}
+                          {v.toUpperCase()}: {info ? `${info.takerFeeBps} bps` : '?'} taker
                         </div>
                       )
                     })}
@@ -1197,8 +1197,8 @@ export default function BacktestLab() {
                       setVenue(v)
                       const info = getVenue(v)
                       if (info) {
-                        const bps = parseFloat(info.takerFee)
-                        if (!isNaN(bps)) setFeeRate(bps / 10000)
+                        const bps = info.takerFeeBps
+                        if (bps != null) setFeeRate(bps / 10000)
                       }
                     }}
                     className={inputClass}
@@ -1227,12 +1227,10 @@ export default function BacktestLab() {
                   <div className="col-span-2 p-2 border border-border/30 bg-panel/50 text-[9px]">
                     <div className="text-ghost/60 mb-1">EXECUTION PROFILE</div>
                     <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-ghost/40">
-                      <span>Fill Model:</span><span className="text-ghost/70">{venueInfo.fillModel}</span>
-                      <span>Taker Fee:</span><span className="text-ghost/70">{venueInfo.takerFee}</span>
-                      <span>Maker Fee:</span><span className="text-ghost/70">{venueInfo.makerFee}</span>
-                      <span>Latency:</span><span className="text-ghost/70">{venueInfo.latency}</span>
-                      <span>Depth:</span><span className="text-ghost/70">{venueInfo.dataSource}</span>
-                      <span>Funding:</span><span className="text-ghost/70">{venueInfo.fundingType === 'borrow' ? 'Borrow fees (continuous)' : `Funding rates (${venueInfo.fundingType})`}</span>
+                      <span>Taker Fee:</span><span className="text-ghost/70">{venueInfo.takerFeeBps} bps</span>
+                      <span>Maker Fee:</span><span className="text-ghost/70">{venueInfo.makerFeeBps} bps</span>
+                      <span>Max Leverage:</span><span className="text-ghost/70">{venueInfo.maxLeverage}x</span>
+                      <span>Latency:</span><span className="text-ghost/70">{venueInfo.latencyS}s</span>
                       <span>{venue === 'jupiter' ? 'Borrow Rates:' : 'Funding:'}</span>
                       <span className={venueDataStatus[venue]?.has_funding ? 'text-green-400' : 'text-amber/60'}>
                         {venueDataStatus[venue]?.has_funding

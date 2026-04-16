@@ -584,8 +584,7 @@ export default function DataExplorer() {
                           {v.type}
                         </span>
                       </div>
-                      <div className="text-[9px] text-ghost/40">{v.dataType}</div>
-                      <div className="text-[8px] text-ghost/30 mt-1">{v.dataSource}</div>
+                      <div className="text-[9px] text-ghost/40">{v.takerFeeBps} bps taker &middot; {v.maxLeverage}x</div>
                     </button>
                   )
                 })}
