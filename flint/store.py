@@ -220,7 +220,8 @@ CREATE TABLE IF NOT EXISTS paper_funding_payments (
     rate          DOUBLE NOT NULL,
     payment       DOUBLE NOT NULL,
     position_size DOUBLE NOT NULL,
-    mark_price    DOUBLE NOT NULL
+    mark_price    DOUBLE NOT NULL,
+    PRIMARY KEY (session_id, market, ts)
 );
 """
 

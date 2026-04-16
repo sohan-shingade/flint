@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { EXECUTION_VENUES, DEFAULT_EXECUTION_VENUES } from '../constants/venues'
+import { REGIMES } from '../constants/regimes'
 
 type Step = 'welcome' | 'markets' | 'venues' | 'keys' | 'downloading' | 'done'
 
@@ -34,6 +35,9 @@ export default function Setup() {
   const [heliusKey, setHeliusKey] = useState('')
   const [showKeys, setShowKeys] = useState(false)
   const [selectedExecutionVenues, setSelectedExecutionVenues] = useState<string[]>(DEFAULT_EXECUTION_VENUES)
+  const [useRegimeRange, setUseRegimeRange] = useState(false)
+  const [regimeStartTs, setRegimeStartTs] = useState(0)
+  const [regimeEndTs, setRegimeEndTs] = useState(0)
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress[]>([])
   const [loadingMarkets, setLoadingMarkets] = useState(false)
   const [fetchError, setFetchError] = useState(false)
@@ -83,7 +87,8 @@ export default function Setup() {
     setDownloadProgress([...progress])
 
     const now = Math.floor(Date.now() / 1000)
-    const startTs = now - backfillDays * 86400
+    const startTs = useRegimeRange ? regimeStartTs : now - backfillDays * 86400
+    const endTs = useRegimeRange ? regimeEndTs : now
 
     for (let i = 0; i < selectedMarkets.length; i++) {
       progress[i].status = 'downloading'
@@ -97,7 +102,7 @@ export default function Setup() {
             market: selectedMarkets[i],
             resolution_s: 3600,
             start_ts: startTs,
-            end_ts: now,
+            end_ts: endTs,
             execution_venues: selectedExecutionVenues,
           }),
         })
@@ -173,6 +178,65 @@ export default function Setup() {
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="mb-6">
+          <label className="text-ghost text-[10px] tracking-wider block mb-2">
+            REGIMES <span className="text-ghost/40">— or download by market regime</span>
+          </label>
+          <div className="flex flex-wrap gap-1">
+            {REGIMES.map(r => (
+              <button
+                key={r.id}
+                onClick={() => {
+                  setUseRegimeRange(true)
+                  setRegimeStartTs(r.startTs)
+                  setRegimeEndTs(r.endTs)
+                }}
+                className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${
+                  useRegimeRange && regimeStartTs === r.startTs && regimeEndTs === r.endTs
+                    ? 'bg-opacity-20'
+                    : 'border-border/50'
+                }`}
+                style={{
+                  borderColor: useRegimeRange && regimeStartTs === r.startTs && regimeEndTs === r.endTs
+                    ? r.color : undefined,
+                  color: r.color,
+                }}
+                title={`${r.description} (${r.startDate} to ${r.endDate})`}
+              >
+                <span className="inline-block w-1.5 h-1.5 rounded-full mr-1" style={{ backgroundColor: r.color }} />
+                {r.label}
+              </button>
+            ))}
+            <button
+              onClick={() => {
+                setUseRegimeRange(true)
+                setRegimeStartTs(REGIMES[0].startTs)
+                setRegimeEndTs(REGIMES[REGIMES.length - 1].endTs)
+              }}
+              className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${
+                useRegimeRange && regimeStartTs === REGIMES[0].startTs && regimeEndTs === REGIMES[REGIMES.length - 1].endTs
+                  ? 'border-amber/50 bg-amber-glow text-amber'
+                  : 'border-amber/30 text-amber'
+              }`}
+            >
+              ALL REGIMES
+            </button>
+            {useRegimeRange && (
+              <button
+                onClick={() => setUseRegimeRange(false)}
+                className="px-2 py-1 text-[9px] tracking-wider border border-border text-ghost/50 hover:text-ghost"
+              >
+                CLEAR
+              </button>
+            )}
+          </div>
+          {useRegimeRange && (
+            <p className="text-[9px] text-ghost/50 mt-1">
+              Will download {new Date(regimeStartTs * 1000).toISOString().split('T')[0]} to {new Date(regimeEndTs * 1000).toISOString().split('T')[0]} instead of rolling {backfillDays} days
+            </p>
+          )}
         </div>
 
         {loadingMarkets ? (
