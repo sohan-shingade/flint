@@ -287,7 +287,7 @@ def run_backtest(req: BacktestRequest, request: Request):
 
     # --- Validate input ---
     if req.code is not None and not req.code.strip():
-        raise HTTPException(400, "Strategy code cannot be empty")
+        req.code = None  # treat empty string as "use built-in strategy name"
 
     if req.start_ts >= req.end_ts:
         raise HTTPException(400, "Start date must be before end date")

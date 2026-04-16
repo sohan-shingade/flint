@@ -93,7 +93,7 @@ def run_optimization(req: OptimizeRequest, request: Request):
 
             strategy = load_user_strategy(req.code)
             strategy_cls = type(strategy)
-            params = strategy_cls.parameters()
+            params = strategy.parameters()  # instance call works for both @classmethod and regular
 
             if not params:
                 _set(run_id, status="failed", result={"error": f"{strategy_cls.__name__} has no parameters() defined"})
