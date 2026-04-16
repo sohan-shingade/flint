@@ -659,7 +659,7 @@ export default function BacktestLab() {
       params: {},
       margin_tracking: marginTracking,
     })
-  }, [run, market, resolution, startDate, endDate, capital, feeRate, marginTracking])
+  }, [run, market, resolution, startDate, endDate, capital, feeRate, marginTracking, regimeMode, selectedRegimes, regimeBacktest])
 
   const handleOptimize = useCallback(async () => {
     setValidationError(null)
@@ -1415,20 +1415,22 @@ export default function BacktestLab() {
             </div>
 
             <div className="px-3 pb-3">
-              {/* Regime backtest progress/results */}
-              {regimeMode && regimeBacktest.status === 'running' && regimeBacktest.progress ? (
-                <div className="space-y-2">
+              {/* Regime backtest progress (shown inline, doesn't replace buttons) */}
+              {regimeMode && regimeBacktest.status === 'running' && regimeBacktest.progress && (
+                <div className="space-y-2 mb-3">
                   <div className="flex items-center justify-between text-[10px] tracking-wider">
                     <span className="text-amber animate-pulse">REGIME TESTING</span>
                     <span className="text-ghost">{regimeBacktest.progress.detail}</span>
                   </div>
                   <div className="h-1 bg-border"><div className="h-full bg-amber transition-all" style={{width: `${regimeBacktest.progress.pct}%`}} /></div>
                 </div>
-              ) : regimeMode && regimeBacktest.error ? (
-                <div className="px-2.5 py-1.5 text-[10px] border border-loss/30 bg-loss/5 text-loss/80">[REGIME ERR] {regimeBacktest.error}</div>
-              ) : regimeMode && regimeBacktest.status === 'complete' && regimeBacktest.results ? (
-                <RegimeResults results={regimeBacktest.results} />
-              ) : status === 'running' && progress ? (
+              )}
+              {regimeMode && regimeBacktest.error && (
+                <div className="px-2.5 py-1.5 text-[10px] border border-loss/30 bg-loss/5 text-loss/80 mb-3">[REGIME ERR] {regimeBacktest.error}</div>
+              )}
+
+              {/* Buttons or normal backtest progress */}
+              {status === 'running' && progress ? (
                 /* ── progress bar ─────────────────────── */
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-[10px] tracking-wider">
@@ -1839,6 +1841,13 @@ export default function BacktestLab() {
             )}
             &middot; FEE: {FEE_PRESETS[feePreset]?.label || 'custom'}
           </div>
+        </div>
+      )}
+
+      {/* ── REGIME RESULTS ──────────────────────────── */}
+      {regimeBacktest.status === 'complete' && regimeBacktest.results && (
+        <div className="mt-4" style={{ animation: 'fadeUp 0.3s ease' }}>
+          <RegimeResults results={regimeBacktest.results} />
         </div>
       )}
 
