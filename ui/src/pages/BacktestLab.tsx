@@ -8,6 +8,8 @@ import { RegimeSelector } from '../components/RegimeSelector'
 import { RegimeResults } from '../components/RegimeResults'
 import { useStrategies } from '../hooks/useStrategies'
 import { useOptimize } from '../hooks/useOptimize'
+import { useWalkForward } from '../hooks/useWalkForward'
+import type { WalkForwardResult } from '../hooks/useWalkForward'
 import { useJournal } from '../hooks/useJournal'
 import CodeEditor from '../components/CodeEditor'
 import EquityCurve from '../components/EquityCurve'
@@ -179,10 +181,12 @@ function getPresetDates(preset: RangePreset): { start: string; end: string } | n
 export default function BacktestLab() {
   const { run, status, results, error, progress } = useBacktest()
   const { run: runOptimize, status: optStatus, results: optResults, error: optError, progress: optProgress } = useOptimize()
+  const { run: runWF, status: wfStatus, results: wfResults, error: wfError, progress: wfProgress } = useWalkForward()
   const { runs: journalRuns, refresh: refreshJournal, deleteRun: deleteJournalRun } = useJournal()
   const [showJournal, setShowJournal] = useState(false)
   const [optTrials, setOptTrials] = useState(50)
   const [optMetric, setOptMetric] = useState('sharpe_ratio')
+  const [wfWindows, setWfWindows] = useState(5)
   const { strategies: savedStrategies, save, load, remove, validate, loading: savingStrategy, refresh } = useStrategies()
 
   // Editor state
@@ -637,6 +641,29 @@ export default function BacktestLab() {
       trials: optTrials,
     })
   }, [runOptimize, market, resolution, startDate, endDate, capital, feeRate, optMetric, optTrials])
+
+  const handleWalkForward = useCallback(async () => {
+    setValidationError(null)
+    const startTs = Math.floor(new Date(startDate + 'T00:00:00Z').getTime() / 1000)
+    const endTs = Math.floor(new Date(endDate + 'T23:59:59Z').getTime() / 1000)
+    if (isNaN(startTs) || isNaN(endTs) || startTs >= endTs) {
+      setValidationError('Invalid date range for walk-forward')
+      return
+    }
+    runWF({
+      code: codeRef.current,
+      market,
+      resolution_s: RESOLUTIONS[resolution] || 3600,
+      start_ts: startTs,
+      end_ts: endTs,
+      initial_capital: capital,
+      fee_rate: Math.max(feeRate, 0),
+      metric: optMetric,
+      n_windows: wfWindows,
+      train_pct: 0.7,
+      trials_per_window: Math.min(optTrials, 30),
+    })
+  }, [runWF, market, resolution, startDate, endDate, capital, feeRate, optMetric, optTrials, wfWindows])
 
   // Refresh journal when a backtest completes
   useEffect(() => {
@@ -1806,14 +1833,152 @@ export default function BacktestLab() {
                 </table>
               </div>
             )}
-            <button
-              onClick={handleBacktestBestParams}
-              disabled={status === 'running'}
-              className="mt-3 px-6 py-2.5 text-xs tracking-[0.15em] bg-amber text-void font-semibold hover:bg-amber-dim transition-all disabled:opacity-40"
-            >
-              {status === 'running' ? 'RUNNING...' : '> BACKTEST WITH BEST PARAMS'}
-            </button>
+            <div className="flex items-center gap-2 mt-3">
+              <button
+                onClick={handleBacktestBestParams}
+                disabled={status === 'running'}
+                className="flex-1 px-4 py-2.5 text-xs tracking-[0.15em] bg-amber text-void font-semibold hover:bg-amber-dim transition-all disabled:opacity-40"
+              >
+                {status === 'running' ? 'RUNNING...' : '> BACKTEST BEST PARAMS'}
+              </button>
+              <button
+                onClick={handleWalkForward}
+                disabled={wfStatus === 'running'}
+                className="px-4 py-2.5 text-[10px] tracking-[0.15em] border border-terminal/40 text-terminal hover:bg-terminal/10 disabled:border-border disabled:text-ghost/30 transition-all"
+              >
+                {wfStatus === 'running' ? 'RUNNING...' : 'WALK-FORWARD'}
+              </button>
+              <div className="flex items-center gap-1">
+                <input type="number" value={wfWindows} onChange={e => setWfWindows(Math.max(2, Math.min(20, +e.target.value)))}
+                  className="bg-void border border-border text-ghost text-[10px] px-1.5 py-1 w-10 text-center" min={2} max={20} />
+                <span className="text-[8px] text-ghost/40">folds</span>
+              </div>
+            </div>
           </div>
+
+          {/* Walk-forward progress */}
+          {wfStatus === 'running' && wfProgress && (
+            <div className="border border-terminal/30 bg-terminal/5 p-3 mt-3">
+              <div className="flex items-center justify-between text-[10px] tracking-wider mb-1.5">
+                <span className="text-terminal">WALK-FORWARD — {wfProgress.detail}</span>
+                <span className="text-ghost/50">{wfProgress.elapsed_s?.toFixed(1)}s</span>
+              </div>
+              <div className="w-full h-1.5 bg-border overflow-hidden">
+                <div className="h-full bg-terminal transition-all duration-500" style={{ width: `${wfProgress.pct}%` }} />
+              </div>
+            </div>
+          )}
+
+          {/* Walk-forward error */}
+          {wfError && (
+            <div className="border border-loss/30 bg-loss/5 px-3 py-2 text-loss text-[10px] mt-3">
+              <span className="text-loss/60 mr-1">[WF]</span>{wfError}
+            </div>
+          )}
+
+          {/* Walk-forward results */}
+          {wfResults && (
+            <div className="border border-terminal/30 bg-surface/60 p-4 mt-3" style={{ animation: 'fadeUp 0.3s ease' }}>
+              <div className="flex items-baseline gap-3 mb-3">
+                <span className="font-[var(--font-display)] text-base text-white/90 italic">Walk-Forward Analysis</span>
+                <span className="text-[10px] text-terminal">{(wfResults as WalkForwardResult).n_windows} folds</span>
+              </div>
+
+              {/* Summary metrics */}
+              <div className="grid grid-cols-4 gap-2 mb-3">
+                <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+                  <div className="text-[8px] text-ghost/50 tracking-wider">AVG IS SHARPE</div>
+                  <div className="text-[12px] text-amber font-mono">{(wfResults as WalkForwardResult).avg_is_sharpe?.toFixed(3)}</div>
+                </div>
+                <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+                  <div className="text-[8px] text-ghost/50 tracking-wider">AVG OOS SHARPE</div>
+                  <div className={`text-[12px] font-mono ${(wfResults as WalkForwardResult).avg_oos_sharpe >= 0 ? 'text-gain' : 'text-loss'}`}>
+                    {(wfResults as WalkForwardResult).avg_oos_sharpe?.toFixed(3)}
+                  </div>
+                </div>
+                <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+                  <div className="text-[8px] text-ghost/50 tracking-wider">OVERFIT RATIO</div>
+                  <div className={`text-[12px] font-mono ${
+                    (wfResults as WalkForwardResult).overfitting_ratio < 2 ? 'text-gain'
+                    : (wfResults as WalkForwardResult).overfitting_ratio < 3 ? 'text-amber'
+                    : 'text-loss'
+                  }`}>
+                    {(wfResults as WalkForwardResult).overfitting_ratio < 100
+                      ? (wfResults as WalkForwardResult).overfitting_ratio?.toFixed(2) + 'x'
+                      : 'INF'}
+                  </div>
+                </div>
+                <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+                  <div className="text-[8px] text-ghost/50 tracking-wider">DEGRADATION</div>
+                  {(() => {
+                    const wf = wfResults as WalkForwardResult
+                    const deg = wf.avg_is_sharpe > 0 ? Math.round((1 - wf.avg_oos_sharpe / wf.avg_is_sharpe) * 100) : 0
+                    return (
+                      <div className={`text-[12px] font-mono ${deg < 20 ? 'text-gain' : deg < 50 ? 'text-amber' : 'text-loss'}`}>
+                        {deg}%
+                      </div>
+                    )
+                  })()}
+                </div>
+              </div>
+
+              {/* Per-fold table */}
+              {(wfResults as WalkForwardResult).windows?.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11px] font-mono">
+                    <thead>
+                      <tr className="text-[9px] text-ghost/50 tracking-wider">
+                        <th className="text-left px-2 py-1">FOLD</th>
+                        <th className="text-right px-2 py-1">IS SHARPE</th>
+                        <th className="text-right px-2 py-1">OOS SHARPE</th>
+                        <th className="text-right px-2 py-1">OOS PNL</th>
+                        <th className="text-right px-2 py-1">OOS TRADES</th>
+                        <th className="text-right px-2 py-1">DEGRADE</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(wfResults as WalkForwardResult).windows.map((w) => {
+                        const deg = w.in_sample_sharpe > 0 ? Math.round((1 - w.out_of_sample_sharpe / w.in_sample_sharpe) * 100) : 0
+                        return (
+                          <tr key={w.window_idx} className="border-t border-border/20 hover:bg-terminal/5">
+                            <td className="px-2 py-1 text-ghost/50">#{w.window_idx + 1}</td>
+                            <td className="px-2 py-1 text-right text-amber">{w.in_sample_sharpe.toFixed(3)}</td>
+                            <td className={`px-2 py-1 text-right ${w.out_of_sample_sharpe >= 0 ? 'text-gain' : 'text-loss'}`}>
+                              {w.out_of_sample_sharpe.toFixed(3)}
+                            </td>
+                            <td className={`px-2 py-1 text-right ${w.out_of_sample_pnl >= 0 ? 'text-gain' : 'text-loss'}`}>
+                              ${w.out_of_sample_pnl >= 0 ? '+' : ''}{w.out_of_sample_pnl.toFixed(0)}
+                            </td>
+                            <td className="px-2 py-1 text-right text-ghost">{w.out_of_sample_trades}</td>
+                            <td className={`px-2 py-1 text-right ${deg < 20 ? 'text-gain' : deg < 50 ? 'text-amber' : 'text-loss'}`}>
+                              {deg}%
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Parameter stability */}
+              {Object.keys((wfResults as WalkForwardResult).parameter_stability || {}).length > 0 && (
+                <div className="mt-3 border-t border-border/30 pt-2">
+                  <div className="text-[9px] text-ghost/50 tracking-wider mb-1.5">PARAMETER STABILITY (lower CV = more stable)</div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {Object.entries((wfResults as WalkForwardResult).parameter_stability).map(([name, cv]) => (
+                      <div key={name} className="flex items-center justify-between bg-void/50 px-2 py-1 border border-border/30">
+                        <span className="text-[9px] text-ghost/60">{name}</span>
+                        <span className={`text-[10px] font-mono ${(cv as number) < 0.2 ? 'text-gain' : (cv as number) < 0.5 ? 'text-amber' : 'text-loss'}`}>
+                          {(cv as number).toFixed(3)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
