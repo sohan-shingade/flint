@@ -507,6 +507,7 @@ claude mcp add flint -- python -m flint.mcp_server
 | [Data Providers](docs/guides/data-providers.md) | 15 providers, 7 funding venues, downloading, custom providers |
 | [Live Deployment](docs/guides/live-deployment.md) | Paper trading, Drift/Hyperliquid/CEX setup, risk guards, parity testing |
 | [Architecture](docs/guides/architecture.md) | Execution hierarchy, fill pipeline, Rust engine, regime system |
+| [Web UI](docs/guides/web-ui.md) | All 10 pages: BacktestLab, Paper Trading, Dashboard, DataExplorer |
 | [MCP Integration](docs/guides/mcp-integration.md) | Using Flint with Claude Code and AI models (17 tools) |
 | [Slippage Models](docs/guides/slippage-models.md) | 4-tier impact model, vAMM, calibration, transaction costs |
 | [Safety Rails](docs/validation/safety-rails.md) | Kill switch, risk guards, dry-run, failure scenarios |
