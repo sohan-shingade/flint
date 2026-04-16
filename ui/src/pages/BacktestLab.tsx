@@ -184,6 +184,9 @@ export default function BacktestLab() {
   const { run: runWF, status: wfStatus, results: wfResults, error: wfError, progress: wfProgress } = useWalkForward()
   const { runs: journalRuns, refresh: refreshJournal, deleteRun: deleteJournalRun } = useJournal()
   const [showJournal, setShowJournal] = useState(false)
+  const [compareIds, setCompareIds] = useState<Set<string>>(new Set())
+  const [compareResults, setCompareResults] = useState<any[] | null>(null)
+  const [compareLoading, setCompareLoading] = useState(false)
   const [optTrials, setOptTrials] = useState(50)
   const [optMetric, setOptMetric] = useState('sharpe_ratio')
   const [wfWindows, setWfWindows] = useState(5)
@@ -259,8 +262,35 @@ export default function BacktestLab() {
   // Venue data availability per venue
   const [venueDataStatus, setVenueDataStatus] = useState<Record<string, { has_candles: boolean; has_funding: boolean; has_orderbook: boolean }>>({})
 
+  // Data freshness
+  const [freshness, setFreshness] = useState<any[]>([])
+
   const codeRef = useRef(code)
   codeRef.current = code
+
+  // Compare toggle + fetch
+  const toggleCompare = useCallback((runId: string) => {
+    setCompareIds(prev => {
+      const next = new Set(prev)
+      if (next.has(runId)) next.delete(runId)
+      else if (next.size < 4) next.add(runId)
+      return next
+    })
+  }, [])
+
+  const fetchComparison = useCallback(async () => {
+    if (compareIds.size < 2) return
+    setCompareLoading(true)
+    try {
+      const ids = [...compareIds].join(',')
+      const r = await fetch(`/api/v1/journal/compare?ids=${ids}`)
+      const d = await r.json()
+      setCompareResults(d.comparisons || [])
+    } catch {
+      setCompareResults(null)
+    }
+    setCompareLoading(false)
+  }, [compareIds])
 
   // Detect strategy profile when template changes
   useEffect(() => {
@@ -349,6 +379,16 @@ export default function BacktestLab() {
       }
     }
   }, [stratProfile])
+
+  // Fetch data freshness on mount
+  useEffect(() => {
+    fetch('/api/v1/data/freshness')
+      .then(r => r.json())
+      .then(data => {
+        if (data.freshness) setFreshness(data.freshness)
+      })
+      .catch(() => {})
+  }, [])
 
   // Fetch available markets on mount + auto-detect best date range
   useEffect(() => {
@@ -677,6 +717,52 @@ export default function BacktestLab() {
     const a = document.createElement('a')
     a.href = url
     a.download = `flint-${results.strategy_name}-${results.market}-${Date.now()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [results])
+
+  const handleExportTradesCSV = useCallback(() => {
+    if (!results?.trades?.length) return
+    const header = 'timestamp,side,entry_price,exit_price,size,pnl,holding_hours'
+    const rows = results.trades.map((t: any) => [
+      new Date(t.entry_ts * 1000).toISOString(),
+      t.side,
+      t.entry_price,
+      t.exit_price,
+      t.size,
+      t.pnl,
+      (t.holding_s / 3600).toFixed(2),
+    ].join(','))
+    const csv = [header, ...rows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `flint-trades-${results.strategy_name}-${results.market}-${Date.now()}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [results])
+
+  const handleExportEquityCSV = useCallback(() => {
+    if (!results?.equity_curve?.length) return
+    const header = 'timestamp,equity,drawdown_pct'
+    const ddMap = new Map<number, number>()
+    if (results.drawdown_curve) {
+      for (const [ts, pct] of results.drawdown_curve) {
+        ddMap.set(ts, pct)
+      }
+    }
+    const rows = results.equity_curve.map(([ts, value]: [number, number]) => [
+      new Date(ts * 1000).toISOString(),
+      value,
+      ddMap.get(ts) ?? 0,
+    ].join(','))
+    const csv = [header, ...rows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `flint-equity-${results.strategy_name}-${results.market}-${Date.now()}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }, [results])
@@ -1338,6 +1424,20 @@ export default function BacktestLab() {
                 </div>
               )}
 
+              {/* data staleness alert */}
+              {(() => {
+                const entry = freshness.find(
+                  (f: any) => f.market === market && f.data_type === 'candles' && f.age_s > 86400
+                )
+                if (!entry) return null
+                const hours = Math.round(entry.age_s / 3600)
+                return (
+                  <div className="border border-amber/30 bg-amber/5 px-3 py-1.5 text-[10px] text-amber">
+                    DATA STALE: {market} last synced {hours}h ago — consider downloading fresh data
+                  </div>
+                )
+              })()}
+
               {/* template hint */}
               {activeTemplateKey && TEMPLATES[activeTemplateKey]?.hint && (
                 <div className="px-2.5 py-1.5 text-[10px] text-ghost/50 border border-border/30 tracking-wider">
@@ -1525,9 +1625,23 @@ export default function BacktestLab() {
                   </button>
                   <button
                     onClick={handleExport}
-                    className="px-2 py-0.5 text-[9px] tracking-[0.1em] border border-border text-ghost hover:text-amber hover:border-amber/30 transition-all"
+                    className="px-2 py-0.5 text-[9px] tracking-[0.1em] border border-border text-ghost hover:text-terminal hover:border-terminal/30 transition-all"
                   >
-                    EXPORT
+                    JSON
+                  </button>
+                  <button
+                    onClick={handleExportTradesCSV}
+                    disabled={!results?.trades?.length}
+                    className="px-2 py-0.5 text-[9px] tracking-[0.1em] border border-border text-ghost hover:text-terminal hover:border-terminal/30 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    TRADES CSV
+                  </button>
+                  <button
+                    onClick={handleExportEquityCSV}
+                    disabled={!results?.equity_curve?.length}
+                    className="px-2 py-0.5 text-[9px] tracking-[0.1em] border border-border text-ghost hover:text-terminal hover:border-terminal/30 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    EQUITY CSV
                   </button>
                 </div>
               </div>
@@ -1997,12 +2111,32 @@ export default function BacktestLab() {
         <div className="border border-border bg-surface/60 mb-8" style={{ animation: 'fadeUp 0.3s ease' }}>
           <div className="px-4 py-2 border-b border-border flex items-center justify-between">
             <span className="text-[10px] text-ghost tracking-[0.2em]">BACKTEST.JOURNAL</span>
-            <span className="text-[10px] text-ghost/40">{journalRuns.length} saved runs</span>
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] text-ghost/40">{journalRuns.length} saved runs</span>
+              {compareIds.size >= 2 && (
+                <button
+                  onClick={fetchComparison}
+                  disabled={compareLoading}
+                  className="text-[10px] tracking-[0.15em] px-3 py-1 border border-amber/40 text-amber hover:bg-amber-glow transition-all disabled:opacity-50"
+                >
+                  {compareLoading ? 'LOADING...' : `COMPARE (${compareIds.size})`}
+                </button>
+              )}
+              {compareIds.size > 0 && (
+                <button
+                  onClick={() => { setCompareIds(new Set()); setCompareResults(null) }}
+                  className="text-[10px] text-ghost/40 hover:text-ghost transition-colors"
+                >
+                  CLEAR
+                </button>
+              )}
+            </div>
           </div>
           <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
             <table className="w-full text-[11px] font-mono">
               <thead className="sticky top-0 bg-surface">
                 <tr className="text-[9px] text-ghost/50 tracking-wider border-b border-border">
+                  <th className="w-8 px-2 py-1.5"></th>
                   <th className="text-left px-3 py-1.5">STRATEGY</th>
                   <th className="text-left px-3 py-1.5">MARKET</th>
                   <th className="text-right px-3 py-1.5">PNL</th>
@@ -2015,7 +2149,16 @@ export default function BacktestLab() {
               </thead>
               <tbody>
                 {journalRuns.map((r) => (
-                  <tr key={r.run_id} className="border-t border-border/20 hover:bg-amber-glow/30">
+                  <tr key={r.run_id} className={`border-t border-border/20 hover:bg-amber-glow/30 ${compareIds.has(r.run_id) ? 'bg-amber-glow/20' : ''}`}>
+                    <td className="px-2 py-1.5 text-center">
+                      <input
+                        type="checkbox"
+                        checked={compareIds.has(r.run_id)}
+                        onChange={() => toggleCompare(r.run_id)}
+                        disabled={!compareIds.has(r.run_id) && compareIds.size >= 4}
+                        className="accent-amber w-3 h-3 cursor-pointer disabled:opacity-30"
+                      />
+                    </td>
                     <td className="px-3 py-1.5 text-terminal">{r.strategy_name}</td>
                     <td className="px-3 py-1.5 text-ghost/60">{r.market}</td>
                     <td className={`px-3 py-1.5 text-right ${r.total_pnl >= 0 ? 'text-gain' : 'text-loss'}`}>
@@ -2032,6 +2175,60 @@ export default function BacktestLab() {
                     </td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── COMPARISON PANEL ────────────────────────── */}
+      {compareResults && compareResults.length >= 2 && (
+        <div className="border border-border bg-surface/60 mb-8 p-4" style={{ animation: 'fadeUp 0.3s ease' }}>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-[10px] text-ghost tracking-[0.2em]">COMPARE.RUNS</span>
+            <button onClick={() => setCompareResults(null)} className="text-[10px] text-ghost/40 hover:text-ghost">CLOSE</button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px] font-mono">
+              <thead>
+                <tr className="text-[9px] text-ghost/50 tracking-wider border-b border-border">
+                  <th className="text-left px-3 py-1.5 w-28">METRIC</th>
+                  {compareResults.map((r: any) => (
+                    <th key={r.run_id} className="text-right px-3 py-1.5">
+                      <div className="text-terminal">{r.strategy_name}</div>
+                      <div className="text-ghost/40 font-normal">{r.market}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {([
+                  { key: 'total_pnl', label: 'PNL', fmt: (v: number) => `$${v >= 0 ? '+' : ''}${v?.toFixed(0)}`, best: 'max' as const, colorize: true },
+                  { key: 'total_return_pct', label: 'RETURN %', fmt: (v: number) => `${v >= 0 ? '+' : ''}${(v * 100)?.toFixed(2)}%`, best: 'max' as const, colorize: true },
+                  { key: 'sharpe_ratio', label: 'SHARPE', fmt: (v: number) => v?.toFixed(2), best: 'max' as const, colorize: false },
+                  { key: 'max_drawdown', label: 'MAX DD', fmt: (v: number) => `${(v * 100)?.toFixed(1)}%`, best: 'min' as const, colorize: false },
+                  { key: 'win_rate', label: 'WIN RATE', fmt: (v: number) => `${(v * 100)?.toFixed(1)}%`, best: 'max' as const, colorize: false },
+                  { key: 'total_trades', label: 'TRADES', fmt: (v: number) => String(v), best: 'none' as const, colorize: false },
+                  { key: 'total_fees', label: 'FEES', fmt: (v: number) => `$${v?.toFixed(0)}`, best: 'min' as const, colorize: false },
+                ]).map(metric => {
+                  const values = compareResults.map((r: any) => r[metric.key] ?? 0)
+                  const bestVal = metric.best === 'max' ? Math.max(...values) : metric.best === 'min' ? Math.min(...values) : null
+                  return (
+                    <tr key={metric.key} className="border-t border-border/20">
+                      <td className="px-3 py-1.5 text-[9px] text-ghost/50 tracking-wider">{metric.label}</td>
+                      {compareResults.map((r: any) => {
+                        const val = r[metric.key] ?? 0
+                        const isBest = bestVal !== null && val === bestVal
+                        const baseColor = metric.colorize ? (val >= 0 ? 'text-gain' : 'text-loss') : 'text-terminal'
+                        return (
+                          <td key={r.run_id} className={`px-3 py-1.5 text-right ${isBest ? 'text-gain' : baseColor}`}>
+                            {metric.fmt(val)}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

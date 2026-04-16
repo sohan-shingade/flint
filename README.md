@@ -482,7 +482,7 @@ claude mcp add flint -- python -m flint.mcp_server
 | Live trading — Drift devnet | Beta |
 | Live trading — Hyperliquid testnet | Beta |
 | Live trading — DeFi mainnet | Experimental |
-| CEX live trading (via CCXT) | Roadmap |
+| CEX live trading (via CCXT) | Beta |
 | Cross-venue execution | Beta |
 | MEV scanning | Experimental |
 

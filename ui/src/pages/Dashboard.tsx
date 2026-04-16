@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import AsciiFire from '../components/AsciiFire'
 
@@ -10,9 +10,37 @@ interface MarketData {
   last_ts: number
 }
 
+interface JournalRun {
+  run_id: string
+  strategy_name: string
+  market: string
+  total_pnl: number
+  total_return_pct: number
+  win_rate: number
+  sharpe_ratio: number
+  max_drawdown: number
+  total_trades: number
+  total_fees: number
+  created_at: string
+}
+
+interface StrategyRow {
+  strategy_name: string
+  avg_sharpe: number
+  avg_pnl: number
+  total_runs: number
+  avg_win_rate: number
+  best_sharpe: number
+  avg_drawdown: number
+}
+
+type SortField = 'avg_sharpe' | 'avg_pnl' | 'best_sharpe' | 'avg_win_rate' | 'avg_drawdown' | 'total_runs'
+
 export default function Dashboard() {
   const [markets, setMarkets] = useState<MarketData[]>([])
   const [health, setHealth] = useState<string>('...')
+  const [journalRuns, setJournalRuns] = useState<JournalRun[]>([])
+  const [sortField, setSortField] = useState<SortField>('avg_sharpe')
   useEffect(() => {
     fetch('/api/v1/health')
       .then((r) => r.json())
@@ -22,6 +50,11 @@ export default function Dashboard() {
     fetch('/api/v1/data/markets')
       .then((r) => r.json())
       .then((d) => setMarkets(d.markets || []))
+      .catch(() => {})
+
+    fetch('/api/v1/journal/runs?limit=200')
+      .then((r) => r.json())
+      .then((d) => setJournalRuns(d.runs || d || []))
       .catch(() => {})
   }, [])
 
@@ -33,6 +66,33 @@ export default function Dashboard() {
   const totalCandles = markets.reduce((s, m) => s + m.candle_count, 0)
   const perpMarkets = markets.filter(m => m.market.includes('-PERP'))
   const spotMarkets = markets.filter(m => !m.market.includes('-PERP'))
+
+  const leaderboard = useMemo<StrategyRow[]>(() => {
+    if (journalRuns.length === 0) return []
+    const grouped = new Map<string, JournalRun[]>()
+    for (const run of journalRuns) {
+      const name = run.strategy_name || 'unnamed'
+      if (!grouped.has(name)) grouped.set(name, [])
+      grouped.get(name)!.push(run)
+    }
+    const rows: StrategyRow[] = []
+    for (const [name, runs] of grouped) {
+      const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length
+      rows.push({
+        strategy_name: name,
+        avg_sharpe: avg(runs.map(r => r.sharpe_ratio ?? 0)),
+        avg_pnl: avg(runs.map(r => r.total_pnl ?? 0)),
+        total_runs: runs.length,
+        avg_win_rate: avg(runs.map(r => r.win_rate ?? 0)),
+        best_sharpe: Math.max(...runs.map(r => r.sharpe_ratio ?? 0)),
+        avg_drawdown: avg(runs.map(r => r.max_drawdown ?? 0)),
+      })
+    }
+    const desc: SortField[] = ['avg_sharpe', 'avg_pnl', 'best_sharpe', 'avg_win_rate', 'total_runs']
+    const sign = desc.includes(sortField) ? -1 : 1
+    rows.sort((a, b) => sign * (a[sortField] - b[sortField]))
+    return rows
+  }, [journalRuns, sortField])
 
   return (
     <div>
@@ -200,6 +260,82 @@ export default function Dashboard() {
                         <td className="py-1.5 px-4 text-right text-white/80 tabular-nums text-[11px]">{m.candle_count.toLocaleString()}</td>
                         <td className="py-1.5 px-4 text-ghost text-[10px]">
                           {fmtDate(m.first_ts)} — {fmtDate(m.last_ts)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* strategy leaderboard */}
+          {leaderboard.length > 0 && (
+            <div className="border border-border bg-surface/60">
+              <div className="px-4 py-2.5 border-b border-border flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 bg-amber/50" />
+                  <span className="text-[10px] text-ghost/50 tracking-[0.2em]">STRATEGY LEADERBOARD</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {([
+                    ['avg_sharpe', 'SHARPE'],
+                    ['avg_pnl', 'PNL'],
+                    ['best_sharpe', 'BEST'],
+                    ['avg_win_rate', 'WIN%'],
+                    ['avg_drawdown', 'DD'],
+                    ['total_runs', 'RUNS'],
+                  ] as [SortField, string][]).map(([field, label]) => (
+                    <button
+                      key={field}
+                      onClick={() => setSortField(field)}
+                      className={`text-[9px] px-2 py-1 border transition-colors ${
+                        sortField === field
+                          ? 'border-amber/40 text-amber'
+                          : 'border-border text-ghost/40 hover:text-amber'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px] font-mono">
+                  <thead>
+                    <tr className="text-left text-[9px] text-ghost/50 tracking-wider border-b border-border">
+                      <th className="py-2 px-4">#</th>
+                      <th className="py-2 px-4">STRATEGY</th>
+                      <th className="py-2 px-4 text-right">AVG SHARPE</th>
+                      <th className="py-2 px-4 text-right">AVG PNL</th>
+                      <th className="py-2 px-4 text-right">BEST SHARPE</th>
+                      <th className="py-2 px-4 text-right">WIN RATE</th>
+                      <th className="py-2 px-4 text-right">AVG MAX DD</th>
+                      <th className="py-2 px-4 text-right">RUNS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leaderboard.map((row, i) => (
+                      <tr key={row.strategy_name} className="border-b border-border/20 hover:bg-amber-glow/50 transition-colors">
+                        <td className="py-1.5 px-4 text-ghost/40">{i + 1}</td>
+                        <td className="py-1.5 px-4 text-amber/80 font-medium">{row.strategy_name}</td>
+                        <td className={`py-1.5 px-4 text-right tabular-nums ${row.avg_sharpe > 1 ? 'text-gain' : 'text-white/80'}`}>
+                          {row.avg_sharpe.toFixed(2)}
+                        </td>
+                        <td className={`py-1.5 px-4 text-right tabular-nums ${row.avg_pnl >= 0 ? 'text-gain' : 'text-loss'}`}>
+                          {row.avg_pnl >= 0 ? '+' : ''}{row.avg_pnl.toFixed(2)}
+                        </td>
+                        <td className={`py-1.5 px-4 text-right tabular-nums ${row.best_sharpe > 1 ? 'text-gain' : 'text-white/80'}`}>
+                          {row.best_sharpe.toFixed(2)}
+                        </td>
+                        <td className="py-1.5 px-4 text-right tabular-nums text-white/80">
+                          {(row.avg_win_rate * 100).toFixed(1)}%
+                        </td>
+                        <td className="py-1.5 px-4 text-right tabular-nums text-loss/70">
+                          {(row.avg_drawdown * 100).toFixed(1)}%
+                        </td>
+                        <td className="py-1.5 px-4 text-right tabular-nums text-ghost">
+                          {row.total_runs}
                         </td>
                       </tr>
                     ))}

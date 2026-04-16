@@ -111,6 +111,34 @@ function SessionDetail({ sessionId, onStop, onKill }: {
   const status = useSessionStatus(sessionId)
   const trades = useSessionTrades(sessionId)
   const [confirming, setConfirming] = useState<'stop' | 'kill' | null>(null)
+  const [parityResult, setParityResult] = useState<any>(null)
+  const [parityLoading, setParityLoading] = useState(false)
+
+  async function handleParityTest() {
+    if (!status?.market || !status?.strategy) return
+    setParityLoading(true)
+    setParityResult(null)
+    try {
+      const r = await fetch('/api/v1/backtest/parity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          market: status.market,
+          strategy: status.strategy,
+          start_ts: eqHistory[0]?.ts || 0,
+          end_ts: eqHistory[eqHistory.length - 1]?.ts || Math.floor(Date.now() / 1000),
+          capital: eqHistory[0]?.equity || 10000,
+          fee_rate: 0.001,
+        }),
+      })
+      const d = await r.json()
+      setParityResult(d)
+    } catch {
+      setParityResult({ error: 'Parity test failed' })
+    } finally {
+      setParityLoading(false)
+    }
+  }
 
   // Fetch equity history from DB (has replay + live data)
   const [eqHistory, setEqHistory] = useState<any[]>([])
@@ -257,8 +285,68 @@ function SessionDetail({ sessionId, onStop, onKill }: {
               cancel
             </button>
           )}
+          <button
+            onClick={handleParityTest}
+            disabled={parityLoading || eqHistory.length === 0}
+            className="px-4 py-1.5 text-[10px] tracking-[0.15em] border border-terminal/40 text-terminal hover:bg-terminal/10 disabled:border-border disabled:text-ghost/30 transition-colors"
+          >
+            {parityLoading ? 'TESTING...' : 'PARITY TEST'}
+          </button>
         </div>
       </div>
+
+      {/* parity test results */}
+      {parityResult && !parityResult.error && (
+        <div className="border border-terminal/30 bg-surface/60 p-4" style={{ animation: 'fadeUp 0.3s ease' }}>
+          <div className="flex items-baseline gap-3 mb-3">
+            <span className="font-[var(--font-display)] text-base text-white/90 italic">Parity Report</span>
+            <span className={`text-[10px] tracking-[0.15em] ${parityResult.passed ? 'text-gain' : 'text-loss'}`}>
+              {parityResult.passed ? 'PASS' : 'DIVERGED'}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+              <div className="text-[8px] text-ghost/50 tracking-wider">PNL DIVERGENCE</div>
+              <div className={`text-[12px] font-mono ${Math.abs(parityResult.pnl_divergence_pct || 0) < 2 ? 'text-gain' : 'text-loss'}`}>
+                {fmt(parityResult.pnl_divergence_pct)}%
+              </div>
+            </div>
+            <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+              <div className="text-[8px] text-ghost/50 tracking-wider">FILL PRICE MAE</div>
+              <div className="text-[12px] font-mono text-terminal">${fmt(parityResult.fill_price_mae, 4)}</div>
+            </div>
+            <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+              <div className="text-[8px] text-ghost/50 tracking-wider">EQUITY CORRELATION</div>
+              <div className={`text-[12px] font-mono ${(parityResult.equity_correlation || 0) > 0.95 ? 'text-gain' : 'text-amber'}`}>
+                {fmt(parityResult.equity_correlation, 4)}
+              </div>
+            </div>
+            <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+              <div className="text-[8px] text-ghost/50 tracking-wider">SIGNAL TIMING</div>
+              <div className="text-[12px] font-mono text-terminal">{fmt(parityResult.signal_timing_match_pct)}%</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+              <div className="text-[8px] text-ghost/50 tracking-wider">BACKTEST PNL</div>
+              <div className={`text-[12px] font-mono ${(parityResult.backtest_pnl || 0) >= 0 ? 'text-gain' : 'text-loss'}`}>
+                ${fmt(parityResult.backtest_pnl)}
+              </div>
+            </div>
+            <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+              <div className="text-[8px] text-ghost/50 tracking-wider">PAPER PNL</div>
+              <div className={`text-[12px] font-mono ${(parityResult.paper_pnl || 0) >= 0 ? 'text-gain' : 'text-loss'}`}>
+                ${fmt(parityResult.paper_pnl)}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {parityResult?.error && (
+        <div className="border border-loss/30 bg-loss/5 px-3 py-2 text-loss text-[10px]">
+          <span className="text-loss/60 mr-1">[PARITY]</span>{parityResult.error}
+        </div>
+      )}
 
       {/* metrics grid */}
       <div className="grid grid-cols-3 md:grid-cols-6 gap-px bg-border">
