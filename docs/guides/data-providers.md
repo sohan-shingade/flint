@@ -1,85 +1,57 @@
 # Data Provider Guide
 
-Flint ships with 15 data providers covering Solana on-chain data, CEX candles, Hyperliquid perps, oracle prices, DEX pools, and cross-venue funding rates from 10 venues. All providers are managed by `flint/providers/registry.py`.
+Flint ships with 15 data providers covering Solana on-chain data, CEX candles, oracle prices, DEX pools, and cross-venue funding rates from 7 venues. All providers are managed by `flint/providers/registry.py`.
 
 ---
 
-## Provider Table
+## Provider Overview
 
-| Provider | File | Auth Required | Data |
+| Provider | File | Auth | Data |
 |---|---|---|---|
-| Drift Data API | `providers/drift_candles.py` | None | OHLCV candles (48 markets) |
+| Drift Data API | `providers/drift_candles.py` | None | OHLCV candles (48 perp markets) |
 | Drift S3 | `providers/drift_s3.py` | None | Historical trade records, funding |
-| Drift OI | `providers/open_interest.py` | None | Open interest |
+| Drift OI | `providers/open_interest.py` | None | Open interest (long/short) |
 | Drift Funding | `providers/drift_api.py` | None | Funding rates, L2/L3 orderbook |
 | Hyperliquid Candles | `providers/hyperliquid_candles.py` | None | OHLCV candles for Hyperliquid perps |
-| Birdeye | `providers/birdeye.py` | `FLINT_BIRDEYE_API_KEY` | Any Solana token OHLCV |
-| Helius | `providers/helius.py` | `FLINT_HELIUS_API_KEY` | Liquidations, whale tracking |
+| Birdeye | `providers/birdeye.py` | `FLINT_BIRDEYE_API_KEY` | Any Solana SPL token OHLCV |
+| Helius | `providers/helius.py` | `FLINT_HELIUS_API_KEY` | Liquidations, whale transfers |
 | Pyth | `providers/pyth.py` | None | Oracle prices (20 pairs) |
 | Raydium | `providers/raydium.py` | None | AMM/CLMM pool data |
 | Orca | `providers/orca.py` | None | Whirlpool pool data |
 | GeckoTerminal | `providers/gecko.py` | None | DEX pool OHLCV |
 | Jupiter | `providers/jupiter.py` | None | Swap quotes |
 | CoinGecko | `providers/coingecko.py` | None | Spot candles (BTC, ETH, etc.) |
-| CCXT | `providers/ccxt_provider.py` | Optional (per-exchange) | 100+ CEX exchanges |
-| Cross-venue funding | `providers/funding_rates.py` | None | 10 venues normalized to 1h |
+| CCXT | `providers/ccxt_provider.py` | None (bundled) | 100+ CEX exchanges, volume data |
+| Cross-venue funding | `providers/funding_rates.py` | None | 7 venues normalized to 1h |
 
----
-
-## Multi-Venue Candle Storage
-
-Candle data is stored per-venue in DuckDB. The `candles` table has a `venue` column as part of its primary key:
-
-```sql
-PRIMARY KEY (venue, market, resolution_s, ts)
-```
-
-This means you can have SOL-PERP candles from both Drift and Hyperliquid stored simultaneously, each with their own OHLCV data reflecting the price action on that specific venue.
-
-When you download data, specify which venues to fetch from. The Data Explorer UI includes a venue selector that controls which venue's candles are displayed and downloaded.
-
-### Per-venue data comparison
-
-In the Data Explorer, you can overlay candle data from multiple venues on the same chart (overlay mode) or view them in separate panels (split mode). This is useful for spotting price dislocations and basis between venues.
-
----
-
-## Hyperliquid Candle Provider
-
-`providers/hyperliquid_candles.py` -- `HyperliquidCandleProvider`
-
-Fetches OHLCV candles from Hyperliquid's public API. No API key required. Supports the same market symbols as Drift (e.g., `SOL-PERP`, `BTC-PERP`). Data is stored in the `candles` table with `venue='hyperliquid'`.
-
-This provider was added in Phase 2 (multi-venue support) to enable cross-venue backtesting and funding rate arbitrage strategies.
+All Drift, Pyth, Raydium, Orca, GeckoTerminal, Jupiter, CoinGecko, and CCXT providers are free and require no API keys. Only Birdeye and Helius need keys (both free tier, no credit card).
 
 ---
 
 ## Funding Venues
 
-The cross-venue funding provider (`providers/funding_rates.py`) collects hourly funding rates from 10 venues and normalizes them to a common schema. All are free with no API keys required:
+The cross-venue funding provider (`providers/funding_rates.py`) collects funding rates from 7 perpetual exchanges and normalizes them to a common hourly schema. All are free with no API keys.
 
-| Venue | Source |
-|---|---|
-| Drift | Native provider (`DriftFundingProvider`) |
-| Binance | Public API (`BinanceFundingProvider`) |
-| Hyperliquid | Public API (`HyperliquidFundingProvider`) |
-| OKX | Public API (`OKXFundingProvider`) |
-| Bybit | Public API (`BybitFundingProvider`) |
-| Gate.io | Public API (`GateioFundingProvider`) |
-| Bitget | Public API (`BitgetFundingProvider`) |
-| dYdX | Public API (`DydxFundingProvider`) |
-| MEXC | Via CCXT (`CCXTFundingProvider`) |
-| Phemex | Via CCXT (`CCXTFundingProvider`) |
-| BitMEX | Via CCXT (`CCXTFundingProvider`) |
+| Venue | Source | Symbol Format |
+|---|---|---|
+| Drift | `DriftFundingProvider` (native) | SOL-PERP |
+| Hyperliquid | Public API (`api.hyperliquid.xyz`) | SOL |
+| OKX | Public API | SOL-USDT-SWAP |
+| Bybit | Public API | SOLUSDT |
+| dYdX | Public API | SOL-USD |
+| Gate.io | Public API | SOL_USDT |
+| Bitget | Public API | SOLUSDT |
 
-Funding data is stored in the `venue_funding_rates` DuckDB table and is accessible inside strategies via:
+All exchanges report funding at 8-hour intervals. Flint forward-fills these to hourly resolution so strategies can react to funding changes within each payment window rather than only at settlement times.
+
+Funding data is stored in the `venue_funding_rates` DuckDB table. Access from strategy code:
 
 ```python
-# All venue funding for a market
+# All venue funding for a market (last 24 hours)
 ctx.get_funding_by_venue("SOL-PERP", lookback=24)
 # Returns: {"drift": [(ts, rate), ...], "hyperliquid": [(ts, rate), ...], ...}
 
-# Aggregate funding rate (primary venue)
+# Aggregate funding rate for the primary venue
 ctx.get_funding_rate("SOL-PERP")
 ```
 
@@ -87,11 +59,9 @@ ctx.get_funding_rate("SOL-PERP")
 
 ## API Keys
 
-Most providers work without any credentials. Two providers require free API keys, and CCXT supports optional per-exchange credentials.
-
 ### Birdeye (`FLINT_BIRDEYE_API_KEY`)
 
-Birdeye provides OHLCV candles for any SPL token on Solana -- not just the 48 markets Drift tracks. Get a free key at [birdeye.so](https://birdeye.so/developers) (no credit card required).
+Birdeye provides OHLCV candles for any SPL token on Solana, not just the 48 markets Drift tracks. Get a free key at [birdeye.so](https://birdeye.so/developers) (no credit card required).
 
 ### Helius (`FLINT_HELIUS_API_KEY`)
 
@@ -99,11 +69,7 @@ Helius provides on-chain liquidation events and whale transfer tracking. Get a f
 
 ### CCXT (optional)
 
-CCXT connects to 100+ CEX exchanges. Most support public candle data without keys, but authenticated endpoints require per-exchange credentials.
-
-```bash
-pip install flint[ccxt]
-```
+CCXT connects to 100+ CEX exchanges. Most support public candle data without keys. Authenticated endpoints require per-exchange credentials.
 
 ### Setting Keys
 
@@ -114,13 +80,13 @@ FLINT_BIRDEYE_API_KEY=your_key_here
 FLINT_HELIUS_API_KEY=your_key_here
 ```
 
-Or set them as environment variables with the `FLINT_` prefix:
+Or export as environment variables with the `FLINT_` prefix:
 
 ```bash
 export FLINT_BIRDEYE_API_KEY=your_key_here
 ```
 
-Config is loaded by `flint/config.py` via Pydantic settings -- it merges `flint.yaml`, `.env`, and environment variables. YAML keys flatten: `db.path` -> `db_path`.
+Config is loaded by `flint/config.py` via Pydantic settings. It merges `flint.yaml`, `.env`, and environment variables. YAML keys flatten: `db.path` becomes `db_path`.
 
 Check which providers are enabled and reachable:
 
@@ -138,7 +104,7 @@ curl -s http://localhost:8000/api/v1/data/providers | python3 -m json.tool
 flint init
 ```
 
-Downloads a sample set of SOL-PERP candles from Drift and runs a sanity-check backtest.
+Downloads a sample set of SOL-PERP candles from Drift and runs a sanity-check backtest. This is the fastest way to verify your installation.
 
 ### Via the UI
 
@@ -146,10 +112,10 @@ The Data Explorer page has a download manager with:
 
 - **Venue selector** -- choose Drift, Hyperliquid, or both
 - **Market picker** -- select individual markets or use presets
-- **Presets** -- "Starter Pack" (top 5 markets), "Everything" (all 48 Drift markets + Hyperliquid equivalents + funding from 10 venues)
-- **Date range selector** -- pick start/end dates for the download
+- **Presets** -- "Starter Pack" (top 5 markets), "Everything" (all 48 Drift markets + Hyperliquid equivalents + funding from all venues)
+- **Date range selector** -- pick start/end dates
 
-Download warnings are surfaced in the UI if any venue encounters errors during download (rate limits, connectivity issues, etc.).
+Download warnings are surfaced in the UI if any venue encounters errors (rate limits, 503/403 responses, connectivity issues).
 
 ### Via the CLI
 
@@ -181,9 +147,7 @@ curl -s -X POST http://localhost:8000/api/v1/data/download \
 | `end_ts` | int | End time as unix timestamp (seconds) |
 | `venues` | list[string] | Optional. Venues to download from (default: all enabled) |
 
-### Downloading Multiple Markets
-
-Repeat the download call for each market, or use the UI's bulk download with presets. For multi-market strategies, download all referenced markets before running a backtest.
+For multi-market strategies, download all referenced markets before running a backtest. The UI's bulk download with presets handles this automatically.
 
 ---
 
@@ -196,7 +160,7 @@ curl -s "http://localhost:8000/api/v1/data/check?market=SOL-PERP&start_ts=170925
   | python3 -m json.tool
 ```
 
-Returns a coverage summary including the number of candles available, gaps detected, and the actual date range stored. The BacktestLab UI also checks coverage before running -- if data is missing, it tells you to download it from the Data tab first.
+Returns a coverage summary including the number of candles available, gaps detected, and the actual date range stored. The BacktestLab UI also checks coverage before running and prompts you to download missing data from the Data tab.
 
 ---
 
@@ -214,7 +178,7 @@ The response shows, per market and data type, the timestamp of the most recent r
 
 ## Available and Local Markets
 
-List all markets that can be downloaded (from Drift's 48-market catalog, Hyperliquid, and other providers):
+List all markets that can be downloaded (Drift's 48 perp markets, Drift spot, Hyperliquid, CoinGecko):
 
 ```bash
 curl -s http://localhost:8000/api/v1/data/available-markets | python3 -m json.tool
@@ -228,22 +192,56 @@ curl -s http://localhost:8000/api/v1/data/markets | python3 -m json.tool
 
 ---
 
+## Multi-Venue Candle Storage
+
+Candle data is stored per-venue in DuckDB. The `candles` table uses a composite primary key:
+
+```sql
+PRIMARY KEY (venue, market, resolution_s, ts)
+```
+
+This means you can store SOL-PERP candles from both Drift and Hyperliquid simultaneously, each reflecting the price action on that specific venue. In the Data Explorer, you can overlay candle data from multiple venues on the same chart (overlay mode) or view them in separate panels (split mode) to spot price dislocations.
+
+---
+
 ## Cross-Venue Funding Analysis
 
-The Data Explorer lets you overlay funding rates from all 10 venues on one chart. When one venue's funding diverges from the rest, there is a potential arbitrage opportunity.
+The Data Explorer lets you overlay funding rates from all venues on one chart. When one venue's funding diverges from the rest, there is a potential arbitrage opportunity.
 
-Query funding rates by venue via the API:
+Query funding rates by venue:
 
 ```bash
 curl -s "http://localhost:8000/api/v1/data/funding?market=SOL-PERP&venue=drift&lookback=168" \
   | python3 -m json.tool
 ```
 
-Or get the cross-market correlation matrix:
+Get the cross-market correlation matrix:
 
 ```bash
 curl -s http://localhost:8000/api/v1/data/correlation | python3 -m json.tool
 ```
+
+---
+
+## Jupiter Perps Limitations
+
+Jupiter Perps has no historical borrow rate or volume API. Historical backfill is not currently available:
+
+- **Borrow rates**: Jupiter's `perps-api.jup.ag` provides current rates only. Forward collection via `JupiterBorrowCollector` works but only accumulates going forward.
+- **Volume**: Approximated from Helius Enhanced Transaction USDC transfers (collateral proxy, not notional). Limited to recent data on the free tier.
+- **No historical OHLCV**: Jupiter Perps has no candle endpoint. Use Pyth oracle prices instead.
+
+Strategies that depend on Jupiter Perps borrow rate history or volume should not be backtested beyond the data that has been forward-collected.
+
+---
+
+## Orca and Raydium (Spot DEXes)
+
+Orca and Raydium are spot DEXes. They have no funding rates (that is a perpetuals concept). Available data:
+
+- **Current pool data**: TVL, reserves, fee rates -- via native APIs
+- **Historical OHLCV + volume**: Via GeckoTerminal (free, no key) for any Solana pool
+- **Tick-level liquidity**: Orca Whirlpools via `OrcaTickFetcher` (on-chain RPC)
 
 ---
 
@@ -252,21 +250,16 @@ curl -s http://localhost:8000/api/v1/data/correlation | python3 -m json.tool
 1. **Create the provider file**: `flint/providers/my_provider.py`
 
 ```python
-from .base import DataProvider
+from .base import CandleProvider
 
-class MyProvider(DataProvider):
-    @property
-    def name(self) -> str:
-        return "my_provider"
-
-    def is_available(self) -> bool:
-        # Return False if a required API key is missing, etc.
-        return True
-
-    def supported_data_types(self) -> list[str]:
-        return ["candles"]
-
-    async def fetch_candles(self, market: str, start_ts: int, end_ts: int, resolution: str) -> list:
+class MyProvider(CandleProvider):
+    def fetch_candles(
+        self,
+        market: str,
+        resolution_s: int,
+        start_ts: int,
+        end_ts: int,
+    ) -> list:
         # Fetch and return a list of Candle objects
         ...
 ```
@@ -281,13 +274,13 @@ providers:
     enabled: true
 ```
 
-The registry (`registry.py`) reads this config and calls `is_available()` at startup. Disabled or unavailable providers are skipped silently.
+The registry (`registry.py`) reads this config and checks provider availability at startup. Disabled or unavailable providers are skipped silently.
 
 ---
 
 ## DuckDB Tables
 
-All fetched data is stored in the local DuckDB file (default path configured in `flint.yaml`). The tables are:
+All fetched data is stored in the local DuckDB file (path configured in `flint.yaml`). The 12 tables are:
 
 | Table | Data |
 |---|---|
@@ -304,6 +297,4 @@ All fetched data is stored in the local DuckDB file (default path configured in 
 | `tick_snapshots` | CLMM tick data for concentrated liquidity pools |
 | `sync_metadata` | Last-fetched timestamps per source |
 
-Live trading sessions add additional tables: `live_sessions`, `live_orders`, `live_fills`, `live_equity_history`.
-
-Access via the `FlintStore` singleton (`app.state.store`) -- never create a new DuckDB connection directly. All store methods use `threading.Lock` for thread safety.
+Access data via the `FlintStore` singleton (`app.state.store`). Never create a new DuckDB connection directly. All store methods use `threading.Lock` for thread safety.

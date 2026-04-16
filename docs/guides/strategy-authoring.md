@@ -1,30 +1,23 @@
 # Strategy Authoring Guide
 
-This guide covers everything you need to write, test, and optimize trading strategies in Flint -- from simple signal-based strategies to multi-venue cross-exchange arbitrage.
+This guide covers writing, testing, and optimizing trading strategies in Flint, from simple signal-based strategies to multi-market cross-venue arbitrage.
+
+---
 
 ## Overview
 
-All strategies inherit from the `Strategy` abstract base class in `flint/strategy/base.py`. Flint includes **20 built-in strategy templates** covering momentum, mean reversion, funding rate harvesting, cross-venue arbitrage, basis trading, and MEV monitoring. User strategies live in `strategies/user/` (gitignored) and are loaded via the API or UI.
+All strategies inherit from the `Strategy` abstract base class in `flint/strategy/base.py`. Flint ships with 20 built-in strategy templates covering momentum, mean reversion, funding rate harvesting, cross-venue arbitrage, basis trading, and MEV monitoring. User strategies live in `strategies/user/` (gitignored) and are loaded via the API or the BacktestLab code editor.
 
 There are two strategy styles:
 
 - **v1 (Signal-based)**: `on_candle()` returns `Signal.BUY`, `Signal.SELL`, or `Signal.HOLD`. The engine handles position sizing and order placement.
-- **v2 (Context-based)**: `on_candle()` calls `ctx.market_order()`, `ctx.limit_order()`, etc. directly and returns `Signal.HOLD`. Full control over order logic.
-
-And four strategy types (auto-detected by BacktestLab):
-
-| Type | Description | Detection |
-|------|-------------|-----------|
-| **Single-venue** | Trades one market on one venue | No `venue=` param, no `get_candles()` calls |
-| **Multi-market** | Reads data from multiple markets | Uses `ctx.get_candles("OTHER-MARKET")` |
-| **Multi-venue** | Trades across Drift + Hyperliquid | Uses `venue=` param on order methods |
-| **Monitor** | Observes markets without trading | No order methods called |
+- **v2 (Context-based)**: `on_candle()` calls `ctx.market_order()`, `ctx.stop_order()`, etc. directly and returns `Signal.HOLD`. Full control over order logic.
 
 ---
 
 ## Strategy ABC
 
-Every strategy must implement these three members:
+Every strategy must implement three members defined in `flint/strategy/base.py`:
 
 ```python
 from flint.strategy.base import Strategy
@@ -45,15 +38,15 @@ class MyStrategy(Strategy):
 ```
 
 - `name` -- unique identifier shown in the UI and results.
-- `on_candle(candle, history, ctx)` -- called on every bar. `candle` is the current bar; `history` is all bars up to (but not including) the current one.
+- `on_candle(candle, history, ctx)` -- called on every bar. `candle` is the current bar; `history` is all bars up to (but not including) the current one. `ctx` is the `ExecutionContext` (None in v1-only mode).
 - `reset()` -- called before every backtest run to clear accumulated state (counters, EMAs, etc.).
-- `parameters()` -- optional classmethod for Optuna optimization (see below).
+- `parameters()` -- optional classmethod for Optuna optimization (see the Optimization section below).
 
 ---
 
 ## v1: Signal-Based Strategy
 
-Return `Signal.BUY`, `Signal.SELL`, or `Signal.HOLD`. The engine opens/closes positions automatically using the configured fee rate and position sizing.
+Return `Signal.BUY`, `Signal.SELL`, or `Signal.HOLD`. The engine opens and closes positions automatically using the configured fee rate and position sizing.
 
 ```python
 from flint.strategy.base import Strategy
@@ -85,92 +78,128 @@ class RSIStrategy(Strategy):
         elif rsi_val > self.overbought:
             return Signal.SELL
         return Signal.HOLD
+
+    @classmethod
+    def parameters(cls) -> dict:
+        return {
+            "period":     {"type": "int",   "low": 5,   "high": 100, "default": 14},
+            "oversold":   {"type": "float", "low": 10.0, "high": 40.0, "default": 30.0},
+            "overbought": {"type": "float", "low": 60.0, "high": 90.0, "default": 70.0},
+        }
 ```
 
-Available indicators in `flint.indicators`: `sma`, `ema`, `wma`, `rsi`, `stochastic`, `macd`, `bollinger`, `bollinger_width`, `atr`, `volatility`, `vwap`, `volume_ratio`, `roc`, `adx`, `z_score`, `highest_high`, `lowest_low` -- all take `(history, period)` and return floats.
+Available indicators in `flint.indicators`: `sma`, `ema`, `wma`, `rsi`, `stochastic`, `macd`, `bollinger`, `bollinger_width`, `atr`, `volatility`, `vwap`, `volume_ratio`, `roc`, `adx`, `z_score`, `highest_high`, `lowest_low`. All take `(history, period)` and return floats.
 
 ---
 
 ## v2: Context-Based Strategy
 
-Use the `ExecutionContext` (`ctx`) to place orders directly. Always return `Signal.HOLD` -- signals are ignored when you manage orders manually.
+Use the `ExecutionContext` (`ctx`) to place orders directly. Always return `Signal.HOLD` since the engine ignores signal values when you manage orders manually.
 
 ```python
 from flint.strategy.base import Strategy
 from flint.models import Candle, Signal, Side
 from flint import indicators
 
-class BollingerBreakoutStrategy(Strategy):
-    def __init__(self, period: int = 20, std_dev: float = 2.0, size: float = 0.1):
-        self.period = period
-        self.std_dev = std_dev
+class MultiMarketFundingArb(Strategy):
+    """Cross-venue funding rate arbitrage.
+
+    Compares funding between Drift and Hyperliquid. When the spread is
+    wide enough, goes long on the venue paying less funding and short
+    on the venue paying more.
+    """
+
+    def __init__(self, entry_threshold: float = 0.0005, size: float = 0.1):
+        self.entry_threshold = entry_threshold
         self.size = size
 
     @property
     def name(self) -> str:
-        return f"BBBreakout({self.period})"
+        return "funding_arb"
 
     def reset(self) -> None:
         pass
 
     def on_candle(self, candle: Candle, history: list[Candle], ctx=None) -> Signal:
-        if ctx is None or len(history) < self.period:
+        if ctx is None:
             return Signal.HOLD
 
-        closes = [c.close for c in history] + [candle.close]
-        upper, mid, lower = indicators.bollinger(closes, self.period, self.std_dev)
+        # Compare funding rates across venues
+        funding = ctx.get_funding_by_venue("SOL-PERP", lookback=1)
+        drift_rates = funding.get("drift", [])
+        hyper_rates = funding.get("hyperliquid", [])
 
-        pos = ctx.position("SOL-PERP")
+        if not drift_rates or not hyper_rates:
+            return Signal.HOLD
 
-        if pos is None:
-            if candle.close > upper:
-                ctx.market_order("SOL-PERP", Side.LONG, self.size, tag="bb_break_up")
-            elif candle.close < lower:
-                ctx.market_order("SOL-PERP", Side.SHORT, self.size, tag="bb_break_down")
-        else:
-            if pos.side == Side.LONG and candle.close < mid:
-                ctx.close_position("SOL-PERP")
-            elif pos.side == Side.SHORT and candle.close > mid:
-                ctx.close_position("SOL-PERP")
+        drift_rate = drift_rates[-1][1]
+        hyper_rate = hyper_rates[-1][1]
+        spread = hyper_rate - drift_rate
+
+        if spread > self.entry_threshold:
+            # Hyperliquid paying more: long Drift, short Hyperliquid
+            ctx.market_order("SOL-PERP", Side.LONG, self.size, venue="drift")
+            ctx.market_order("SOL-PERP", Side.SHORT, self.size, venue="hyperliquid")
+        elif spread < -self.entry_threshold:
+            # Drift paying more: long Hyperliquid, short Drift
+            ctx.market_order("SOL-PERP", Side.LONG, self.size, venue="hyperliquid")
+            ctx.market_order("SOL-PERP", Side.SHORT, self.size, venue="drift")
 
         return Signal.HOLD
+
+    @classmethod
+    def parameters(cls) -> dict:
+        return {
+            "entry_threshold": {"type": "float", "low": 0.0001, "high": 0.005, "default": 0.0005},
+            "size":            {"type": "float", "low": 0.01, "high": 1.0, "default": 0.1},
+        }
+```
+
+Multi-venue backtests require `capital_allocation` in the request:
+
+```json
+{
+  "strategy": "funding_arb",
+  "market": "SOL-PERP",
+  "capital_allocation": {"drift": 5000, "hyperliquid": 5000},
+  "margin_tracking": true
+}
 ```
 
 ---
 
 ## ExecutionContext API
 
-The `ctx` parameter is an instance of `ExecutionContext` (defined in `flint/execution/context.py`). All concrete implementations -- `BacktestContext`, `PaperBroker`, `LiveDriftContext`, `LiveHyperliquidContext`, `MultiVenueLiveContext` -- share the same interface. Strategies deploy to any venue without modification.
+The `ctx` parameter is an instance of `ExecutionContext` (defined in `flint/execution/context.py`). All implementations -- `BacktestContext`, `PaperBroker`, `LiveDriftContext`, `LiveHyperliquidContext`, `MultiVenueLiveContext` -- share the same interface. Strategies deploy to any execution environment without modification.
 
 ### State Properties
 
 | Property | Type | Description |
 |---|---|---|
-| `ctx.account` | `AccountState` | Equity, cash, unrealized PnL (aggregated across all venues) |
+| `ctx.account` | `AccountState` | Equity, cash, unrealized PnL (aggregated across venues) |
 | `ctx.positions` | `list[PositionInfo]` | All open positions (across all venues) |
 | `ctx.pending_orders` | `list[Order]` | Unfilled orders |
-| `ctx.current_candle` | `Candle \| None` | The bar being processed |
+| `ctx.current_candle` | `Candle` or `None` | The bar being processed |
 | `ctx.timestamp` | `int` | Current unix timestamp (seconds) |
-| `ctx.markets` | `list[str]` | Available markets in this context |
 
 ### Order Methods
 
 All order methods accept an optional `venue` parameter. In single-venue backtests, venue defaults to `"default"`. In multi-venue backtests and live trading, specify the venue explicitly.
 
 ```python
-# Market order -- immediate fill at close price
+# Market order -- fills at close price (backtest) or market price (live)
 ctx.market_order(market, side, size, reduce_only=False, tag="", venue="default") -> str
 
 # Limit order -- resting order at a specific price
 ctx.limit_order(market, side, size, price, reduce_only=False, tag="", venue="default") -> str
 
-# Stop-loss order -- triggers market sell at trigger_price
+# Stop-loss order -- triggers a market order at trigger_price
 ctx.stop_order(market, side, size, trigger_price, tag="", venue="default") -> str
 
-# Take-profit order
+# Take-profit order -- triggers a market order when price reaches target
 ctx.take_profit_order(market, side, size, trigger_price, tag="", venue="default") -> str
 
-# Cancel a specific order
+# Cancel a specific order by ID
 ctx.cancel(order_id) -> bool
 
 # Cancel all orders (optionally for one market)
@@ -180,7 +209,7 @@ ctx.cancel_all(market=None) -> int
 ### Convenience Methods
 
 ```python
-# Close entire position for market+venue
+# Close entire position for a market on a venue
 ctx.close_position(market, venue="default") -> str | None
 
 # Get a single position
@@ -193,12 +222,11 @@ ctx.venue_positions(venue) -> list[PositionInfo]
 ctx.venue_balance(venue) -> float
 ctx.venue_balances() -> dict[str, float]
 
-# Transfer capital between venues (async -- arrives after configurable delay)
+# Transfer capital between venues (arrives after configurable delay)
 ctx.transfer(from_venue, to_venue, amount) -> bool
 
 # Pre-trade cost estimation
 ctx.estimate_cost(market, size_usd) -> CostEstimate
-# cost.exchange_fee_usd + cost.network_fee_usd == cost.total
 ```
 
 ### Market Data Methods
@@ -223,23 +251,9 @@ ctx.get_open_interest_history(market=None, lookback=24) -> list[tuple]
 
 ---
 
-## Single-Venue Strategies
-
-The simplest strategy type. Trade one market on one venue. In the BacktestLab UI, select the venue from the dropdown (Drift is the default). The engine applies the selected venue's fee schedule and fill model.
-
-Examples: Momentum, RSI, Bollinger, EMA Crossover, MACD Divergence, Grid Trader.
-
-```python
-# The venue is determined by the BacktestLab dropdown or API request.
-# No venue= param needed in the strategy code.
-ctx.market_order("SOL-PERP", Side.LONG, 0.1)
-```
-
----
-
 ## Multi-Market Strategies
 
-Pass a `Dict[str, List[Candle]]` to the engine to enable multi-market mode. Use `ctx.get_candles()` inside your strategy to read data from any market.
+Use `ctx.get_candles()` to read data from markets other than the one being iterated over. The UI auto-detects `ctx.get_candles("MARKET")` calls in the code editor and prompts you to download data for each referenced market.
 
 ```python
 def on_candle(self, candle: Candle, history: list[Candle], ctx=None) -> Signal:
@@ -253,7 +267,6 @@ def on_candle(self, candle: Candle, history: list[Candle], ctx=None) -> Signal:
 
     btc_momentum = (btc[-1].close - btc[-2].close) / btc[-2].close
 
-    # Trade SOL based on BTC direction
     if btc_momentum > 0.005:
         ctx.market_order("SOL-PERP", Side.LONG, 0.1)
     elif btc_momentum < -0.005:
@@ -262,86 +275,42 @@ def on_candle(self, candle: Candle, history: list[Candle], ctx=None) -> Signal:
     return Signal.HOLD
 ```
 
-The UI auto-detects `ctx.get_candles("MARKET")` calls in the strategy editor and prompts you to select data for each referenced market. No additional configuration needed.
-
-Examples: BTC Correlation, Beta-Hedged, Dual Timeframe.
+The engine accepts `Dict[str, List[Candle]]` for multi-market mode. No additional configuration needed beyond downloading the data.
 
 ---
 
-## Multi-Venue (Cross-Venue) Strategies
+## All 20 Built-In Strategy Templates
 
-Specify `venue=` on order methods to route to a particular venue. Position keys are `(venue, market)` -- the engine tracks positions per venue separately.
+| File | Style | Category | Description |
+|---|---|---|---|
+| `momentum.py` | v1 | trend | Rate-of-change momentum |
+| `ema_crossover.py` | v1 | trend | Fast/slow EMA crossover |
+| `ma_crossover.py` | v1 | trend | Simple MA crossover |
+| `rsi.py` | v1 | mean-rev | RSI overbought/oversold |
+| `bollinger.py` | v1 | mean-rev | Bollinger Band mean reversion |
+| `mean_reversion.py` | v1 | mean-rev | Z-score mean reversion |
+| `macd_divergence.py` | v1 | trend | MACD histogram divergence |
+| `rsi_macd_combo.py` | v2 | multi-signal | RSI + MACD combined signals |
+| `atr_breakout.py` | v2 | trend | ATR-based breakout with stops |
+| `breakout_momentum.py` | v2 | trend | Breakout momentum with confirmation |
+| `momentum_breakout.py` | v2 | trend | Volume-confirmed momentum breakout |
+| `dual_timeframe.py` | v2 | trend | Dual timeframe trend alignment |
+| `vwap_reversion.py` | v2 | mean-rev | VWAP reversion with stops |
+| `grid_trader.py` | v2 | defi | Grid trading with limit orders |
+| `funding_harvest.py` | v2 | defi | Single-venue funding collection |
+| `funding_arb.py` | v2 | defi | Cross-venue funding rate arbitrage |
+| `multi_venue_funding.py` | v2 | defi | Multi-venue delta-neutral harvest |
+| `funding_mean_reversion.py` | v2 | defi | Bollinger bands on funding rates |
+| `basis_trade.py` | v2 | defi | Cross-venue basis trade |
+| `mev_arb_monitor.py` | v2 | monitor | MEV arbitrage opportunity scanner (no trades) |
 
-```python
-def on_candle(self, candle: Candle, history: list[Candle], ctx=None) -> Signal:
-    if ctx is None:
-        return Signal.HOLD
-
-    # Compare funding rates across venues
-    drift_funding = ctx.get_funding_by_venue("SOL-PERP", lookback=1).get("drift", [])
-    hyper_funding = ctx.get_funding_by_venue("SOL-PERP", lookback=1).get("hyperliquid", [])
-
-    if not drift_funding or not hyper_funding:
-        return Signal.HOLD
-
-    drift_rate = drift_funding[-1][1]
-    hyper_rate = hyper_funding[-1][1]
-    spread = hyper_rate - drift_rate
-
-    if spread > 0.0005:  # Hyperliquid paying more
-        # Long on Drift (pay low funding), short on Hyperliquid (collect high funding)
-        ctx.market_order("SOL-PERP", Side.LONG, size, venue="drift")
-        ctx.market_order("SOL-PERP", Side.SHORT, size, venue="hyperliquid")
-
-    return Signal.HOLD
-```
-
-Enable multi-venue in the backtest request:
-
-```json
-{
-  "strategy": "funding_arb",
-  "market": "SOL-PERP",
-  "capital_allocation": {"drift": 5000, "hyperliquid": 5000},
-  "margin_tracking": true
-}
-```
-
-Per-venue fee/margin configs are in `flint/execution/venue_config.py` with presets for Drift, Hyperliquid, Binance, OKX, Bybit, and dYdX.
-
-Examples: FundingArb, BasisTrade, MultiVenueFunding.
+Strategy source files are in `flint/strategy/`. Per-strategy documentation is in `docs/strategies/`.
 
 ---
 
-## Monitor Strategies (No Trades)
+## Optimization with Optuna
 
-Monitor strategies observe market conditions without placing any trades. They are useful for MEV research, alerting, and data collection.
-
-```python
-class MevArbMonitor(Strategy):
-    """Monitors CLMMs for arbitrage opportunities without trading."""
-
-    def on_candle(self, candle, history, ctx=None):
-        if ctx is None:
-            return Signal.HOLD
-
-        # Scan for arb opportunities, log findings, but never trade
-        orderbook = ctx.get_orderbook()
-        funding = ctx.get_funding_rate()
-        # ... analysis logic ...
-
-        return Signal.HOLD
-```
-
-The BacktestLab detects monitor strategies (no order method calls in the code) and adjusts the UI accordingly -- no capital or fee configuration needed.
-
-Examples: MevArbMonitor.
-
----
-
-## Optuna Optimization
-
-Override `parameters()` to declare which constructor arguments the optimizer should search:
+Override the `parameters()` classmethod to declare which constructor arguments the optimizer should search:
 
 ```python
 @classmethod
@@ -353,11 +322,19 @@ def parameters(cls) -> dict:
     }
 ```
 
-Supported types: `int`, `float`, `categorical` (add `"choices": [...]`).
+Supported types:
 
-The optimizer calls `parameters()`, samples values via Optuna, instantiates the strategy with those values, runs a full backtest, and records the Sharpe ratio as the objective. All 20 built-in strategies support optimization via `parameters()`.
+| Type | Fields | Example |
+|---|---|---|
+| `int` | `low`, `high`, `default` | `{"type": "int", "low": 5, "high": 100}` |
+| `float` | `low`, `high`, `default` | `{"type": "float", "low": 0.01, "high": 0.5}` |
+| `categorical` | `choices`, `default` | `{"type": "categorical", "choices": ["ema", "sma"]}` |
 
-Trigger via the API:
+The optimizer calls `parameters()`, samples values via Optuna, instantiates the strategy with those values, runs a full backtest, and records the chosen metric as the objective. All 20 built-in strategies support optimization.
+
+### Running Optimization
+
+Via the API:
 
 ```bash
 curl -s -X POST http://localhost:8000/api/v1/optimize/run \
@@ -366,26 +343,45 @@ curl -s -X POST http://localhost:8000/api/v1/optimize/run \
        "start_ts": 1709251200, "end_ts": 1743465600}'
 ```
 
-Or via the UI -- after any backtest run, click "Optimize" to launch a parameter search. Results show a ranked table of all trials with one-click "backtest with best params."
+Via the UI: after any backtest run, click "Optimize" to launch a parameter search. Results show a ranked table of all trials with one-click "backtest with best params."
 
-Supports Bayesian search, grid search, and random search.
+Supports Bayesian search (default, TPE sampler), grid search, and random search. Metrics: `sharpe_ratio`, `total_pnl`, `win_rate`, `max_drawdown`, `sortino`.
+
+### Walk-Forward Validation
+
+For more robust results, Flint supports walk-forward optimization. This splits the data into sequential train/test windows, optimizes on each training window, then validates on the following out-of-sample test window. This guards against overfitting to a single in-sample period.
 
 ---
 
 ## Strategy Loader and Security
 
-User strategies are loaded dynamically. The loader uses AST validation to block unsafe code before execution.
+User strategies are loaded dynamically by `flint/strategy/loader.py`. The loader uses AST validation to block unsafe code before execution.
 
-**Allowed imports only** -- any import outside this list is rejected at load time:
+### Allowed Imports
+
+Any import outside this list is rejected at load time:
 
 ```
 flint, numpy, math, statistics, collections, dataclasses,
-typing, enum, abc, functools, itertools, operator
+typing, enum, abc, functools, itertools, operator, __future__
 ```
 
-Dangerous builtins (`eval`, `exec`, `open`, `__import__`, etc.) are also blocked. The backtest engine enforces a 300-second timeout and allows a maximum of 5 concurrent runs.
+### Blocked Builtins
 
-Save a user strategy via the API:
+These builtins are blocked in user strategy code:
+
+```
+eval, exec, compile, __import__, breakpoint,
+globals, locals, vars, open
+```
+
+Dangerous attribute accesses (`system`, `popen`, `spawn`, `call`, `check_output`, `getenv`, `environ`, `listdir`, `remove`, `rmdir`, `unlink`) are also blocked.
+
+The backtest engine enforces a 300-second timeout and allows a maximum of 5 concurrent runs.
+
+### Saving User Strategies
+
+Via the API:
 
 ```bash
 curl -s -X POST http://localhost:8000/api/v1/user-strategies \
@@ -397,29 +393,25 @@ Or paste directly into the Monaco code editor in BacktestLab.
 
 ---
 
-## All 20 Built-In Strategy Templates
+## Common Pitfalls
 
-| File | Style | Type | Description |
-|---|---|---|---|
-| `momentum.py` | v1 | Single-venue | Rate-of-change momentum |
-| `ema_crossover.py` | v1 | Single-venue | Fast/slow EMA crossover |
-| `ma_crossover.py` | v1 | Single-venue | Simple MA crossover |
-| `rsi.py` | v1 | Single-venue | RSI overbought/oversold |
-| `bollinger.py` | v1 | Single-venue | Bollinger Band mean reversion |
-| `mean_reversion.py` | v1 | Single-venue | Z-score mean reversion |
-| `macd_divergence.py` | v1 | Single-venue | MACD histogram divergence |
-| `rsi_macd_combo.py` | v2 | Single-venue | RSI + MACD combined signals |
-| `atr_breakout.py` | v2 | Single-venue | ATR-based breakout with stops |
-| `breakout_momentum.py` | v2 | Single-venue | Breakout momentum with confirmation |
-| `dual_timeframe.py` | v2 | Multi-market | Dual timeframe trend alignment |
-| `vwap_reversion.py` | v2 | Single-venue | VWAP reversion with stops |
-| `grid_trader.py` | v2 | Single-venue | Grid trading with limit orders |
-| `momentum_breakout.py` | v2 | Single-venue | Volume-confirmed momentum breakout |
-| `funding_harvest.py` | v2 | Single-venue | Single-venue funding collection |
-| `funding_arb.py` | v2 | Multi-venue | Cross-venue funding rate arbitrage |
-| `multi_venue_funding.py` | v2 | Multi-venue | Multi-venue delta-neutral harvest |
-| `funding_mean_reversion.py` | v2 | Single-venue | Funding rate mean reversion |
-| `basis_trade.py` | v2 | Multi-venue | Cross-venue basis trade |
-| `mev_arb_monitor.py` | v2 | Monitor | MEV arbitrage opportunity scanner |
+### Not Enough History
 
-See `docs/strategies/` for per-strategy README files with detailed descriptions and parameter references.
+If your strategy uses a 50-period SMA but there are only 20 candles in `history`, the indicator will either fail or return a meaningless value. Always guard with a length check:
+
+```python
+if len(history) < self.period:
+    return Signal.HOLD
+```
+
+### Look-Ahead Bias
+
+Never peek at future data. The `history` list contains only candles strictly before the current one. The `candle` parameter is the current bar. Using `candle.close` to make a decision is fine (the engine fills at the close price). Reading from a future index in history is not.
+
+### Overfitting
+
+High Sharpe ratios on in-sample data do not guarantee out-of-sample performance. Use walk-forward validation and keep the parameter count low. A strategy with 2--3 parameters is usually more robust than one with 10.
+
+### State Leaking Between Runs
+
+If your strategy accumulates state (counters, rolling windows, position flags), make sure `reset()` clears all of it. The optimizer runs many trials, and leftover state from a previous trial will corrupt the next one.
