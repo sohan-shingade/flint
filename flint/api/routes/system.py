@@ -119,3 +119,19 @@ def list_venues():
         })
 
     return {"venues": venues, "count": len(venues)}
+
+
+@router.get("/regimes")
+def list_regimes():
+    """List all market regime definitions.
+
+    Single source of truth: flint/regimes.py. Used by BacktestLab regime
+    testing, DataExplorer date presets, and documentation.
+    """
+    from ...regimes import REGIMES, REGIME_TYPES
+
+    return {
+        "regimes": [r.to_dict() for r in REGIMES],
+        "types": REGIME_TYPES,
+        "count": len(REGIMES),
+    }

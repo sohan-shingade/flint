@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
 import InteractiveChart from '../components/InteractiveChart'
 import { EXECUTION_VENUES, DEFAULT_EXECUTION_VENUES, DEX_VENUES, CEX_VENUES } from '../constants/venues'
+import { REGIMES, REGIME_TYPES } from '../constants/regimes'
 
 interface CandleData { ts: number; open: number; high: number; low: number; close: number; volume: number }
 interface MarketInfo { market: string; resolution_s: number; candle_count: number; first_ts: number; last_ts: number }
@@ -543,6 +544,39 @@ export default function DataExplorer() {
                   </div>
                 </>
               )}
+            </div>
+
+            {/* Regime presets */}
+            <div>
+              <div className="text-[10px] text-ghost tracking-[0.15em] mb-2">REGIMES <span className="text-ghost/40">— download data for specific market regimes</span></div>
+              <div className="flex flex-wrap gap-1">
+                {REGIMES.map(r => (
+                  <button
+                    key={r.id}
+                    onClick={() => {
+                      setDownloadRange('custom')
+                      setDlStartDate(r.startDate)
+                      setDlEndDate(r.endDate)
+                    }}
+                    className="px-2 py-1 text-[9px] tracking-wider border border-border hover:border-opacity-60 transition-all"
+                    style={{ borderColor: r.color + '40', color: r.color }}
+                    title={`${r.description} (${r.startDate} to ${r.endDate})`}
+                  >
+                    <span className="inline-block w-1.5 h-1.5 rounded-full mr-1" style={{ backgroundColor: r.color }} />
+                    {r.label}
+                  </button>
+                ))}
+                <button
+                  onClick={() => {
+                    setDownloadRange('custom')
+                    setDlStartDate(REGIMES[0].startDate)
+                    setDlEndDate(REGIMES[REGIMES.length - 1].endDate)
+                  }}
+                  className="px-2 py-1 text-[9px] tracking-wider border border-amber/30 text-amber hover:bg-amber-glow transition-all"
+                >
+                  ALL REGIMES
+                </button>
+              </div>
             </div>
 
             {/* Execution Venues */}
