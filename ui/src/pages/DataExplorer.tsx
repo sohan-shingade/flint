@@ -259,59 +259,78 @@ export default function DataExplorer() {
     const progress: {market: string, status: string}[] = selectedDownloads.map(m => ({ market: m, status: 'pending' }))
     setDownloadProgress([...progress])
 
-    const allWarnings: string[] = []
+    try {
+      // Use async download endpoint
+      const res = await fetch('/api/v1/data/download-async', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          markets: selectedDownloads,
+          resolution_s: 3600,
+          start_ts: startTs,
+          end_ts: endTs,
+          execution_venues: selectedExecutionVenues,
+        }),
+      })
+      if (!res.ok) throw new Error('async endpoint failed')
+      const { id: dlId } = await res.json()
 
-    for (let i = 0; i < selectedDownloads.length; i++) {
-      const mkt = selectedDownloads[i]
-      progress[i].status = 'downloading...'
-      setDownloadProgress([...progress])
+      // Poll for progress
+      const poll = async () => {
+        try {
+          const r = await fetch(`/api/v1/data/download-async/${dlId}/status`)
+          const d = await r.json()
 
-      let totalCandles = 0
-      let totalFunding = 0
-      let anyError = false
+          const serverMarkets = d.progress?.markets || []
+          const updated = selectedDownloads.map((m, i) => {
+            const sm = serverMarkets.find((s: any) => s.market === m)
+            if (!sm) return progress[i]
+            const label = sm.status === 'done' ? sm.detail
+              : sm.status === 'failed' ? `failed: ${sm.detail}`
+              : sm.status
+            return { market: m, status: label }
+          })
+          setDownloadProgress([...updated])
 
-      try {
-        const res = await fetch('/api/v1/data/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            market: mkt,
-            resolution_s: 3600,
-            start_ts: startTs,
-            end_ts: endTs,
-            execution_venues: selectedExecutionVenues,
-          }),
-        })
-        const data = await res.json()
-        totalCandles += (data.downloaded || 0) + (data.existing || 0)
-        totalFunding += data.funding_fetched || 0
-        if (data.warnings && data.warnings.length > 0) {
-          for (const w of data.warnings) {
-            allWarnings.push(`[${mkt}] ${w}`)
+          if (d.status === 'complete' || d.status === 'failed') {
+            setIsDownloading(false)
+            refreshInventory()
+            loadData()
+            return
           }
-          setDownloadWarnings([...allWarnings])
+          setTimeout(poll, 1500)
+        } catch {
+          setTimeout(poll, 3000)
         }
-      } catch {
-        anyError = true
       }
-
-      if (anyError && totalCandles === 0) {
-        progress[i].status = 'failed'
-      } else if (totalCandles === 0) {
-        progress[i].status = 'no data found'
-      } else {
-        const fundingInfo = totalFunding > 0 ? ` + ${totalFunding} funding` : ''
-        const venueList = selectedExecutionVenues.map(v => v.charAt(0).toUpperCase() + v.slice(1)).join(', ')
-        progress[i].status = `${totalCandles.toLocaleString()} candles${fundingInfo} — venues: ${venueList}`
+      setTimeout(poll, 1000)
+    } catch {
+      // Fallback to sync download
+      for (let i = 0; i < selectedDownloads.length; i++) {
+        progress[i].status = 'downloading...'
+        setDownloadProgress([...progress])
+        try {
+          const r = await fetch('/api/v1/data/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              market: selectedDownloads[i], resolution_s: 3600,
+              start_ts: startTs, end_ts: endTs,
+              execution_venues: selectedExecutionVenues,
+            }),
+          })
+          const data = await r.json()
+          const total = (data.downloaded || 0) + (data.existing || 0)
+          progress[i].status = total > 0 ? `${total.toLocaleString()} candles` : 'no data'
+        } catch {
+          progress[i].status = 'failed'
+        }
+        setDownloadProgress([...progress])
       }
-      setDownloadProgress([...progress])
+      setIsDownloading(false)
+      refreshInventory()
+      loadData()
     }
-
-    setIsDownloading(false)
-    refreshInventory()
-    // Reload chart data (candles + funding) for the currently selected market
-    loadData()
-  }
 
   const uniqueMarkets = Array.from(new Set(markets.map(m => m.market))).sort()
   const totalRecords = markets.reduce((s, m) => s + m.candle_count, 0)

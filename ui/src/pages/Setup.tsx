@@ -80,7 +80,6 @@ export default function Setup() {
 
   const startDownload = async () => {
     setStep('downloading')
-    // One progress entry per market
     const progress: DownloadProgress[] = selectedMarkets.map(m => ({
       market: m, status: 'pending', detail: '',
     }))
@@ -90,37 +89,78 @@ export default function Setup() {
     const startTs = useRegimeRange ? regimeStartTs : now - backfillDays * 86400
     const endTs = useRegimeRange ? regimeEndTs : now
 
-    for (let i = 0; i < selectedMarkets.length; i++) {
-      progress[i].status = 'downloading'
-      setDownloadProgress([...progress])
+    try {
+      // Submit async download for ALL markets at once
+      const res = await fetch('/api/v1/data/download-async', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          markets: selectedMarkets,
+          resolution_s: 3600,
+          start_ts: startTs,
+          end_ts: endTs,
+          execution_venues: selectedExecutionVenues,
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const { id: dlId } = await res.json()
 
-      try {
-        const res = await fetch('/api/v1/data/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            market: selectedMarkets[i],
-            resolution_s: 3600,
-            start_ts: startTs,
-            end_ts: endTs,
-            execution_venues: selectedExecutionVenues,
-          }),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        const total = (data.downloaded || 0) + (data.existing || 0)
-        progress[i].status = total > 0 || !data.warnings?.length ? 'done' : 'failed'
-        progress[i].detail = total > 0
-          ? `${total.toLocaleString()} candles`
-          : data.warnings?.length ? data.warnings[0] : 'no data'
-      } catch (err: any) {
-        progress[i].status = 'failed'
-        progress[i].detail = err?.message || 'download failed'
+      // Poll for progress until complete
+      const poll = async () => {
+        try {
+          const r = await fetch(`/api/v1/data/download-async/${dlId}/status`)
+          const d = await r.json()
+
+          // Update per-market progress from server
+          const serverMarkets = d.progress?.markets || []
+          const updated = selectedMarkets.map((m, i) => {
+            const sm = serverMarkets.find((s: any) => s.market === m)
+            return sm ? { market: m, status: sm.status as any, detail: sm.detail }
+                      : progress[i]
+          })
+          setDownloadProgress([...updated])
+
+          if (d.status === 'complete') {
+            setStep('done')
+            return
+          } else if (d.status === 'failed') {
+            setStep('done')
+            return
+          }
+          // Keep polling
+          setTimeout(poll, 1500)
+        } catch {
+          setTimeout(poll, 3000)
+        }
       }
-
-      setDownloadProgress([...progress])
+      setTimeout(poll, 1000)
+    } catch (err: any) {
+      // Fallback: if async endpoint not available, try sync one-by-one
+      for (let i = 0; i < selectedMarkets.length; i++) {
+        progress[i].status = 'downloading'
+        setDownloadProgress([...progress])
+        try {
+          const r = await fetch('/api/v1/data/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              market: selectedMarkets[i], resolution_s: 3600,
+              start_ts: startTs, end_ts: endTs,
+              execution_venues: selectedExecutionVenues,
+            }),
+          })
+          const data = await r.json()
+          const total = (data.downloaded || 0) + (data.existing || 0)
+          progress[i].status = total > 0 ? 'done' : 'failed'
+          progress[i].detail = total > 0 ? `${total.toLocaleString()} candles` : 'no data'
+        } catch {
+          progress[i].status = 'failed'
+          progress[i].detail = 'download failed'
+        }
+        setDownloadProgress([...progress])
+      }
+      setStep('done')
     }
-    setStep('done')
   }
 
   const handleKeysNext = async () => {

@@ -2,7 +2,9 @@
 DEX volume, freshness, correlation.  Thread-safe via shared store."""
 from __future__ import annotations
 
+import threading
 import time
+import uuid
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Query, Request
@@ -14,6 +16,22 @@ from ...analytics.correlation import compute_correlation_matrix
 router = APIRouter()
 
 _ccxt_warned: set = set()
+
+# ─── Async download state ────────────────────────────────────
+_dl_lock = threading.Lock()
+_dl_status: Dict[str, str] = {}       # id -> "downloading"|"complete"|"failed"
+_dl_progress: Dict[str, dict] = {}    # id -> {markets: [{market, status, detail}], pct, elapsed_s}
+_dl_results: Dict[str, dict] = {}     # id -> final aggregate results
+
+
+def _dl_set(dl_id: str, *, status: str = None, progress: dict = None, result: dict = None):
+    with _dl_lock:
+        if status:
+            _dl_status[dl_id] = status
+        if progress:
+            _dl_progress[dl_id] = progress
+        if result is not None:
+            _dl_results[dl_id] = result
 
 
 def _get_store(request: Request) -> Optional[FlintStore]:
@@ -883,6 +901,117 @@ def download_market_data(request: Request, body: dict):
             "error": str(e),
             "warnings": download_warnings,
         }
+
+
+@router.post("/download-async")
+def start_async_download(request: Request, body: dict):
+    """Start an async download for one or more markets. Returns immediately with a download ID.
+
+    Body: {
+        "markets": ["SOL-PERP", "BTC-PERP", "ETH-PERP"],
+        "resolution_s": 3600,
+        "start_ts": ..., "end_ts": ...,
+        "days": 90,                     // alternative to start_ts/end_ts
+        "execution_venues": ["drift", "hyperliquid"]
+    }
+    Returns: { "id": "abc123", "status": "downloading", "markets": [...] }
+    Poll: GET /download-async/{id}/status
+    """
+    markets = body.get("markets") or [body.get("market", "SOL-PERP")]
+    resolution_s = body.get("resolution_s", 3600)
+    start_ts = body.get("start_ts")
+    end_ts = body.get("end_ts")
+    days = body.get("days")
+    execution_venues = body.get("execution_venues") or body.get("funding_venues")
+
+    if days and (not start_ts or not end_ts):
+        end_ts = int(time.time())
+        start_ts = end_ts - int(days) * 86400
+
+    if not start_ts or not end_ts or start_ts >= end_ts:
+        from fastapi import HTTPException
+        raise HTTPException(400, "Invalid date range")
+
+    dl_id = str(uuid.uuid4())[:8]
+    market_progress = [{"market": m, "status": "pending", "detail": ""} for m in markets]
+    started_at = time.time()
+
+    _dl_set(dl_id, status="downloading", progress={
+        "markets": market_progress, "pct": 0, "elapsed_s": 0,
+        "started_at": started_at,
+    })
+
+    def _worker():
+        results = []
+        for i, market in enumerate(markets):
+            market_progress[i]["status"] = "downloading"
+            _dl_set(dl_id, progress={
+                "markets": [dict(m) for m in market_progress],
+                "pct": int(i / len(markets) * 100),
+                "elapsed_s": round(time.time() - started_at, 1),
+            })
+
+            try:
+                # Reuse the synchronous download function
+                from unittest.mock import MagicMock
+                mock_request = MagicMock()
+                mock_request.app.state.store = getattr(request.app.state, "store", None)
+                result = download_market_data(mock_request, {
+                    "market": market,
+                    "resolution_s": resolution_s,
+                    "start_ts": start_ts,
+                    "end_ts": end_ts,
+                    "execution_venues": execution_venues,
+                })
+                market_progress[i]["status"] = "done"
+                total = result.get("total", 0) or result.get("cached", 0)
+                market_progress[i]["detail"] = f"{total:,} candles"
+                results.append(result)
+            except Exception as e:
+                market_progress[i]["status"] = "failed"
+                market_progress[i]["detail"] = str(e)
+                results.append({"market": market, "error": str(e)})
+
+            _dl_set(dl_id, progress={
+                "markets": [dict(m) for m in market_progress],
+                "pct": int((i + 1) / len(markets) * 100),
+                "elapsed_s": round(time.time() - started_at, 1),
+            })
+
+        _dl_set(dl_id, status="complete", result={
+            "markets": results,
+            "total_markets": len(markets),
+            "elapsed_s": round(time.time() - started_at, 1),
+        })
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    return {"id": dl_id, "status": "downloading", "markets": markets}
+
+
+@router.get("/download-async/{dl_id}/status")
+def get_download_status(dl_id: str):
+    """Poll async download progress."""
+    with _dl_lock:
+        status = _dl_status.get(dl_id)
+        if status is None:
+            from fastapi import HTTPException
+            raise HTTPException(404, "Download not found")
+        progress = dict(_dl_progress.get(dl_id, {}))
+        result = _dl_results.get(dl_id)
+
+    elapsed = time.time() - progress.get("started_at", time.time())
+    return {
+        "id": dl_id,
+        "status": status,
+        "progress": {
+            "markets": progress.get("markets", []),
+            "pct": progress.get("pct", 0),
+            "elapsed_s": round(elapsed, 1),
+        },
+        "results": result,
+    }
 
 
 # Venues to download volume from, in priority order.
