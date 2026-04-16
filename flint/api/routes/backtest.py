@@ -135,6 +135,36 @@ class BacktestRequest(BaseModel):
     aggregate: bool = False  # Run independently on each market, return per-market + summary
 
 
+def _auto_register_strategy(store, strategy, code, params, status):
+    """Auto-register a strategy in the registry and advance its lifecycle."""
+    import json as _json
+    try:
+        name = strategy.name if hasattr(strategy, 'name') else type(strategy).__name__
+        category = "custom" if code else "built-in"
+        # Determine category from built-in strategy metadata
+        try:
+            from .strategies import _METADATA
+            for bname, meta in _METADATA.items():
+                if meta.get("display", bname) == name or bname == name:
+                    category = meta.get("category", "custom")
+                    break
+        except Exception:
+            pass
+        existing = store.get_strategy(name)
+        if not existing:
+            import uuid as _uuid
+            store.upsert_strategy(
+                strategy_id=str(_uuid.uuid4())[:8],
+                name=name,
+                code=code or "",
+                params_json=_json.dumps(params) if params else "{}",
+                category=category,
+            )
+        store.update_strategy_status(name, status)
+    except Exception:
+        pass  # non-critical, don't fail the backtest
+
+
 def _build_strategy(name: str, params: Dict, code: str = None):
     """Instantiate a strategy by name, user file, or inline code."""
     if code:
@@ -679,6 +709,8 @@ def run_backtest(req: BacktestRequest, request: Request):
                         params=req.params,
                         result=result,
                     )
+                    # Auto-register strategy and update lifecycle status
+                    _auto_register_strategy(store, strategy, req.code, req.params, "backtested")
                 except Exception as journal_err:
                     logger.warning("Journal save failed: %s", journal_err)
 

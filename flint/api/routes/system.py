@@ -1,11 +1,14 @@
-"""System API — status check and configuration."""
+"""System API — status check, configuration, and strategy registry."""
 from __future__ import annotations
 
+import json
+import time
+import uuid
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -135,3 +138,77 @@ def list_regimes():
         "types": REGIME_TYPES,
         "count": len(REGIMES),
     }
+
+
+# ─── Strategy Registry ──────────────────────────────────────
+
+
+class StrategyCreate(BaseModel):
+    name: str
+    code: str = ""
+    params: Optional[dict] = None
+    category: str = "custom"
+    notes: str = ""
+
+
+@router.get("/strategies")
+def list_registered_strategies(request: Request):
+    """List all registered strategies with lifecycle stats.
+
+    Returns each strategy's metadata plus computed fields:
+    - backtest_count, best_sharpe, best_pnl (from backtest_runs)
+    - paper_session_id, paper_status (latest paper session)
+    - live_session_id, live_status (latest live session)
+    """
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        return {"strategies": [], "count": 0}
+    return {"strategies": store.list_strategies(), "count": len(store.list_strategies())}
+
+
+@router.post("/strategies")
+def register_strategy(body: StrategyCreate, request: Request):
+    """Register a new strategy or update an existing one."""
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(503, "Store not available")
+
+    strategy_id = str(uuid.uuid4())[:8]
+    params_json = json.dumps(body.params) if body.params else "{}"
+
+    # Check if name already exists
+    existing = store.get_strategy(body.name)
+    if existing:
+        strategy_id = existing["strategy_id"]
+
+    store.upsert_strategy(
+        strategy_id=strategy_id,
+        name=body.name,
+        code=body.code,
+        params_json=params_json,
+        category=body.category,
+        notes=body.notes,
+    )
+    return {"strategy_id": strategy_id, "name": body.name, "status": "saved"}
+
+
+@router.get("/strategies/{name}")
+def get_registered_strategy(name: str, request: Request):
+    """Get a specific registered strategy by name."""
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(503, "Store not available")
+    strat = store.get_strategy(name)
+    if strat is None:
+        raise HTTPException(404, f"Strategy '{name}' not found")
+    return strat
+
+
+@router.delete("/strategies/{name}")
+def delete_registered_strategy(name: str, request: Request):
+    """Delete a registered strategy."""
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(503, "Store not available")
+    store.delete_strategy(name)
+    return {"deleted": name}

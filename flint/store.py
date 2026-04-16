@@ -310,6 +310,21 @@ CREATE TABLE IF NOT EXISTS jupiter_borrow_rates (
 """
 
 
+_CREATE_STRATEGIES = """
+CREATE TABLE IF NOT EXISTS strategies (
+    strategy_id   VARCHAR PRIMARY KEY,
+    name          VARCHAR NOT NULL,
+    code          TEXT    NOT NULL DEFAULT '',
+    params_json   VARCHAR NOT NULL DEFAULT '{}',
+    category      VARCHAR NOT NULL DEFAULT 'custom',
+    status        VARCHAR NOT NULL DEFAULT 'draft',
+    created_at    BIGINT  NOT NULL,
+    updated_at    BIGINT  NOT NULL,
+    notes         VARCHAR NOT NULL DEFAULT ''
+);
+"""
+
+
 class FlintStore:
     """Thread-safe DuckDB store.
 
@@ -481,6 +496,8 @@ class FlintStore:
         self._conn.execute(_CREATE_TICK_SNAPSHOTS)
         # Jupiter Perps borrow rates
         self._conn.execute(_CREATE_JUPITER_BORROW_RATES)
+        # Strategy registry
+        self._conn.execute(_CREATE_STRATEGIES)
 
     # -- candles ---------------------------------------------------------------
 
@@ -1398,6 +1415,135 @@ class FlintStore:
             }
             for r in rows
         ]
+
+    # -- strategies ---------------------------------------------------------------
+
+    def upsert_strategy(self, strategy_id: str, name: str, code: str = "",
+                        params_json: str = "{}", category: str = "custom",
+                        status: str = "draft", notes: str = "") -> None:
+        """Save or update a strategy in the registry."""
+        import time as _time
+        now = int(_time.time())
+        with self._lock:
+            existing = self._conn.execute(
+                "SELECT created_at FROM strategies WHERE strategy_id = ?",
+                [strategy_id],
+            ).fetchone()
+            created = existing[0] if existing else now
+            self._conn.execute(
+                "INSERT OR REPLACE INTO strategies "
+                "(strategy_id, name, code, params_json, category, status, created_at, updated_at, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [strategy_id, name, code, params_json, category, status, created, now, notes],
+            )
+
+    def update_strategy_status(self, name: str, status: str) -> None:
+        """Update the lifecycle status of a strategy by name.
+
+        Status progression: draft → backtested → optimized → paper → live → retired
+        Only advances forward (won't downgrade live → backtested).
+        """
+        import time as _time
+        order = {"draft": 0, "backtested": 1, "optimized": 2, "paper": 3, "live": 4, "retired": 5}
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT status FROM strategies WHERE name = ?", [name]
+            ).fetchone()
+            if row is None:
+                return
+            current = row[0]
+            if order.get(status, 0) > order.get(current, 0):
+                self._conn.execute(
+                    "UPDATE strategies SET status = ?, updated_at = ? WHERE name = ?",
+                    [status, int(_time.time()), name],
+                )
+
+    def list_strategies(self) -> list:
+        """List all registered strategies with lifecycle stats.
+
+        Joins against backtest_runs, paper_sessions, live_sessions to compute
+        backtest count, best Sharpe, and latest paper/live session status.
+        """
+        with self._lock:
+            # Base query always works
+            rows = self._conn.execute(
+                "SELECT strategy_id, name, category, status, code, "
+                "params_json, created_at, updated_at, notes "
+                "FROM strategies ORDER BY updated_at DESC"
+            ).fetchall()
+
+            # Build lifecycle stats from related tables (may not exist in test DBs)
+            bt_stats: dict = {}
+            paper_stats: dict = {}
+            live_stats: dict = {}
+            try:
+                for r in self._conn.execute(
+                    "SELECT strategy_name, COUNT(*), MAX(sharpe_ratio), MAX(total_pnl) "
+                    "FROM backtest_runs GROUP BY strategy_name"
+                ).fetchall():
+                    bt_stats[r[0]] = {"count": r[1], "best_sharpe": r[2], "best_pnl": r[3]}
+            except Exception:
+                pass
+            try:
+                for r in self._conn.execute(
+                    "SELECT strategy_name, session_id, status FROM paper_sessions "
+                    "ORDER BY started_at DESC"
+                ).fetchall():
+                    if r[0] not in paper_stats:
+                        paper_stats[r[0]] = {"session_id": r[1], "status": r[2]}
+            except Exception:
+                pass
+            try:
+                for r in self._conn.execute(
+                    "SELECT strategy_name, session_id, status FROM live_sessions "
+                    "ORDER BY started_at DESC"
+                ).fetchall():
+                    if r[0] not in live_stats:
+                        live_stats[r[0]] = {"session_id": r[1], "status": r[2]}
+            except Exception:
+                pass
+
+        result = []
+        for r in rows:
+            name = r[1]
+            bt = bt_stats.get(name, {})
+            ps = paper_stats.get(name, {})
+            ls = live_stats.get(name, {})
+            result.append({
+                "strategy_id": r[0], "name": name, "category": r[2],
+                "status": r[3], "code": r[4], "params_json": r[5],
+                "created_at": r[6], "updated_at": r[7], "notes": r[8],
+                "backtest_count": bt.get("count", 0),
+                "best_sharpe": bt.get("best_sharpe", 0),
+                "best_pnl": bt.get("best_pnl", 0),
+                "paper_session_id": ps.get("session_id"),
+                "paper_status": ps.get("status"),
+                "live_session_id": ls.get("session_id"),
+                "live_status": ls.get("status"),
+            })
+        return result
+
+    def get_strategy(self, name: str) -> dict | None:
+        """Get a single strategy by name."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT strategy_id, name, code, params_json, category, "
+                "status, created_at, updated_at, notes "
+                "FROM strategies WHERE name = ?", [name]
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "strategy_id": row[0], "name": row[1], "code": row[2],
+            "params_json": row[3], "category": row[4], "status": row[5],
+            "created_at": row[6], "updated_at": row[7], "notes": row[8],
+        }
+
+    def delete_strategy(self, name: str) -> bool:
+        """Delete a strategy by name."""
+        with self._lock:
+            self._conn.execute("DELETE FROM strategies WHERE name = ?", [name])
+            return True
 
     def close(self) -> None:
         with self._lock:

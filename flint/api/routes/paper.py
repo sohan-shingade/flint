@@ -129,6 +129,16 @@ async def start_paper(req: StartRequest, request: Request):
         initial_capital=req.initial_capital,
         venue=req.venue,
     )
+
+    # Auto-register strategy and advance lifecycle to "paper"
+    store = getattr(request.app.state, "store", None)
+    if store:
+        try:
+            from .backtest import _auto_register_strategy
+            _auto_register_strategy(store, strategy, req.code, req.params, "paper")
+        except Exception:
+            pass
+
     return {"session_id": session_id, "status": "running"}
 
 
