@@ -460,14 +460,14 @@ Pull candles, funding rates, and orderbooks from Binance, Coinbase, Kraken, KuCo
 
 ## MCP Server (AI Integration)
 
-Flint includes an MCP server so AI models (Claude, GPT, etc.) can run backtests, query market data, and optimize strategies programmatically.
+Flint includes an MCP server so AI models (Claude, GPT, etc.) can run backtests, manage paper trading, query market data, and optimize strategies programmatically. See the [MCP Integration Guide](docs/guides/mcp-integration.md) for full documentation.
 
 ```bash
 pip install flint[mcp]
 claude mcp add flint -- python -m flint.mcp_server
 ```
 
-11 tools: `run_backtest`, `optimize_strategy`, `get_candles`, `download_market_data`, `list_available_markets`, `list_local_markets`, `list_strategies`, `get_funding_rates`, `get_open_interest`, `get_correlation`, `get_data_freshness`.
+17 tools across backtesting, paper trading, data, optimization, and journal. Key tools: `run_backtest`, `start_paper_trading`, `get_paper_sessions`, `optimize_strategy`, `download_market_data`, `list_journal_runs`, `get_candles`, `get_funding_rates`.
 
 ---
 
@@ -502,14 +502,21 @@ claude mcp add flint -- python -m flint.mcp_server
 
 | Guide | Description |
 |---|---|
-| [Quickstart](docs/guides/quickstart.md) | Zero to backtest in 5 minutes |
-| [Strategy Authoring](docs/guides/strategy-authoring.md) | Write strategies, 4 strategy types, ExecutionContext API, optimization |
-| [Data Providers](docs/guides/data-providers.md) | 15 providers, multi-venue downloads, funding venues, custom providers |
-| [Live Deployment](docs/guides/live-deployment.md) | Drift + Hyperliquid setup, risk config, multi-venue live trading |
-| [Architecture](docs/guides/architecture.md) | Execution hierarchy, fill pipeline, margin engine, WebSocket feeds |
-| [Slippage Models](docs/guides/slippage-models.md) | 4-tier impact model, vAMM, calibration, transaction costs, CLMM |
-| [Safety Rails](docs/validation/safety-rails.md) | Kill switch, risk guards, dry-run, order lifecycle, failure scenarios |
-| [Devnet Testing](docs/validation/devnet-testing-guide.md) | End-to-end devnet validation pipeline, mainnet readiness checklist |
+| [Quickstart](docs/guides/quickstart.md) | Install, backtest, optimize, paper deploy in one workflow |
+| [Strategy Authoring](docs/guides/strategy-authoring.md) | v1/v2 strategies, 20 built-in templates, optimization, security |
+| [Data Providers](docs/guides/data-providers.md) | 15 providers, 7 funding venues, downloading, custom providers |
+| [Live Deployment](docs/guides/live-deployment.md) | Paper trading, Drift/Hyperliquid/CEX setup, risk guards, parity testing |
+| [Architecture](docs/guides/architecture.md) | Execution hierarchy, fill pipeline, Rust engine, regime system |
+| [MCP Integration](docs/guides/mcp-integration.md) | Using Flint with Claude Code and AI models (17 tools) |
+| [Slippage Models](docs/guides/slippage-models.md) | 4-tier impact model, vAMM, calibration, transaction costs |
+| [Safety Rails](docs/validation/safety-rails.md) | Kill switch, risk guards, dry-run, failure scenarios |
+| [Devnet Testing](docs/validation/devnet-testing-guide.md) | Devnet validation, mainnet readiness checklist |
+
+**Tutorials:**
+
+| Tutorial | Description |
+|---|---|
+| [First Strategy](docs/tutorials/first-strategy.md) | Build, optimize, and paper deploy your first strategy |
 
 ---
 

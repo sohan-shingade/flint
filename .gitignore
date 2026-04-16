@@ -45,7 +45,7 @@ node_modules/
 # Superpowers / Claude scaffolding
 .superpowers/
 .claude/
-docs/
+docs/superpowers/
 
 # Local reports and research
 reports/

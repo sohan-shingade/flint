@@ -82,13 +82,17 @@ class TestToolRegistration:
             run_backtest, list_strategies, get_candles, download_market_data,
             list_available_markets, list_local_markets, get_funding_rates,
             get_open_interest, get_correlation, get_data_freshness,
-            optimize_strategy,
+            optimize_strategy, start_paper_trading, stop_paper_trading,
+            get_paper_sessions, get_paper_status, list_journal_runs,
+            compare_runs,
         )
-        # All 11 tools are importable functions
+        # All 17 tools are importable functions
         for fn in [run_backtest, list_strategies, get_candles, download_market_data,
                    list_available_markets, list_local_markets, get_funding_rates,
                    get_open_interest, get_correlation, get_data_freshness,
-                   optimize_strategy]:
+                   optimize_strategy, start_paper_trading, stop_paper_trading,
+                   get_paper_sessions, get_paper_status, list_journal_runs,
+                   compare_runs]:
             assert callable(fn)
 
 
@@ -104,11 +108,13 @@ class TestListStrategies:
     def test_has_strategies(self):
         from flint.mcp_server import list_strategies
         result = json.loads(list_strategies())
-        assert result["count"] >= 15
+        assert result["count"] == 20
         names = [s["name"] for s in result["strategies"]]
         assert "ma_crossover" in names
         assert "rsi" in names
         assert "funding_harvest" in names
+        assert "funding_arb" in names
+        assert "basis_trade" in names
 
     def test_strategy_structure(self):
         from flint.mcp_server import list_strategies
