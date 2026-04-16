@@ -711,44 +711,17 @@ def optimize_strategy(
 
 @mcp.resource("flint://guide")
 def flint_guide() -> str:
-    """Flint platform overview and usage guide for AI models."""
-    return """# Flint — Solana Trading Platform
-
-Flint is a local-first algorithmic trading, backtesting, and MEV research platform for Solana.
-
-## Typical Workflow
-1. Download data: `download_market_data(market="SOL-PERP", days=90)`
-   - Downloads candles from Drift + funding rates from 7 venues automatically
-2. Check data: `list_local_markets()` to see what's cached
-3. Run a backtest: `run_backtest(market="SOL-PERP", strategy="rsi_macd_combo")`
-4. Optimize: `optimize_strategy(market="SOL-PERP", strategy="rsi_macd_combo", trials=50)`
-5. Paper trade: `start_paper_trading(market="SOL-PERP", strategy="rsi_macd_combo")`
-6. Monitor: `get_paper_sessions()` to check status and PnL
-7. Review history: `list_journal_runs()` to see all past backtests
-
-## 20 Built-in Strategies
-- Trend (8): ma_crossover, ema_crossover, momentum, momentum_breakout, breakout_momentum, dual_timeframe, macd_divergence, atr_breakout
-- Mean-rev (4): rsi, bollinger, mean_reversion, vwap_reversion
-- Multi-signal (1): rsi_macd_combo
-- DeFi (6): funding_harvest, funding_arb, funding_mean_reversion, multi_venue_funding, basis_trade, grid_trader
-- Monitor (1): mev_arb_monitor (non-trading)
-
-## Funding Rates (7 venues)
-When downloading perp data, Flint fetches funding from 7 venues:
-drift, hyperliquid, okx, bybit, dydx, gateio, bitget.
-All 8h rates are forward-filled to hourly. Use `get_funding_rates()` to view.
-
-## Paper Trading
-Start sessions with `start_paper_trading()`, monitor with `get_paper_sessions()`.
-Sessions replay recent history then go live, executing on new candles every minute.
-Stop with `stop_paper_trading(session_id)`.
-
-## Data
-- All data free from Drift Protocol — no API keys needed
-- 36+ perp markets + 19+ spot markets
-- Cached locally in DuckDB — subsequent runs instant
-- Resolutions: 60 (1m), 300 (5m), 3600 (1h), 86400 (1d)
-"""
+    """Flint platform overview and usage guide for AI models.
+    Reads from docs/guides/quickstart.md (single source of truth).
+    """
+    import pathlib
+    guide_path = pathlib.Path(__file__).parent.parent / "docs" / "guides" / "quickstart.md"
+    if guide_path.exists():
+        return guide_path.read_text()
+    return (
+        "# Flint\n\nUse list_strategies() to see 20 built-in strategies.\n"
+        "Workflow: download_market_data -> run_backtest -> optimize_strategy -> start_paper_trading\n"
+    )
 
 
 @mcp.resource("flint://markets")
