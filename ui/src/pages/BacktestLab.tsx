@@ -659,7 +659,8 @@ export default function BacktestLab() {
       params: {},
       margin_tracking: marginTracking,
     })
-  }, [run, market, resolution, startDate, endDate, capital, feeRate, marginTracking, regimeMode, selectedRegimes, regimeBacktest])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run, market, resolution, startDate, endDate, capital, feeRate, marginTracking, regimeMode, selectedRegimes])
 
   const handleOptimize = useCallback(async () => {
     setValidationError(null)
