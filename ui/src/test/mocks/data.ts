@@ -294,6 +294,38 @@ export function makeJournalRuns() {
   ]
 }
 
+export function makeRegimeResult() {
+  return {
+    mode: 'regime_test',
+    per_regime: {
+      'etf_bull_run': {
+        strategy_name: 'custom', market: 'SOL-PERP', resolution_s: 3600,
+        period_start: '2024-01-10', period_end: '2024-05-31',
+        initial_capital: 10000,
+        metrics: { total_pnl: 500, sharpe_ratio: 1.2, max_drawdown: 0.08, total_trades: 15, winning_trades: 9, losing_trades: 6, win_rate: 0.6 },
+        equity_curve: Array.from({ length: 50 }, (_, i) => [1704844800 + i * 3600, 10000 + i * 10]),
+      },
+      'summer_correction': {
+        strategy_name: 'custom', market: 'SOL-PERP', resolution_s: 3600,
+        period_start: '2024-06-01', period_end: '2024-08-31',
+        initial_capital: 10000,
+        metrics: { total_pnl: -200, sharpe_ratio: -0.5, max_drawdown: 0.15, total_trades: 8, winning_trades: 3, losing_trades: 5, win_rate: 0.375 },
+        equity_curve: Array.from({ length: 50 }, (_, i) => [1717200000 + i * 3600, 10000 - i * 4]),
+      },
+    },
+    aggregate: {
+      avg_sharpe: 0.35,
+      worst_drawdown: 0.15,
+      best_regime: 'etf_bull_run',
+      worst_regime: 'summer_correction',
+      regime_summary: [
+        { id: 'etf_bull_run', label: 'ETF Bull Run', regime_type: 'bull', sharpe: 1.2, max_drawdown: 0.08, total_pnl: 500, total_trades: 15, has_error: false, win_rate: 0.6 },
+        { id: 'summer_correction', label: 'Summer Correction', regime_type: 'bear', sharpe: -0.5, max_drawdown: 0.15, total_pnl: -200, total_trades: 8, has_error: false, win_rate: 0.375 },
+      ],
+    },
+  }
+}
+
 export function makeOptResult() {
   return {
     best_params: { fast_period: 8, slow_period: 25 },

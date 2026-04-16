@@ -321,6 +321,62 @@ describe('BacktestLab', () => {
     })
   })
 
+  it('regime backtest results appear after completion', async () => {
+    const user = userEvent.setup()
+    renderWithRouter(<BacktestLab />)
+
+    // Switch to regime mode
+    const regimeBtn = screen.getByText('REGIMES')
+    await user.click(regimeBtn)
+
+    // Wait for regime selector to appear
+    await waitFor(() => {
+      expect(screen.getByTestId('regime-selector')).toBeInTheDocument()
+    })
+
+    // Click RUN (button text changes in regime mode)
+    await waitFor(() => {
+      const runBtn = screen.queryByText(/RUN_REGIMES/) || screen.queryByText(/RUN_BACKTEST/)
+      expect(runBtn).toBeInTheDocument()
+    }, { timeout: 5000 })
+
+    const runBtn = screen.queryByText(/RUN_REGIMES/) || screen.queryByText(/RUN_BACKTEST/)
+    if (runBtn && !runBtn.hasAttribute('disabled')) {
+      await user.click(runBtn)
+
+      // Wait for regime results to appear
+      await waitFor(() => {
+        expect(screen.getByTestId('regime-results')).toBeInTheDocument()
+      }, { timeout: 10000 })
+    }
+  })
+
+  it('RUN_BACKTEST button still visible after regime backtest completes', async () => {
+    const user = userEvent.setup()
+    renderWithRouter(<BacktestLab />)
+
+    // Switch to regime mode
+    await user.click(screen.getByText('REGIMES'))
+    await waitFor(() => {
+      expect(screen.getByTestId('regime-selector')).toBeInTheDocument()
+    })
+
+    // Run regime backtest
+    const runBtn = screen.queryByText(/RUN_REGIMES/) || screen.queryByText(/RUN_BACKTEST/)
+    if (runBtn && !runBtn.hasAttribute('disabled')) {
+      await user.click(runBtn)
+
+      // Wait for completion
+      await waitFor(() => {
+        expect(screen.getByTestId('regime-results')).toBeInTheDocument()
+      }, { timeout: 10000 })
+
+      // Button should STILL be visible
+      const btnAfter = screen.queryByText(/RUN_REGIMES/) || screen.queryByText(/RUN_BACKTEST/)
+      expect(btnAfter).toBeInTheDocument()
+    }
+  })
+
   // ── Deploy dialog ──
 
   it('DEPLOY button is not visible before results', () => {

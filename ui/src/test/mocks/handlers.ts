@@ -15,6 +15,7 @@ import {
   makeStrategyCatalog,
   makeUserStrategies,
   makeBacktestResult,
+  makeRegimeResult,
   makeOptResult,
   makePaperPortfolio,
   makeSessionStatus,
@@ -26,6 +27,7 @@ import {
 
 // Track polling state for backtest/optimize endpoints
 let backtestPollCount = 0
+let regimePollCount = 0
 let optimizePollCount = 0
 
 export const handlers = [
@@ -143,7 +145,26 @@ export const handlers = [
     return HttpResponse.json({ id: 'test-run-1', status: 'running' })
   }),
 
-  http.get('/api/v1/backtest/:id/results', () => {
+  http.get('/api/v1/backtest/:id/results', ({ params }) => {
+    const id = params.id as string
+
+    // Regime backtest poll
+    if (id.startsWith('regime-')) {
+      regimePollCount++
+      if (regimePollCount <= 1) {
+        return HttpResponse.json({
+          status: 'running',
+          progress: { phase: 'backtest', pct: 50, detail: 'Running regime 1/2...', elapsed_s: 1, candles: 500 },
+        })
+      }
+      return HttpResponse.json({
+        status: 'complete',
+        results: makeRegimeResult(),
+        progress: { phase: 'done', pct: 100, detail: 'Complete', elapsed_s: 3, candles: 2000 },
+      })
+    }
+
+    // Normal backtest poll
     backtestPollCount++
     if (backtestPollCount <= 1) {
       return HttpResponse.json({
@@ -171,6 +192,7 @@ export const handlers = [
   }),
 
   http.post('/api/v1/backtest/run-regimes', () => {
+    regimePollCount = 0
     return HttpResponse.json({ id: 'regime-run-1', status: 'running' })
   }),
 
@@ -309,5 +331,6 @@ export const server = setupServer(...handlers)
  */
 export function resetPollCounters() {
   backtestPollCount = 0
+  regimePollCount = 0
   optimizePollCount = 0
 }
