@@ -264,13 +264,13 @@ def _check_single_market(
         expected_count = max(1, (end_ts - start_ts) // resolution_s)
         coverage_pct = min(round(len(candles) / expected_count * 100, 1), 100.0) if expected_count else 0
 
-        # Check if local data covers the full requested range
-        # Must check BOTH ends: first candle near start AND last candle near end
-        # AND coverage must be at least 80%
+        # Check if local data covers enough of the requested range to run a backtest.
+        # Lenient: start within 7 days, end within 7 days, coverage >= 80%.
+        # A few missing days at the edges shouldn't block a multi-month backtest.
         covers_range = False
         if candles:
-            end_ok = candles[-1].ts >= end_ts - 86400  # within 1 day of end
-            start_ok = candles[0].ts <= start_ts + 86400  # within 1 day of start
+            end_ok = candles[-1].ts >= end_ts - 7 * 86400  # within 7 days of end
+            start_ok = candles[0].ts <= start_ts + 7 * 86400  # within 7 days of start
             covers_range = end_ok and start_ok and coverage_pct >= 80
 
         will_download = not covers_range

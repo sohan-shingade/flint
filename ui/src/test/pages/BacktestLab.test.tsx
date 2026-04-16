@@ -418,6 +418,31 @@ describe('BacktestLab', () => {
     }
   })
 
+  it('does not show DATA.GAP when data covers 90%+ of range', async () => {
+    // Simulate data that covers most of the range but last few days missing
+    server.use(
+      http.get('/api/v1/data/check', () => {
+        return HttpResponse.json({
+          has_data: true,
+          covers_range: true,  // Fixed: 90%+ should be true
+          will_download: false,
+          candle_count: 2000,
+          coverage_pct: 95.0,
+          total_in_db: 25000,
+          first_ts: 1768608000,
+          last_ts: 1775865600,
+        })
+      })
+    )
+
+    renderWithRouter(<BacktestLab />)
+
+    await waitFor(() => {
+      const gap = screen.queryByText(/DATA.GAP/)
+      expect(gap).toBeNull()
+    }, { timeout: 5000 })
+  })
+
   // ── Deploy dialog ──
 
   it('DEPLOY button is not visible before results', () => {
