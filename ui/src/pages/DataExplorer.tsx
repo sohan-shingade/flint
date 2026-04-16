@@ -331,6 +331,7 @@ export default function DataExplorer() {
       refreshInventory()
       loadData()
     }
+  }
 
   const uniqueMarkets = Array.from(new Set(markets.map(m => m.market))).sort()
   const totalRecords = markets.reduce((s, m) => s + m.candle_count, 0)
