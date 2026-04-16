@@ -151,29 +151,25 @@ class PaperTradingEngine:
         resolution_s: int = 3600,
         initial_capital: float = 10_000.0,
         venue: str = "drift",
+        strategy_code: str = "",
+        strategy_params: dict = None,
     ) -> str:
-        """Start a new paper trading session. Returns session_id."""
-        session_id = uuid.uuid4().hex[:8]
-        broker = PaperBroker(initial_capital=initial_capital, venue=venue)
-        ctx = LiveContext(broker, store=self.store, resolution_s=resolution_s, session_id=session_id)
+        """Start a new paper trading session with replay. Returns session_id.
 
-        session = PaperSession(
-            session_id=session_id,
+        Delegates to deploy_session() with a 7-day default replay so all
+        sessions get persistence, equity history, and transition to 'live' status.
+        """
+        replay_start = int(time.time()) - 7 * 86400
+        return self.deploy_session(
             strategy=strategy,
+            strategy_code=strategy_code or "",
+            strategy_params=strategy_params or {},
             market=market,
             resolution_s=resolution_s,
-            broker=broker,
-            ctx=ctx,
+            initial_capital=initial_capital,
+            replay_start_ts=replay_start,
             venue=venue,
         )
-        strategy.reset()
-        self.sessions[session_id] = session
-
-        # Launch the async loop
-        task = self._schedule_async_task(self._run_session(session))
-        if task is not None:
-            self._tasks[session_id] = task
-        logger.info("Paper session %s started: %s on %s", session_id, strategy.name, market)
         return session_id
 
     def stop_session(self, session_id: str) -> bool:

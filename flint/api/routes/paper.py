@@ -128,6 +128,8 @@ async def start_paper(req: StartRequest, request: Request):
         resolution_s=req.resolution_s,
         initial_capital=req.initial_capital,
         venue=req.venue,
+        strategy_code=req.code or "",
+        strategy_params=req.params or {},
     )
 
     # Auto-register strategy and advance lifecycle to "paper"

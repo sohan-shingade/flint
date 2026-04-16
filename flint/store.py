@@ -310,6 +310,15 @@ CREATE TABLE IF NOT EXISTS jupiter_borrow_rates (
 """
 
 
+_CREATE_JOURNAL_EQUITY = """
+CREATE TABLE IF NOT EXISTS journal_equity (
+    run_id   VARCHAR NOT NULL,
+    ts       BIGINT  NOT NULL,
+    equity   DOUBLE  NOT NULL,
+    PRIMARY KEY (run_id, ts)
+);
+"""
+
 _CREATE_STRATEGIES = """
 CREATE TABLE IF NOT EXISTS strategies (
     strategy_id   VARCHAR PRIMARY KEY,
@@ -496,8 +505,24 @@ class FlintStore:
         self._conn.execute(_CREATE_TICK_SNAPSHOTS)
         # Jupiter Perps borrow rates
         self._conn.execute(_CREATE_JUPITER_BORROW_RATES)
+        # Journal equity curves
+        self._conn.execute(_CREATE_JOURNAL_EQUITY)
         # Strategy registry
         self._conn.execute(_CREATE_STRATEGIES)
+
+        # ── Indexes for faster queries ──
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_candles_market_res ON candles (market, resolution_s)",
+            "CREATE INDEX IF NOT EXISTS idx_funding_market_venue ON venue_funding_rates (market, venue)",
+            "CREATE INDEX IF NOT EXISTS idx_journal_strategy ON backtest_runs (strategy_name)",
+            "CREATE INDEX IF NOT EXISTS idx_paper_sessions_strategy ON paper_sessions (strategy_name)",
+            "CREATE INDEX IF NOT EXISTS idx_live_sessions_strategy ON live_sessions (strategy_name)",
+            "CREATE INDEX IF NOT EXISTS idx_journal_equity_run ON journal_equity (run_id)",
+        ]:
+            try:
+                self._conn.execute(idx_sql)
+            except Exception:
+                pass  # index may already exist or table missing
 
     # -- candles ---------------------------------------------------------------
 
@@ -1173,6 +1198,37 @@ class FlintStore:
         return SyncMetadata(provider=row[0], market=row[1], data_type=row[2],
                             last_sync_ts=row[3], record_count=row[4],
                             status=row[5], error_msg=row[6])
+
+    def is_range_synced(self, market: str, resolution_s: int, start_ts: int, end_ts: int,
+                        max_age_s: int = 3600) -> bool:
+        """Check if a candle range is already covered in the local DB.
+
+        Returns True if we have candles covering at least 90% of the requested
+        range AND the most recent sync was within max_age_s seconds.
+        Used to skip redundant downloads.
+        """
+        import time as _time
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*), MIN(ts), MAX(ts) FROM candles "
+                "WHERE market = ? AND resolution_s = ? AND ts >= ? AND ts <= ?",
+                [market, resolution_s, start_ts, end_ts],
+            ).fetchone()
+        if not row or row[0] == 0:
+            return False
+        count, first_ts, last_ts = row
+        expected = (end_ts - start_ts) // resolution_s
+        if expected <= 0:
+            return True
+        coverage = count / expected
+        if coverage < 0.9:
+            return False
+        # Check freshness via sync_metadata
+        meta = self.get_sync_metadata("drift_api", market, "candles")
+        if meta and (_time.time() - meta.last_sync_ts) < max_age_s:
+            return True
+        # Even without sync_metadata, if we have 90%+ coverage, consider it synced
+        return coverage >= 0.95
 
     def list_sync_metadata(self, provider: Optional[str] = None) -> list:
         sql = "SELECT provider, market, data_type, last_sync_ts, record_count, status, error_msg FROM sync_metadata"

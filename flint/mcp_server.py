@@ -409,6 +409,17 @@ def download_market_data(
     end_ts = int(time.time())
     start_ts = end_ts - days * 86400
 
+    # Check if range is already well-covered (skip redundant downloads)
+    if store.is_range_synced(market, resolution_s, start_ts, end_ts):
+        existing = store.query_candles(market, resolution_s, start_ts, end_ts)
+        return json.dumps({
+            "market": market, "days": days, "downloaded": 0, "cached": 0,
+            "previously_existing": len(existing), "total": len(existing),
+            "funding_fetched": 0, "funding_venues": [],
+            "source": "local", "skipped": True,
+            "note": "Data already covers this range. Use force=True to re-download.",
+        })
+
     existing = store.query_candles(market, resolution_s, start_ts, end_ts)
     existing_count = len(existing)
 

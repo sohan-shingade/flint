@@ -92,6 +92,20 @@ class JournalStorage:
                          pos.entry_price, pos.exit_price,
                          abs(pos.size), pos.entry_ts, pos.exit_ts, pos.pnl],
                     )
+            # Save equity curve for later retrieval (no re-run needed)
+            if result and getattr(result, "equity_curve", None):
+                self._store._conn.execute(
+                    "DELETE FROM journal_equity WHERE run_id = ?", [run_id]
+                )
+                # Pair equity values with candle timestamps
+                eq = result.equity_curve
+                # Use start_ts + i * resolution as approximation if no ts available
+                res = resolution_s or 3600
+                for i, val in enumerate(eq):
+                    self._store._conn.execute(
+                        "INSERT INTO journal_equity VALUES (?, ?, ?)",
+                        [run_id, start_ts + i * res, float(val)],
+                    )
 
     def list_runs(self, limit: int = 50) -> List[Dict[str, Any]]:
         with self._store._lock:
@@ -118,8 +132,18 @@ class JournalStorage:
         run["trades"] = [dict(zip(trade_cols, tr)) for tr in trade_rows]
         return run
 
+    def get_equity_curve(self, run_id: str) -> list:
+        """Retrieve saved equity curve for a backtest run."""
+        with self._store._lock:
+            rows = self._store._conn.execute(
+                "SELECT ts, equity FROM journal_equity WHERE run_id = ? ORDER BY ts",
+                [run_id],
+            ).fetchall()
+        return [{"ts": r[0], "equity": r[1]} for r in rows]
+
     def delete_run(self, run_id: str) -> bool:
         with self._store._lock:
+            self._store._conn.execute("DELETE FROM journal_equity WHERE run_id = ?", [run_id])
             self._store._conn.execute("DELETE FROM journal_trades WHERE run_id = ?", [run_id])
             self._store._conn.execute("DELETE FROM backtest_runs WHERE run_id = ?", [run_id])
         return True

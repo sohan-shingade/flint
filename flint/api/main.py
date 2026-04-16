@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -62,6 +63,29 @@ async def lifespan(app: FastAPI):
         paper_engine.set_event_loop(asyncio.get_running_loop())
         paper_engine.resume_sessions()
         app.state.paper_engine = paper_engine
+
+        # Mark stale live sessions as interrupted (they can't auto-resume
+        # because live trading requires venue credentials and connections)
+        try:
+            with store._lock:
+                stale = store._conn.execute(
+                    "SELECT session_id, strategy_name, market, venue FROM live_sessions "
+                    "WHERE status = 'running'"
+                ).fetchall()
+                if stale:
+                    store._conn.execute(
+                        "UPDATE live_sessions SET status = 'interrupted', "
+                        "stopped_at = ? WHERE status = 'running'",
+                        [int(time.time())],
+                    )
+                    for s in stale:
+                        logger.warning(
+                            "Live session %s (%s on %s/%s) marked interrupted — "
+                            "redeploy manually via the Live Trading page",
+                            s[0], s[1], s[2], s[3],
+                        )
+        except Exception as e:
+            logger.debug("Live session cleanup: %s", e)
 
         # Start price ticker for live PnL updates
         ticker = PriceTicker(config.default_markets, interval_s=5.0)
