@@ -3,7 +3,7 @@
  * Simulates: Load BacktestLab → write code → set config → run backtest → view results → deploy to paper
  */
 import { describe, it, expect, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithRouter } from '../test-utils'
 import BacktestLab from '../../pages/BacktestLab'
@@ -108,21 +108,16 @@ describe('Backtest Flow Integration', () => {
   })
 
   it('template selection updates editor code and detects strategy profile', async () => {
-    const user = userEvent.setup()
     renderWithRouter(<BacktestLab />)
 
     const editor = screen.getByTestId('code-editor')
     expect(editor).toBeInTheDocument()
 
-    // Write some strategy code with get_candles
-    await user.clear(editor)
-    await user.type(editor, 'ctx.get_candles("BTC-PERP")')
+    // Set code directly via fireEvent (typing character-by-character is too slow)
+    fireEvent.change(editor, { target: { value: 'ctx.get_candles("BTC-PERP")' } })
 
-    // Should detect multi-market after debounce
-    await waitFor(() => {
-      const multiMarket = screen.queryByText(/MULTI-MARKET/)
-      // May or may not appear depending on timing
-    }, { timeout: 3000 })
+    // Editor should reflect the new value
+    expect((editor as HTMLTextAreaElement).value).toContain('get_candles')
   })
 
   it('loading saved strategy populates editor', async () => {
