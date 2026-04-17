@@ -189,15 +189,23 @@ describe('DataExplorer', () => {
     }, { timeout: 5000 })
   })
 
-  it('REFRESH button triggers download for that market', async () => {
+  it('UPDATE button uses async download endpoint', async () => {
     const user = userEvent.setup()
-    let downloadedMarket = ''
+    let asyncCalled = false
+    let pollCalled = false
     server.use(
-      http.post('/api/v1/data/download', async ({ request }) => {
-        const body = await request.json() as any
-        downloadedMarket = body.market
-        return HttpResponse.json({ market: body.market, downloaded: 50, cached: 0, existing: 1000, total: 1050 })
-      })
+      http.post('/api/v1/data/download-async', async () => {
+        asyncCalled = true
+        return HttpResponse.json({ id: 'dl-test-1', status: 'downloading', markets: ['SOL-PERP'] })
+      }),
+      http.get('/api/v1/data/download-async/:id/status', () => {
+        pollCalled = true
+        return HttpResponse.json({
+          status: 'complete',
+          progress: { markets: [{ market: 'SOL-PERP', status: 'done', detail: '168 candles' }], pct: 100 },
+          results: { markets: [{ market: 'SOL-PERP', total: 168 }] },
+        })
+      }),
     )
 
     renderWithRouter(<DataExplorer />)
@@ -206,11 +214,17 @@ describe('DataExplorer', () => {
       expect(screen.getAllByTitle(/Update .* to latest/).length).toBeGreaterThan(0)
     }, { timeout: 5000 })
 
-    const refreshBtns = screen.getAllByTitle(/Update .* to latest/)
-    await user.click(refreshBtns[0])
+    const updateBtns = screen.getAllByTitle(/Update .* to latest/)
+    await user.click(updateBtns[0])
 
+    // Should call async endpoint, not sync
     await waitFor(() => {
-      expect(downloadedMarket).not.toBe('')
+      expect(asyncCalled).toBe(true)
+    }, { timeout: 5000 })
+
+    // Should poll for status
+    await waitFor(() => {
+      expect(pollCalled).toBe(true)
     }, { timeout: 5000 })
   })
 })
