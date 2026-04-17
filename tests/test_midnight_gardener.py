@@ -6,6 +6,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "strategies", "user"))
 
+_strategy_path = os.path.join(os.path.dirname(__file__), "..", "strategies", "user", "midnight_gardener.py")
+if not os.path.exists(_strategy_path):
+    pytest.skip("midnight_gardener.py not found (user strategy, gitignored)", allow_module_level=True)
+
 from midnight_gardener import MidnightGardener
 from flint.models import Candle, Signal, Side, FundingRate
 from flint.backtest.engine import BacktestEngine
