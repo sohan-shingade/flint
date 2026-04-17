@@ -1061,49 +1061,20 @@ export default function BacktestLab() {
               <span className="text-[10px] text-ghost tracking-[0.2em]">CONFIG.PARAMS</span>
             </div>
 
-            {/* Strategy profile detection panel */}
-            {stratProfile && stratProfile.type !== 'single' && (
-              <div className="mx-3 mt-3 border border-amber/30 bg-amber/5 p-3 space-y-2" style={{ animation: 'fadeUp 0.3s ease' }}>
-                <div className="text-[9px] px-2 py-1 border border-border/50 text-ghost/60 inline-block">
-                  {stratProfile.type === 'multi_venue' ? 'MULTI-VENUE' :
-                   stratProfile.type === 'multi_market' ? 'MULTI-MARKET' :
-                   stratProfile.type === 'cross_venue_multi_market' ? 'CROSS-VENUE MULTI-MARKET' : ''}
-                  {stratProfile.venues.length > 0 && ` — ${stratProfile.venues.join(', ').toUpperCase()}`}
-                  {stratProfile.markets.length > 0 && ` — ${stratProfile.markets.join(', ')}`}
-                </div>
-
-                {stratProfile.usesAllVenues && (
-                  <div className="text-[9px] text-ghost">
-                    Uses cross-venue funding data (all downloaded venues)
-                  </div>
-                )}
-
-                {/* Data requirement warnings */}
-                {stratProfile.needsFunding && (
-                  <div className="text-[9px] text-amber/70">Requires funding rate data -- download in Data Explorer</div>
-                )}
-                {stratProfile.needsBorrowRate && (
-                  <div className="text-[9px] text-amber/70">Requires borrow rate data (Jupiter)</div>
-                )}
-                {stratProfile.needsOracle && (
-                  <div className="text-[9px] text-amber/70">Uses oracle price (Drift only)</div>
-                )}
-                {stratProfile.needsOrderbook && (
-                  <div className="text-[9px] text-amber/70">Requires orderbook snapshots</div>
-                )}
-              </div>
-            )}
-
             <div className="p-3 grid grid-cols-2 gap-3">
               <div className="col-span-2 bg-panel/80 border border-border/50 px-3 py-2">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-[10px] text-amber tracking-wider font-medium">MARKETS</span>
+                  {stratProfile && stratProfile.type !== 'single' && (
+                    <span className="text-[8px] px-1.5 py-0.5 border border-amber/30 text-amber/70">
+                      {stratProfile.type === 'multi_venue' ? 'MULTI-VENUE' :
+                       stratProfile.type === 'multi_market' ? 'MULTI-MARKET' :
+                       stratProfile.type === 'cross_venue_multi_market' ? 'CROSS-VENUE' : ''}
+                    </span>
+                  )}
                 </div>
-                <p className="text-[10px] text-terminal/70 leading-relaxed">
-                  Define markets in your strategy code. The primary market is passed via <code className="text-amber/70 bg-void/50 px-1">candle.market</code>.
-                  Access additional markets with <code className="text-amber/70 bg-void/50 px-1">ctx.get_candles("BTC-PERP")</code>.
-                  Default: <span className="text-white/80">SOL-PERP</span>. Set in config below.
-                </p>
+
+                {/* Primary market selector */}
                 <div className="mt-2 flex items-center gap-2">
                   <label className="text-[9px] text-ghost tracking-wider">PRIMARY</label>
                   <select value={market} onChange={(e) => setMarket(e.target.value)}
@@ -1113,19 +1084,50 @@ export default function BacktestLab() {
                     )}
                   </select>
                 </div>
-                {/* Multi-venue strategy: show per-venue fee info */}
+
+                {/* Auto-detected additional markets from code */}
+                {stratProfile && stratProfile.markets.length > 0 && (
+                  <div className="mt-2">
+                    <label className="text-[9px] text-ghost/50 tracking-wider">ADDITIONAL (from code)</label>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {stratProfile.markets.map(m => {
+                        const status = multiMarketCheck?.markets?.[m]
+                        const hasData = status?.has_data
+                        return (
+                          <span key={m} className={`text-[9px] px-2 py-0.5 border ${
+                            hasData ? 'border-gain/30 text-gain/80' : 'border-loss/30 text-loss/80'
+                          }`}>
+                            {m} {hasData ? '\u25CF' : '\u25CB'}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Multi-venue info */}
                 {stratProfile && (stratProfile.type === 'multi_venue' || stratProfile.type === 'cross_venue_multi_market') && (
-                  <div className="mt-2 p-2 border border-border bg-surface/30">
-                    <div className="text-[9px] text-ghost tracking-wider mb-1">VENUE FEES (per venue config)</div>
-                    {(stratProfile.venues.length > 0 ? stratProfile.venues : ['drift', 'hyperliquid']).map(v => {
-                      const info = getVenue(v)
-                      return (
-                        <div key={v} className="text-[9px] text-ghost/50">
-                          {v.toUpperCase()}: {info ? `${info.takerFeeBps} bps` : '?'} taker
-                        </div>
-                      )
-                    })}
-                    <div className="text-[8px] text-ghost/50 mt-1">Multi-venue strategies use per-venue fee configs automatically</div>
+                  <div className="mt-2">
+                    <label className="text-[9px] text-ghost/50 tracking-wider">VENUES (from code)</label>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {(stratProfile.venues.length > 0 ? stratProfile.venues : ['drift', 'hyperliquid']).map(v => {
+                        const info = getVenue(v)
+                        return (
+                          <span key={v} className="text-[9px] px-2 py-0.5 border border-border text-ghost/60" style={{ borderColor: info?.color + '40', color: info?.color }}>
+                            {v.toUpperCase()} {info ? `${info.takerFeeBps}bps` : ''}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Data requirement warnings */}
+                {stratProfile && (stratProfile.needsFunding || stratProfile.needsBorrowRate || stratProfile.needsOrderbook) && (
+                  <div className="mt-2 text-[9px] space-y-0.5">
+                    {stratProfile.needsFunding && <div className="text-amber/70">Requires funding rate data</div>}
+                    {stratProfile.needsBorrowRate && <div className="text-amber/70">Requires Jupiter borrow rates</div>}
+                    {stratProfile.needsOrderbook && <div className="text-amber/70">Requires orderbook snapshots</div>}
                   </div>
                 )}
               </div>
