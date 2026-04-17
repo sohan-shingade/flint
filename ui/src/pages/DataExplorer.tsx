@@ -1069,27 +1069,47 @@ export default function DataExplorer() {
               <button
                 onClick={async (e) => {
                   const btn = e.currentTarget
-                  const orig = btn.textContent
                   btn.textContent = 'UPDATING...'
                   btn.classList.add('animate-pulse')
-                  for (let i = 0; i < markets.length; i++) {
-                    btn.textContent = `UPDATING ${i + 1}/${markets.length}...`
-                    await fetch('/api/v1/data/download', {
+                  try {
+                    // Submit all markets at once via async endpoint
+                    const r = await fetch('/api/v1/data/download-async', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
-                        market: markets[i].market,
-                        resolution_s: markets[i].resolution_s,
-                        start_ts: markets[i].last_ts,
+                        markets: markets.map(m => m.market),
+                        resolution_s: 3600,
+                        start_ts: Math.min(...markets.map(m => m.last_ts)),
                         end_ts: Math.floor(Date.now() / 1000),
                       }),
-                    }).catch(() => {})
+                    })
+                    const { id: dlId } = await r.json()
+                    const poll = async () => {
+                      const sr = await fetch(`/api/v1/data/download-async/${dlId}/status`)
+                      const sd = await sr.json()
+                      const done = sd.progress?.markets?.filter((m: any) => m.status === 'done').length || 0
+                      const total = sd.progress?.markets?.length || markets.length
+                      btn.textContent = `UPDATING ${done}/${total}...`
+                      if (sd.status === 'complete') {
+                        btn.textContent = 'DONE \u2713'
+                        btn.classList.remove('animate-pulse')
+                        refreshInventory()
+                        loadData()
+                        setTimeout(() => { btn.textContent = 'REFRESH ALL' }, 3000)
+                      } else if (sd.status === 'failed') {
+                        btn.textContent = 'FAILED'
+                        btn.classList.remove('animate-pulse')
+                        setTimeout(() => { btn.textContent = 'REFRESH ALL' }, 3000)
+                      } else {
+                        setTimeout(poll, 1500)
+                      }
+                    }
+                    setTimeout(poll, 1000)
+                  } catch {
+                    btn.textContent = 'FAILED'
+                    btn.classList.remove('animate-pulse')
+                    setTimeout(() => { btn.textContent = 'REFRESH ALL' }, 3000)
                   }
-                  btn.textContent = 'DONE \u2713'
-                  btn.classList.remove('animate-pulse')
-                  refreshInventory()
-                  loadData()
-                  setTimeout(() => { btn.textContent = orig || 'REFRESH ALL' }, 3000)
                 }}
                 className="text-[11px] text-ghost/50 hover:text-amber border border-border/50 hover:border-amber/30 px-3 py-1 tracking-wider transition-all"
                 title="Update all markets to latest"
@@ -1146,25 +1166,43 @@ export default function DataExplorer() {
                             btn.textContent = 'UPDATING...'
                             btn.classList.add('animate-pulse', 'opacity-60')
                             try {
-                              await fetch('/api/v1/data/download', {
+                              // Use async endpoint to avoid blocking
+                              const r = await fetch('/api/v1/data/download-async', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({
-                                  market: m.market,
+                                  markets: [m.market],
                                   resolution_s: m.resolution_s,
                                   start_ts: m.last_ts,
                                   end_ts: Math.floor(Date.now() / 1000),
                                 }),
                               })
-                              btn.textContent = 'DONE \u2713'
-                              btn.classList.remove('animate-pulse', 'opacity-60')
-                              refreshInventory()
-                              loadData()
+                              const { id: dlId } = await r.json()
+                              // Poll until done
+                              const poll = async (): Promise<void> => {
+                                const sr = await fetch(`/api/v1/data/download-async/${dlId}/status`)
+                                const sd = await sr.json()
+                                const mk = sd.progress?.markets?.[0]
+                                if (sd.status === 'complete') {
+                                  btn.textContent = mk?.detail || 'DONE \u2713'
+                                  btn.classList.remove('animate-pulse', 'opacity-60')
+                                  refreshInventory()
+                                  loadData()
+                                  setTimeout(() => { btn.textContent = 'UPDATE' }, 3000)
+                                } else if (sd.status === 'failed') {
+                                  btn.textContent = 'FAILED'
+                                  btn.classList.remove('animate-pulse', 'opacity-60')
+                                  setTimeout(() => { btn.textContent = 'UPDATE' }, 3000)
+                                } else {
+                                  setTimeout(poll, 1500)
+                                }
+                              }
+                              setTimeout(poll, 1000)
                             } catch {
                               btn.textContent = 'FAILED'
                               btn.classList.remove('animate-pulse', 'opacity-60')
+                              setTimeout(() => { btn.textContent = 'UPDATE' }, 3000)
                             }
-                            setTimeout(() => { btn.textContent = 'UPDATE' }, 3000)
                           }}
                           className="text-[11px] text-ghost/60 hover:text-amber border border-border/40 hover:border-amber/30 px-3 py-1 tracking-wider transition-all"
                           title={`Update ${m.market} to latest`}
