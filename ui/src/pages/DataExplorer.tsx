@@ -356,13 +356,13 @@ export default function DataExplorer() {
   }, [showFunding, fundingByVenue])
 
   const inputClass = 'bg-void border border-border text-terminal text-xs px-2.5 py-2 focus:border-amber/50 focus:outline-none transition-colors'
-  const labelClass = 'block text-[10px] text-ghost tracking-[0.15em] mb-1'
+  const labelClass = 'block text-xs text-ghost tracking-[0.15em] mb-1'
 
   return (
     <div className="space-y-4">
       <div className="flex items-baseline gap-4">
         <h1 className="font-[var(--font-display)] text-2xl text-white/90 italic">Data Explorer</h1>
-        <span className="text-[10px] text-ghost tracking-[0.2em]">// MARKET DATA BROWSER</span>
+        <span className="text-xs text-ghost tracking-[0.2em]">// MARKET DATA BROWSER</span>
       </div>
 
       {/* ── controls ── */}
@@ -394,7 +394,7 @@ export default function DataExplorer() {
                 <button
                   key={h.label}
                   onClick={() => setHorizon(h.days)}
-                  className={`px-2.5 py-1.5 text-[10px] tracking-wider border transition-all ${
+                  className={`px-2.5 py-1.5 text-xs tracking-wider border transition-all ${
                     horizon === h.days
                       ? 'border-amber/50 bg-amber-glow text-amber'
                       : 'border-border text-ghost hover:text-terminal'
@@ -423,7 +423,7 @@ export default function DataExplorer() {
             {showAddMarkets ? 'HIDE' : 'ADD MARKETS'}
           </button>
           {candles.length > 0 && (
-            <span className="text-[10px] text-amber/60">{candles.length} candles</span>
+            <span className="text-xs text-amber/60">{candles.length} candles</span>
           )}
         </div>
 
@@ -443,60 +443,60 @@ export default function DataExplorer() {
             <label className={labelClass}>INDICATORS</label>
             <div className="flex gap-1">
               <button onClick={() => setShowSMA(!showSMA)}
-                className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${showSMA ? 'border-gain/50 text-gain bg-gain/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
+                className={`px-3 py-1.5 text-[11px] tracking-wider border transition-all ${showSMA ? 'border-gain/50 text-gain bg-gain/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
                 SMA{showSMA && ` ${smaPeriod}`}
               </button>
               <button onClick={() => setShowEMA(!showEMA)}
-                className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${showEMA ? 'border-[#8b5cf6]/50 text-[#8b5cf6] bg-[#8b5cf6]/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
+                className={`px-3 py-1.5 text-[11px] tracking-wider border transition-all ${showEMA ? 'border-[#8b5cf6]/50 text-[#8b5cf6] bg-[#8b5cf6]/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
                 EMA{showEMA && ` ${emaPeriod}`}
               </button>
               <button onClick={() => setShowVWAP(!showVWAP)}
-                className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${showVWAP ? 'border-[#06b6d4]/50 text-[#06b6d4] bg-[#06b6d4]/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
+                className={`px-3 py-1.5 text-[11px] tracking-wider border transition-all ${showVWAP ? 'border-[#06b6d4]/50 text-[#06b6d4] bg-[#06b6d4]/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
                 VWAP
               </button>
               <button onClick={() => setShowBB(!showBB)}
-                className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${showBB ? 'border-amber/50 text-amber bg-amber/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
+                className={`px-3 py-1.5 text-[11px] tracking-wider border transition-all ${showBB ? 'border-amber/50 text-amber bg-amber/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
                 BB{showBB && ` ${bbPeriod}`}
               </button>
               <button onClick={() => setShowRSI(!showRSI)}
-                className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${showRSI ? 'border-[#f59e0b]/50 text-[#f59e0b] bg-[#f59e0b]/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
+                className={`px-3 py-1.5 text-[11px] tracking-wider border transition-all ${showRSI ? 'border-[#f59e0b]/50 text-[#f59e0b] bg-[#f59e0b]/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
                 RSI{showRSI && ` ${rsiPeriod}`}
               </button>
               <button onClick={() => setShowVolume(!showVolume)}
-                className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${showVolume ? 'border-ghost/50 text-ghost bg-ghost/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
+                className={`px-3 py-1.5 text-[11px] tracking-wider border transition-all ${showVolume ? 'border-ghost/50 text-ghost bg-ghost/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
                 VOL
               </button>
               <button onClick={() => setShowFunding(!showFunding)}
-                className={`px-2 py-1 text-[9px] tracking-wider border transition-all ${showFunding ? 'border-amber/50 text-amber bg-amber/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
+                className={`px-3 py-1.5 text-[11px] tracking-wider border transition-all ${showFunding ? 'border-amber/50 text-amber bg-amber/10' : 'border-border text-ghost/50 hover:text-terminal'}`}>
                 FUND
               </button>
             </div>
           </div>
           {/* period inputs for active indicators */}
           {(showSMA || showEMA || showBB) && (
-            <div className="flex gap-2 items-center text-[9px] text-ghost/50">
+            <div className="flex gap-2 items-center text-[11px] text-ghost/50">
               {showSMA && (
                 <span>SMA: <input type="number" value={smaPeriod} onChange={e => setSmaPeriod(+e.target.value)}
-                  className="bg-void border border-border text-terminal text-[10px] w-10 px-1 py-0.5 text-center" min={2} max={200} /></span>
+                  className="bg-void border border-border text-terminal text-xs w-10 px-1 py-0.5 text-center" min={2} max={200} /></span>
               )}
               {showEMA && (
                 <span>EMA: <input type="number" value={emaPeriod} onChange={e => setEmaPeriod(+e.target.value)}
-                  className="bg-void border border-border text-terminal text-[10px] w-10 px-1 py-0.5 text-center" min={2} max={200} /></span>
+                  className="bg-void border border-border text-terminal text-xs w-10 px-1 py-0.5 text-center" min={2} max={200} /></span>
               )}
               {showBB && (
                 <span>BB: <input type="number" value={bbPeriod} onChange={e => setBbPeriod(+e.target.value)}
-                  className="bg-void border border-border text-terminal text-[10px] w-10 px-1 py-0.5 text-center" min={5} max={100} /></span>
+                  className="bg-void border border-border text-terminal text-xs w-10 px-1 py-0.5 text-center" min={5} max={100} /></span>
               )}
               {showRSI && (
                 <span>RSI: <input type="number" value={rsiPeriod} onChange={e => setRsiPeriod(+e.target.value)}
-                  className="bg-void border border-border text-terminal text-[10px] w-10 px-1 py-0.5 text-center" min={5} max={30} /></span>
+                  className="bg-void border border-border text-terminal text-xs w-10 px-1 py-0.5 text-center" min={5} max={30} /></span>
               )}
             </div>
           )}
         </div>
 
         {selectedInfo && (
-          <div className="mt-2 text-[9px] text-ghost/40 tracking-wider">
+          <div className="mt-2 text-[11px] text-ghost/40 tracking-wider">
             DB: {selectedInfo.candle_count.toLocaleString()} candles, {fmtDate(selectedInfo.first_ts)} — {fmtDate(selectedInfo.last_ts)}
           </div>
         )}
@@ -507,14 +507,14 @@ export default function DataExplorer() {
         <div className="border border-amber/20 bg-surface/80 backdrop-blur" style={{ animation: 'fadeUp 0.2s ease' }}>
           <div className="px-4 py-2.5 border-b border-border flex items-center gap-2">
             <span className="w-2 h-2 bg-amber/60" />
-            <span className="text-[10px] text-amber tracking-[0.2em]">ADD.MARKETS</span>
-            <span className="ml-auto text-[10px] text-ghost/40">Select markets and time range to download</span>
+            <span className="text-xs text-amber tracking-[0.2em]">ADD.MARKETS</span>
+            <span className="ml-auto text-xs text-ghost/40">Select markets and time range to download</span>
           </div>
 
           <div className="p-4 space-y-4">
             {/* Presets */}
             <div>
-              <div className="text-[10px] text-ghost tracking-[0.15em] mb-2">PRESETS</div>
+              <div className="text-xs text-ghost tracking-[0.15em] mb-2">PRESETS</div>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
                 {Object.entries(MARKET_PACKS).map(([key, pack]) => (
                   <button
@@ -523,8 +523,8 @@ export default function DataExplorer() {
                     className="border border-border hover:border-amber/30 p-3 text-left transition-all group"
                   >
                     <div className="text-[11px] text-white/80 group-hover:text-amber font-medium">{pack.label}</div>
-                    <div className="text-[9px] text-ghost/50 mt-0.5">{pack.description}</div>
-                    <div className="text-[9px] text-amber/40 mt-1">{pack.markets.length || availableForDownload.length} markets</div>
+                    <div className="text-[11px] text-ghost/50 mt-0.5">{pack.description}</div>
+                    <div className="text-[11px] text-amber/40 mt-1">{pack.markets.length || availableForDownload.length} markets</div>
                   </button>
                 ))}
               </div>
@@ -533,13 +533,13 @@ export default function DataExplorer() {
             {/* Time range */}
             <div className="flex flex-wrap items-end gap-3">
               <div>
-                <div className="text-[10px] text-ghost tracking-[0.15em] mb-2">TIME RANGE</div>
+                <div className="text-xs text-ghost tracking-[0.15em] mb-2">TIME RANGE</div>
                 <div className="flex gap-0.5">
                   {Object.entries(DOWNLOAD_RANGES).map(([key, r]) => (
                     <button
                       key={key}
                       onClick={() => setDownloadRange(key)}
-                      className={`px-2.5 py-1.5 text-[10px] tracking-wider border transition-all ${
+                      className={`px-2.5 py-1.5 text-xs tracking-wider border transition-all ${
                         downloadRange === key
                           ? 'border-amber/50 bg-amber-glow text-amber'
                           : 'border-border text-ghost hover:text-terminal'
@@ -553,12 +553,12 @@ export default function DataExplorer() {
               {downloadRange === 'custom' && (
                 <>
                   <div>
-                    <label className="block text-[9px] text-ghost tracking-wider mb-1">FROM</label>
+                    <label className="block text-[11px] text-ghost tracking-wider mb-1">FROM</label>
                     <input type="date" value={dlStartDate} onChange={e => setDlStartDate(e.target.value)}
                       className="bg-void border border-border text-terminal text-xs px-2.5 py-1.5" />
                   </div>
                   <div>
-                    <label className="block text-[9px] text-ghost tracking-wider mb-1">TO</label>
+                    <label className="block text-[11px] text-ghost tracking-wider mb-1">TO</label>
                     <input type="date" value={dlEndDate} onChange={e => setDlEndDate(e.target.value)}
                       className="bg-void border border-border text-terminal text-xs px-2.5 py-1.5" />
                   </div>
@@ -568,7 +568,7 @@ export default function DataExplorer() {
 
             {/* Regime presets */}
             <div>
-              <div className="text-[10px] text-ghost tracking-[0.15em] mb-2">REGIMES <span className="text-ghost/40">— download data for specific market regimes</span></div>
+              <div className="text-xs text-ghost tracking-[0.15em] mb-2">REGIMES <span className="text-ghost/40">— download data for specific market regimes</span></div>
               <div className="flex flex-wrap gap-1">
                 {REGIMES.map(r => (
                   <button
@@ -578,7 +578,7 @@ export default function DataExplorer() {
                       setDlStartDate(r.startDate)
                       setDlEndDate(r.endDate)
                     }}
-                    className="px-2 py-1 text-[9px] tracking-wider border border-border hover:border-opacity-60 transition-all"
+                    className="px-3 py-1.5 text-[11px] tracking-wider border border-border hover:border-opacity-60 transition-all"
                     style={{ borderColor: r.color + '40', color: r.color }}
                     title={`${r.description} (${r.startDate} to ${r.endDate})`}
                   >
@@ -592,7 +592,7 @@ export default function DataExplorer() {
                     setDlStartDate(REGIMES[0].startDate)
                     setDlEndDate(REGIMES[REGIMES.length - 1].endDate)
                   }}
-                  className="px-2 py-1 text-[9px] tracking-wider border border-amber/30 text-amber hover:bg-amber-glow transition-all"
+                  className="px-3 py-1.5 text-[11px] tracking-wider border border-amber/30 text-amber hover:bg-amber-glow transition-all"
                 >
                   ALL REGIMES
                 </button>
@@ -602,10 +602,10 @@ export default function DataExplorer() {
             {/* Execution Venues */}
             <div className="mb-6">
               <div className="flex items-center justify-between mb-2">
-                <label className="text-ghost text-[10px] tracking-wider">
+                <label className="text-ghost text-xs tracking-wider">
                   EXECUTION VENUES <span className="text-ghost/40">— venues to simulate trading on</span>
                 </label>
-                <div className="flex gap-2 text-[9px]">
+                <div className="flex gap-2 text-[11px]">
                   <button onClick={() => setSelectedExecutionVenues(DEX_VENUES.map(v => v.id))}
                           className="text-ghost/60 hover:text-ghost">All DEX</button>
                   <button onClick={() => setSelectedExecutionVenues(CEX_VENUES.map(v => v.id))}
@@ -634,23 +634,23 @@ export default function DataExplorer() {
                         <span className="text-[11px] font-medium" style={selected ? { color: v.color } : { color: '#9ca3af' }}>
                           {v.label}
                         </span>
-                        <span className="text-[8px] px-1.5 py-0.5 border border-border/50 text-ghost/50 uppercase">
+                        <span className="text-xs px-1.5 py-0.5 border border-border/50 text-ghost/50 uppercase">
                           {v.type}
                         </span>
                       </div>
-                      <div className="text-[9px] text-ghost/40">{v.takerFeeBps} bps taker &middot; {v.maxLeverage}x</div>
+                      <div className="text-[11px] text-ghost/40">{v.takerFeeBps} bps taker &middot; {v.maxLeverage}x</div>
                     </button>
                   )
                 })}
               </div>
-              <p className="text-ghost/40 text-[9px] mt-1">
+              <p className="text-ghost/40 text-[11px] mt-1">
                 {selectedExecutionVenues.length} selected — downloads orderbook depth + funding/borrow data per venue
               </p>
             </div>
 
             {/* Price Source Banner */}
             <div className="mb-6 px-3 py-2 border border-border/30 bg-panel/50">
-              <span className="text-[9px] text-ghost/50">
+              <span className="text-[11px] text-ghost/50">
                 PRICE DATA: <span className="text-amber/60">Pyth Oracle</span> — canonical oracle prices used across all venues
               </span>
             </div>
@@ -658,18 +658,18 @@ export default function DataExplorer() {
             {/* Market grid — split by type */}
             <div>
               <div className="flex items-center gap-3 mb-2">
-                <span className="text-[10px] text-ghost tracking-[0.15em]">MARKETS</span>
-                <span className="text-[9px] text-ghost/40">{selectedDownloads.length} selected</span>
+                <span className="text-xs text-ghost tracking-[0.15em]">MARKETS</span>
+                <span className="text-[11px] text-ghost/40">{selectedDownloads.length} selected</span>
                 <button onClick={() => setSelectedDownloads(availableForDownload.filter(m => m.type === 'perp').map(m => m.market))}
-                  className="text-[9px] text-ghost/40 hover:text-amber ml-auto">All perps</button>
+                  className="text-[11px] text-ghost/40 hover:text-amber ml-auto">All perps</button>
                 <button onClick={() => setSelectedDownloads(availableForDownload.filter(m => m.type === 'spot').map(m => m.market))}
-                  className="text-[9px] text-ghost/40 hover:text-amber">All spot</button>
-                <button onClick={() => setSelectedDownloads([])} className="text-[9px] text-ghost/40 hover:text-terminal">Clear</button>
+                  className="text-[11px] text-ghost/40 hover:text-amber">All spot</button>
+                <button onClick={() => setSelectedDownloads([])} className="text-[11px] text-ghost/40 hover:text-terminal">Clear</button>
               </div>
 
               {/* Perp markets */}
               <div className="mb-3">
-                <div className="text-[9px] text-ghost/50 tracking-wider mb-1 flex items-center gap-2">
+                <div className="text-[11px] text-ghost/50 tracking-wider mb-1 flex items-center gap-2">
                   <span className="w-1.5 h-1.5 bg-amber/50" />
                   PERPETUALS ({availableForDownload.filter(m => m.type === 'perp').length})
                 </div>
@@ -684,7 +684,7 @@ export default function DataExplorer() {
                           if (isSelected) setSelectedDownloads(prev => prev.filter(x => x !== m.market))
                           else setSelectedDownloads(prev => [...prev, m.market])
                         }}
-                        className={`px-2 py-1.5 text-[9px] tracking-wider border transition-all text-left ${
+                        className={`px-2 py-1.5 text-[11px] tracking-wider border transition-all text-left ${
                           isSelected ? 'border-amber/50 bg-amber-glow text-amber'
                             : isDownloaded ? 'border-gain/20 text-gain/60'
                             : 'border-border text-ghost/50 hover:text-terminal hover:border-border-bright'
@@ -700,7 +700,7 @@ export default function DataExplorer() {
 
               {/* Spot markets */}
               <div>
-                <div className="text-[9px] text-ghost/50 tracking-wider mb-1 flex items-center gap-2">
+                <div className="text-[11px] text-ghost/50 tracking-wider mb-1 flex items-center gap-2">
                   <span className="w-1.5 h-1.5 bg-phosphor/50" />
                   SPOT ({availableForDownload.filter(m => m.type === 'spot').length})
                 </div>
@@ -715,7 +715,7 @@ export default function DataExplorer() {
                           if (isSelected) setSelectedDownloads(prev => prev.filter(x => x !== m.market))
                           else setSelectedDownloads(prev => [...prev, m.market])
                         }}
-                        className={`px-2 py-1.5 text-[9px] tracking-wider border transition-all text-left ${
+                        className={`px-2 py-1.5 text-[11px] tracking-wider border transition-all text-left ${
                           isSelected ? 'border-phosphor/50 bg-phosphor-dim text-phosphor'
                             : isDownloaded ? 'border-gain/20 text-gain/60'
                             : 'border-border text-ghost/50 hover:text-terminal hover:border-border-bright'
@@ -740,10 +740,10 @@ export default function DataExplorer() {
                 {isDownloading ? 'DOWNLOADING...' : `DOWNLOAD ${selectedDownloads.length} MARKET${selectedDownloads.length !== 1 ? 'S' : ''}`}
               </button>
               {selectedDownloads.length > 10 && !isDownloading && (
-                <span className="text-[9px] text-loss/60">This may take several minutes</span>
+                <span className="text-[11px] text-loss/60">This may take several minutes</span>
               )}
               {selectedDownloads.length > 20 && !isDownloading && (
-                <span className="text-[9px] text-loss/60">Large download — grab a coffee</span>
+                <span className="text-[11px] text-loss/60">Large download — grab a coffee</span>
               )}
             </div>
 
@@ -752,21 +752,21 @@ export default function DataExplorer() {
               <div className="max-h-[200px] overflow-y-auto">
                 <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1">
                   {downloadProgress.map(p => (
-                    <div key={p.market} className={`px-2 py-1 text-[9px] border ${
+                    <div key={p.market} className={`px-3 py-1.5 text-[11px] border ${
                       p.status === 'pending' ? 'border-border text-ghost/30' :
                       p.status.includes('downloading') ? 'border-amber/30 text-amber animate-pulse' :
                       p.status === 'failed' || p.status === 'no data found' ? 'border-loss/30 text-loss/60' :
                       'border-gain/30 text-gain/60'
                     }`}>
                       <div className="font-medium">{p.market.replace('-PERP', '')}</div>
-                      <div className="text-[8px] truncate">{p.status}</div>
+                      <div className="text-xs truncate">{p.status}</div>
                     </div>
                   ))}
                 </div>
                 {downloadWarnings.length > 0 && (
                   <div className="mt-2 space-y-1">
                     {downloadWarnings.map((w, i) => (
-                      <div key={i} className="text-[9px] text-loss/80 font-mono">⚠ {w}</div>
+                      <div key={i} className="text-[11px] text-loss/80 font-mono">⚠ {w}</div>
                     ))}
                   </div>
                 )}
@@ -781,17 +781,17 @@ export default function DataExplorer() {
         {loading ? (
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 border border-amber/50 border-t-amber rounded-full animate-spin" />
-            <span className="text-[10px] text-amber/60 tracking-wider">{loadStatus || 'Loading...'}</span>
+            <span className="text-xs text-amber/60 tracking-wider">{loadStatus || 'Loading...'}</span>
           </div>
         ) : loadStatus && candles.length > 0 ? (
-          <span className="text-[10px] text-gain/60 tracking-wider">{loadStatus}</span>
+          <span className="text-xs text-gain/60 tracking-wider">{loadStatus}</span>
         ) : null}
       </div>
 
       {!loading && candles.length === 0 && loadStatus && (
         <div className="border border-border/50 py-8 text-center">
           <div className="text-ghost/40 text-xs tracking-wider">{loadStatus}</div>
-          <div className="text-ghost/20 text-[10px] mt-2">Try a different market or click ADD MARKETS</div>
+          <div className="text-ghost/20 text-xs mt-2">Try a different market or click ADD MARKETS</div>
         </div>
       )}
 
@@ -799,11 +799,11 @@ export default function DataExplorer() {
       {candles.length > 0 && (
         <div className="flex gap-0.5">
           <button onClick={() => setActiveTab('price')}
-            className={`px-3 py-1.5 text-[10px] tracking-[0.12em] border transition-all ${
+            className={`px-3 py-1.5 text-xs tracking-[0.12em] border transition-all ${
               activeTab === 'price' ? 'border-amber/50 bg-amber-glow text-amber' : 'border-border text-ghost hover:text-terminal'
             }`}>PRICE</button>
           <button onClick={() => setActiveTab('funding')}
-            className={`px-3 py-1.5 text-[10px] tracking-[0.12em] border transition-all ${
+            className={`px-3 py-1.5 text-xs tracking-[0.12em] border transition-all ${
               activeTab === 'funding' ? 'border-amber/50 bg-amber-glow text-amber' : 'border-border text-ghost hover:text-terminal'
             }`}>FUNDING</button>
         </div>
@@ -833,7 +833,7 @@ export default function DataExplorer() {
 
             return (
               <div className="mt-2 border border-border bg-surface/60 px-3 py-2">
-                <div className="text-[9px] text-ghost/40 tracking-[0.15em] mb-1">VOLUME BY VENUE</div>
+                <div className="text-[11px] text-ghost/40 tracking-[0.15em] mb-1">VOLUME BY VENUE</div>
                 <div className="flex items-end gap-[1px] h-16 border-b border-border/30">
                   {candles.map((c) => {
                     const venueVols: {venue: string, vol: number, color: string}[] = []
@@ -866,7 +866,7 @@ export default function DataExplorer() {
                   {Object.keys(venueVolume).map(venue => {
                     const color = EXECUTION_VENUES.find(v => v.id === venue)?.color || '#666'
                     return (
-                      <div key={venue} className="flex items-center gap-1 text-[8px] text-ghost/40">
+                      <div key={venue} className="flex items-center gap-1 text-xs text-ghost/40">
                         <div className="w-2 h-2" style={{ backgroundColor: color, opacity: 0.6 }} />
                         {venue}
                       </div>
@@ -886,7 +886,7 @@ export default function DataExplorer() {
               { label: 'AVG VOL', value: (candles.reduce((s,d) => s + d.volume, 0) / candles.length).toFixed(0) },
             ].map(s => (
               <div key={s.label} className="border border-border bg-surface/60 p-3">
-                <div className="text-[8px] text-ghost/50 tracking-wider">{s.label}</div>
+                <div className="text-xs text-ghost/50 tracking-wider">{s.label}</div>
                 <div className="text-sm text-terminal font-mono">{s.value}</div>
               </div>
             ))}
@@ -944,8 +944,8 @@ export default function DataExplorer() {
                 {/* Venue legend bar */}
                 <div className="border border-border bg-surface/60 p-3">
                   <div className="flex items-center gap-3 mb-2">
-                    <span className="text-[10px] text-ghost tracking-[0.2em]">VENUES</span>
-                    <span className="text-[9px] text-ghost/40 ml-auto">{totalPts.toLocaleString()} data points across {venues.length} venues</span>
+                    <span className="text-xs text-ghost tracking-[0.2em]">VENUES</span>
+                    <span className="text-[11px] text-ghost/40 ml-auto">{totalPts.toLocaleString()} data points across {venues.length} venues</span>
                   </div>
                   <div className="flex h-2 w-full overflow-hidden" style={{ borderRadius: 1 }}>
                     {venues.map(v => {
@@ -957,8 +957,8 @@ export default function DataExplorer() {
                     {venues.map(v => (
                       <div key={v} className="flex items-center gap-1.5">
                         <span className="w-2.5 h-2.5" style={{ background: VENUE_COLORS[v]?.color || '#555' }} />
-                        <span className="text-[9px] text-ghost/60">{VENUE_COLORS[v]?.label || v.toUpperCase()}</span>
-                        <span className="text-[9px] text-ghost/30">{fundingByVenue[v].length}</span>
+                        <span className="text-[11px] text-ghost/60">{VENUE_COLORS[v]?.label || v.toUpperCase()}</span>
+                        <span className="text-[11px] text-ghost/30">{fundingByVenue[v].length}</span>
                       </div>
                     ))}
                   </div>
@@ -966,7 +966,7 @@ export default function DataExplorer() {
 
                 {/* Multi-venue funding chart */}
                 <div className="border border-border bg-surface/60 p-3">
-                  <div className="text-[10px] text-ghost tracking-[0.2em] mb-2">FUNDING RATE ACROSS VENUES (bps)</div>
+                  <div className="text-xs text-ghost tracking-[0.2em] mb-2">FUNDING RATE ACROSS VENUES (bps)</div>
                   <ResponsiveContainer width="100%" height={320}>
                     <LineChart data={chartData}>
                       <CartesianGrid strokeDasharray="2 6" stroke="#1a1a1f" />
@@ -1002,7 +1002,7 @@ export default function DataExplorer() {
                     { label: 'ANNUALIZED', value: `${annualized.toFixed(1)}%`, accent: true },
                   ].map(s => (
                     <div key={s.label} className="border border-border bg-surface/60 p-3">
-                      <div className="text-[8px] text-ghost/50 tracking-wider">{s.label}</div>
+                      <div className="text-xs text-ghost/50 tracking-wider">{s.label}</div>
                       <div className={`text-sm font-mono ${s.accent ? 'text-amber' : 'text-terminal'}`}>{s.value}</div>
                     </div>
                   ))}
@@ -1019,11 +1019,11 @@ export default function DataExplorer() {
                       <div key={v} className="border bg-surface/60 p-3" style={{ borderColor: (VENUE_COLORS[v]?.color || '#555') + '33' }}>
                         <div className="flex items-center gap-1.5 mb-2">
                           <span className="w-2.5 h-0.5" style={{ background: VENUE_COLORS[v]?.color || '#888' }} />
-                          <span className="text-[9px] tracking-[0.15em]" style={{ color: VENUE_COLORS[v]?.color || '#888' }}>
+                          <span className="text-[11px] tracking-[0.15em]" style={{ color: VENUE_COLORS[v]?.color || '#888' }}>
                             {VENUE_COLORS[v]?.label || v.toUpperCase()}
                           </span>
                         </div>
-                        <div className="space-y-1 text-[10px]">
+                        <div className="space-y-1 text-xs">
                           <div className="flex justify-between">
                             <span className="text-ghost/40">current</span>
                             <span className="text-terminal font-mono">{vCurrent.toFixed(3)} bps</span>
@@ -1038,7 +1038,7 @@ export default function DataExplorer() {
                           </div>
                           <div className="flex justify-between">
                             <span className="text-ghost/40">range</span>
-                            <span className="text-ghost/50 font-mono text-[9px]">{fmtShort(data[0]?.ts || 0)} — {fmtShort(data[data.length-1]?.ts || 0)}</span>
+                            <span className="text-ghost/50 font-mono text-[11px]">{fmtShort(data[0]?.ts || 0)} — {fmtShort(data[data.length-1]?.ts || 0)}</span>
                           </div>
                         </div>
                       </div>
@@ -1050,7 +1050,7 @@ export default function DataExplorer() {
           })() : (
             <div className="border border-border/50 py-12 text-center">
               <div className="text-ghost/30 text-xs tracking-[0.3em]">NO FUNDING DATA</div>
-              <div className="text-ghost/20 text-[10px] mt-2">Download a perp market to see funding rates from Drift, Hyperliquid, OKX, and Bybit</div>
+              <div className="text-ghost/20 text-xs mt-2">Download a perp market to see funding rates from Drift, Hyperliquid, OKX, and Bybit</div>
             </div>
           )}
         </div>
@@ -1060,9 +1060,9 @@ export default function DataExplorer() {
       <div className="border border-border bg-surface/60">
         <div className="px-4 py-2.5 border-b border-border flex items-center gap-2">
           <span className="w-2 h-2 bg-amber/60" />
-          <span className="text-[10px] text-ghost tracking-[0.2em]">DATA.INVENTORY</span>
+          <span className="text-xs text-ghost tracking-[0.2em]">DATA.INVENTORY</span>
           <span className="ml-auto flex items-center gap-3">
-            <span className="text-[10px] text-ghost/40">
+            <span className="text-xs text-ghost/40">
               {uniqueMarkets.length} markets &middot; {totalRecords.toLocaleString()} records
             </span>
             {markets.length > 0 && (
@@ -1083,7 +1083,7 @@ export default function DataExplorer() {
                   refreshInventory()
                   loadData()
                 }}
-                className="text-[9px] text-ghost/50 hover:text-amber border border-border/50 hover:border-amber/30 px-2 py-0.5 tracking-wider transition-all"
+                className="text-[11px] text-ghost/50 hover:text-amber border border-border/50 hover:border-amber/30 px-2 py-0.5 tracking-wider transition-all"
                 title="Update all markets to latest"
               >
                 REFRESH ALL
@@ -1099,14 +1099,14 @@ export default function DataExplorer() {
           <div className="overflow-x-auto max-h-[350px] overflow-y-auto">
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-surface">
-                <tr className="text-left text-ghost/40 border-b border-border text-[9px] tracking-[0.15em]">
-                  <th className="py-2 px-4">MARKET</th>
-                  <th className="py-2 px-4">TYPE</th>
-                  <th className="py-2 px-4">RES</th>
-                  <th className="py-2 px-4 text-right">CANDLES</th>
-                  <th className="py-2 px-4">FROM</th>
-                  <th className="py-2 px-4">TO</th>
-                  <th className="py-2 px-4"></th>
+                <tr className="text-left text-ghost/40 border-b border-border text-[11px] tracking-[0.15em]">
+                  <th className="py-2.5 px-4">MARKET</th>
+                  <th className="py-2.5 px-4">TYPE</th>
+                  <th className="py-2.5 px-4">RES</th>
+                  <th className="py-2.5 px-4 text-right">CANDLES</th>
+                  <th className="py-2.5 px-4">FROM</th>
+                  <th className="py-2.5 px-4">TO</th>
+                  <th className="py-2.5 px-4"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1115,9 +1115,9 @@ export default function DataExplorer() {
                     className={`border-b border-border/20 hover:bg-amber-glow/50 cursor-pointer ${market === m.market ? 'bg-amber-glow/30' : ''}`}
                     onClick={() => { setMarket(m.market); setResolution(m.resolution_s) }}
                   >
-                    <td className="py-1.5 px-4 text-amber/80 font-medium">{m.market}</td>
-                    <td className="py-1.5 px-4">
-                      <span className={`text-[8px] tracking-wider px-1.5 py-0.5 border ${
+                    <td className="py-2.5 px-4 text-amber/80 font-medium">{m.market}</td>
+                    <td className="py-2.5 px-4">
+                      <span className={`text-xs tracking-wider px-1.5 py-0.5 border ${
                         m.market.includes('-PERP')
                           ? 'text-amber/60 border-amber/20'
                           : 'text-phosphor/60 border-phosphor/20'
@@ -1125,10 +1125,10 @@ export default function DataExplorer() {
                         {m.market.includes('-PERP') ? 'PERP' : 'SPOT'}
                       </span>
                     </td>
-                    <td className="py-1.5 px-4 text-ghost/50">{fmtRes(m.resolution_s)}</td>
-                    <td className="py-1.5 px-4 text-right text-white/60 tabular-nums">{m.candle_count.toLocaleString()}</td>
-                    <td className="py-1.5 px-4 text-ghost/40 text-[10px]">{fmtDate(m.first_ts)}</td>
-                    <td className="py-1.5 px-4 text-ghost/40 text-[10px]">{fmtDate(m.last_ts)}</td>
+                    <td className="py-2.5 px-4 text-ghost/50">{fmtRes(m.resolution_s)}</td>
+                    <td className="py-2.5 px-4 text-right text-white/60 tabular-nums">{m.candle_count.toLocaleString()}</td>
+                    <td className="py-2.5 px-4 text-ghost/40 text-xs">{fmtDate(m.first_ts)}</td>
+                    <td className="py-2.5 px-4 text-ghost/40 text-xs">{fmtDate(m.last_ts)}</td>
                     <td className="py-1.5 px-2 flex items-center gap-1">
                       <button
                         onClick={async (e) => {
@@ -1154,7 +1154,7 @@ export default function DataExplorer() {
                           }
                           setTimeout(() => { btn.textContent = '\u21BB' }, 2000)
                         }}
-                        className="text-[10px] text-ghost/40 hover:text-amber tracking-wider transition-colors"
+                        className="text-xs text-ghost/40 hover:text-amber tracking-wider transition-colors"
                         title={`Update ${m.market} to latest`}
                       >
                         &#x21BB;
@@ -1168,7 +1168,7 @@ export default function DataExplorer() {
                               .catch(() => {})
                           }
                         }}
-                        className="text-[8px] text-ghost/30 hover:text-loss tracking-wider transition-colors"
+                        className="text-xs text-ghost/30 hover:text-loss tracking-wider transition-colors"
                         title={`Delete ${m.market} data`}
                       >
                         DEL
