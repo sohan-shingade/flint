@@ -1067,23 +1067,31 @@ export default function DataExplorer() {
             </span>
             {markets.length > 0 && (
               <button
-                onClick={async () => {
-                  for (const m of markets) {
+                onClick={async (e) => {
+                  const btn = e.currentTarget
+                  const orig = btn.textContent
+                  btn.textContent = 'UPDATING...'
+                  btn.classList.add('animate-pulse')
+                  for (let i = 0; i < markets.length; i++) {
+                    btn.textContent = `UPDATING ${i + 1}/${markets.length}...`
                     await fetch('/api/v1/data/download', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
-                        market: m.market,
-                        resolution_s: m.resolution_s,
-                        start_ts: m.last_ts,
+                        market: markets[i].market,
+                        resolution_s: markets[i].resolution_s,
+                        start_ts: markets[i].last_ts,
                         end_ts: Math.floor(Date.now() / 1000),
                       }),
                     }).catch(() => {})
                   }
+                  btn.textContent = 'DONE \u2713'
+                  btn.classList.remove('animate-pulse')
                   refreshInventory()
                   loadData()
+                  setTimeout(() => { btn.textContent = orig || 'REFRESH ALL' }, 3000)
                 }}
-                className="text-[11px] text-ghost/50 hover:text-amber border border-border/50 hover:border-amber/30 px-2 py-0.5 tracking-wider transition-all"
+                className="text-[11px] text-ghost/50 hover:text-amber border border-border/50 hover:border-amber/30 px-3 py-1 tracking-wider transition-all"
                 title="Update all markets to latest"
               >
                 REFRESH ALL
@@ -1129,50 +1137,55 @@ export default function DataExplorer() {
                     <td className="py-2.5 px-4 text-right text-white/60 tabular-nums">{m.candle_count.toLocaleString()}</td>
                     <td className="py-2.5 px-4 text-ghost/40 text-xs">{fmtDate(m.first_ts)}</td>
                     <td className="py-2.5 px-4 text-ghost/40 text-xs">{fmtDate(m.last_ts)}</td>
-                    <td className="py-1.5 px-2 flex items-center gap-1">
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation()
-                          const btn = e.currentTarget
-                          btn.textContent = '...'
-                          try {
-                            await fetch('/api/v1/data/download', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                market: m.market,
-                                resolution_s: m.resolution_s,
-                                start_ts: m.last_ts,
-                                end_ts: Math.floor(Date.now() / 1000),
-                              }),
-                            })
-                            btn.textContent = '\u2713'
-                            refreshInventory()
-                            loadData()
-                          } catch {
-                            btn.textContent = '\u2717'
-                          }
-                          setTimeout(() => { btn.textContent = '\u21BB' }, 2000)
-                        }}
-                        className="text-xs text-ghost/40 hover:text-amber tracking-wider transition-colors"
-                        title={`Update ${m.market} to latest`}
-                      >
-                        &#x21BB;
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (confirm(`Delete all data for ${m.market}? You can re-download it after.`)) {
-                            fetch(`/api/v1/data/market/${encodeURIComponent(m.market)}`, { method: 'DELETE' })
-                              .then(() => refreshInventory())
-                              .catch(() => {})
-                          }
-                        }}
-                        className="text-xs text-ghost/30 hover:text-loss tracking-wider transition-colors"
-                        title={`Delete ${m.market} data`}
-                      >
-                        DEL
-                      </button>
+                    <td className="py-2.5 px-4">
+                      <div className="flex items-center gap-2 justify-end">
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation()
+                            const btn = e.currentTarget
+                            btn.textContent = 'UPDATING...'
+                            btn.classList.add('animate-pulse', 'opacity-60')
+                            try {
+                              await fetch('/api/v1/data/download', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  market: m.market,
+                                  resolution_s: m.resolution_s,
+                                  start_ts: m.last_ts,
+                                  end_ts: Math.floor(Date.now() / 1000),
+                                }),
+                              })
+                              btn.textContent = 'DONE \u2713'
+                              btn.classList.remove('animate-pulse', 'opacity-60')
+                              refreshInventory()
+                              loadData()
+                            } catch {
+                              btn.textContent = 'FAILED'
+                              btn.classList.remove('animate-pulse', 'opacity-60')
+                            }
+                            setTimeout(() => { btn.textContent = 'UPDATE' }, 3000)
+                          }}
+                          className="text-[11px] text-ghost/60 hover:text-amber border border-border/40 hover:border-amber/30 px-3 py-1 tracking-wider transition-all"
+                          title={`Update ${m.market} to latest`}
+                        >
+                          UPDATE
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (confirm(`Delete all data for ${m.market}?`)) {
+                              fetch(`/api/v1/data/market/${encodeURIComponent(m.market)}`, { method: 'DELETE' })
+                                .then(() => refreshInventory())
+                                .catch(() => {})
+                            }
+                          }}
+                          className="text-[11px] text-ghost/30 hover:text-loss tracking-wider transition-colors"
+                          title={`Delete ${m.market} data`}
+                        >
+                          DEL
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
