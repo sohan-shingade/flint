@@ -33,6 +33,9 @@ class MetricsSummary:
     worst_trade: float
     # volatility
     annualized_volatility_pct: float = 0.0
+    # extended
+    turnover_annualized: float = 0.0
+    calmar_ratio: float = 0.0
 
 
 def compute_metrics(
@@ -101,6 +104,15 @@ def compute_metrics(
     best = max(pnls) if pnls else 0.0
     worst = min(pnls) if pnls else 0.0
 
+    # --- Turnover (annualized) ---
+    notional_traded = sum(abs(f.size) * f.price for f in result.fills) if result.fills else 0.0
+    final_equity = float(equity[-1]) if len(equity) > 0 else initial_capital
+    years = n_periods / periods_per_year if periods_per_year > 0 else 1.0
+    turnover = (notional_traded / final_equity / years) if final_equity > 0 and years > 0 else 0.0
+
+    # --- Calmar ratio (annualized return / max drawdown) ---
+    calmar = (annualized / 100) / max_dd if max_dd > 0.001 else 0.0
+
     return MetricsSummary(
         total_return_pct=total_return_pct,
         annualized_return_pct=annualized,
@@ -118,6 +130,8 @@ def compute_metrics(
         best_trade=best,
         worst_trade=worst,
         annualized_volatility_pct=annualized_vol,
+        turnover_annualized=turnover,
+        calmar_ratio=calmar,
     )
 
 
