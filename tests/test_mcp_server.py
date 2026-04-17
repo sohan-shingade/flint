@@ -317,6 +317,21 @@ class TestOptimizeStrategy:
         assert "error" in result
 
 
+# ─── Paper Trading Tools ────────────────────────────────────
+
+class TestPaperStatusUrl:
+    def test_get_paper_status_uses_correct_url(self):
+        """Regression: MCP was calling /paper/{id}/status but route is /paper/status/{id}."""
+        from flint.mcp_server import get_paper_status
+        with patch("requests.get") as mock_get:
+            mock_get.return_value = MagicMock(text='{"session_id":"test"}')
+            get_paper_status("test-session")
+            # Verify the URL has /status/{id} not /{id}/status
+            called_url = mock_get.call_args[0][0]
+            assert "/status/test-session" in called_url
+            assert "/test-session/status" not in called_url
+
+
 # ─── Resources ───────────────────────────────────────────────
 
 class TestResources:

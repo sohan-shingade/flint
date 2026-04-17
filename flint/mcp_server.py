@@ -201,6 +201,7 @@ def start_paper_trading(
     strategy: str = "rsi_macd_combo",
     initial_capital: float = 10000.0,
     code: str = "",
+    max_drawdown_pct: float = 0.15,
 ) -> str:
     """Start a paper trading session. The strategy runs live on real market data with simulated fills.
 
@@ -212,10 +213,12 @@ def start_paper_trading(
         strategy: Built-in strategy name (ignored if code is provided)
         initial_capital: Starting capital in USD
         code: Custom strategy Python code (overrides strategy name)
+        max_drawdown_pct: Kill switch — stop trading if drawdown exceeds this (default 15%)
     """
     import requests
     try:
-        body = {"market": market, "initial_capital": initial_capital, "resolution_s": 3600, "venue": "drift"}
+        body = {"market": market, "initial_capital": initial_capital, "resolution_s": 3600, "venue": "drift",
+                "risk_config": {"max_drawdown_pct": max_drawdown_pct}}
         if code and code.strip():
             body["code"] = code
         else:
@@ -275,7 +278,7 @@ def get_paper_status(session_id: str) -> str:
     """
     import requests
     try:
-        r = requests.get(f"http://127.0.0.1:8000/api/v1/paper/{session_id}/status", timeout=15)
+        r = requests.get(f"http://127.0.0.1:8000/api/v1/paper/status/{session_id}", timeout=15)
         return r.text
     except Exception as e:
         return json.dumps({"error": f"Failed to get session status: {e}"})

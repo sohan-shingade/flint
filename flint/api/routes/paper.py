@@ -28,6 +28,7 @@ class StartRequest(BaseModel):
     initial_capital: float = 10_000.0
     params: Optional[dict] = None
     venue: str = "drift"
+    risk_config: Optional[dict] = None
 
 
 class StopRequest(BaseModel):
@@ -130,6 +131,7 @@ async def start_paper(req: StartRequest, request: Request):
         venue=req.venue,
         strategy_code=req.code or "",
         strategy_params=req.params or {},
+        risk_config=req.risk_config,
     )
 
     # Auto-register strategy and advance lifecycle to "paper"

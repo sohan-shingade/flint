@@ -153,6 +153,7 @@ class PaperTradingEngine:
         venue: str = "drift",
         strategy_code: str = "",
         strategy_params: dict = None,
+        risk_config: dict = None,
     ) -> str:
         """Start a new paper trading session with replay. Returns session_id.
 
@@ -164,6 +165,7 @@ class PaperTradingEngine:
             strategy=strategy,
             strategy_code=strategy_code or "",
             strategy_params=strategy_params or {},
+            risk_config=risk_config,
             market=market,
             resolution_s=resolution_s,
             initial_capital=initial_capital,
