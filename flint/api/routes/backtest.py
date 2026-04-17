@@ -867,7 +867,7 @@ def run_regime_backtest(request: Request, body: dict):
                 },
             })
             _set_status(run_id, "complete")
-            _set_progress(run_id, phase="done", pct=100, detail="Complete")
+            _set_progress(run_id, phase="complete", pct=100, detail="Complete")
         except Exception as ex:
             _set_result(run_id, {"error": str(ex)})
             _set_status(run_id, "failed")

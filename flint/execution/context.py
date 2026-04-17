@@ -123,13 +123,18 @@ class ExecutionContext(abc.ABC):
     # --- Convenience ---
 
     def close_position(self, market: str, venue: str = "default") -> Optional[str]:
-        """Close the entire position for a market+venue. Returns order_id or None."""
+        """Close the entire position for a market+venue. Returns order_id or None.
+
+        When venue="default", matches any venue (for single-venue strategies).
+        """
         for pos in self.positions:
-            if pos.market == market and pos.venue == venue:
+            venue_match = (venue == "default" or pos.venue == venue
+                           or pos.venue == "default")
+            if pos.market == market and venue_match:
                 opposite = Side.SHORT if pos.side == Side.LONG else Side.LONG
                 return self.market_order(
                     market, opposite, pos.size, reduce_only=True, tag="close",
-                    venue=venue,
+                    venue=pos.venue,
                 )
         return None
 

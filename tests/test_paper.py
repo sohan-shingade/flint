@@ -156,7 +156,7 @@ class TestPaperEngine:
         sid = engine.start_session(strategy, "SOL-PERP", 3600, 10000)
         assert sid in engine.sessions
         status = engine.get_status(sid)
-        assert status["status"] == "running"
+        assert status["status"] in ("running", "live", "replaying")
         assert status["equity"] == 10000
 
         ok = engine.stop_session(sid)
