@@ -179,6 +179,40 @@ describe('DataExplorer', () => {
       }
     })
   })
+
+  it('shows REFRESH button per market in inventory table', async () => {
+    renderWithRouter(<DataExplorer />)
+
+    await waitFor(() => {
+      const refreshBtns = screen.getAllByTitle(/Update .* to latest/)
+      expect(refreshBtns.length).toBeGreaterThan(0)
+    }, { timeout: 5000 })
+  })
+
+  it('REFRESH button triggers download for that market', async () => {
+    const user = userEvent.setup()
+    let downloadedMarket = ''
+    server.use(
+      http.post('/api/v1/data/download', async ({ request }) => {
+        const body = await request.json() as any
+        downloadedMarket = body.market
+        return HttpResponse.json({ market: body.market, downloaded: 50, cached: 0, existing: 1000, total: 1050 })
+      })
+    )
+
+    renderWithRouter(<DataExplorer />)
+
+    await waitFor(() => {
+      expect(screen.getAllByTitle(/Update .* to latest/).length).toBeGreaterThan(0)
+    }, { timeout: 5000 })
+
+    const refreshBtns = screen.getAllByTitle(/Update .* to latest/)
+    await user.click(refreshBtns[0])
+
+    await waitFor(() => {
+      expect(downloadedMarket).not.toBe('')
+    }, { timeout: 5000 })
+  })
 })
 
 // Import within helper

@@ -1061,8 +1061,34 @@ export default function DataExplorer() {
         <div className="px-4 py-2.5 border-b border-border flex items-center gap-2">
           <span className="w-2 h-2 bg-amber/60" />
           <span className="text-[10px] text-ghost tracking-[0.2em]">DATA.INVENTORY</span>
-          <span className="ml-auto text-[10px] text-ghost/40">
-            {uniqueMarkets.length} markets &middot; {totalRecords.toLocaleString()} records
+          <span className="ml-auto flex items-center gap-3">
+            <span className="text-[10px] text-ghost/40">
+              {uniqueMarkets.length} markets &middot; {totalRecords.toLocaleString()} records
+            </span>
+            {markets.length > 0 && (
+              <button
+                onClick={async () => {
+                  for (const m of markets) {
+                    await fetch('/api/v1/data/download', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        market: m.market,
+                        resolution_s: m.resolution_s,
+                        start_ts: m.last_ts,
+                        end_ts: Math.floor(Date.now() / 1000),
+                      }),
+                    }).catch(() => {})
+                  }
+                  refreshInventory()
+                  loadData()
+                }}
+                className="text-[9px] text-ghost/50 hover:text-amber border border-border/50 hover:border-amber/30 px-2 py-0.5 tracking-wider transition-all"
+                title="Update all markets to latest"
+              >
+                REFRESH ALL
+              </button>
+            )}
           </span>
         </div>
         {inventoryLoading ? (
@@ -1103,7 +1129,36 @@ export default function DataExplorer() {
                     <td className="py-1.5 px-4 text-right text-white/60 tabular-nums">{m.candle_count.toLocaleString()}</td>
                     <td className="py-1.5 px-4 text-ghost/40 text-[10px]">{fmtDate(m.first_ts)}</td>
                     <td className="py-1.5 px-4 text-ghost/40 text-[10px]">{fmtDate(m.last_ts)}</td>
-                    <td className="py-1.5 px-2">
+                    <td className="py-1.5 px-2 flex items-center gap-1">
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation()
+                          const btn = e.currentTarget
+                          btn.textContent = '...'
+                          try {
+                            await fetch('/api/v1/data/download', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                market: m.market,
+                                resolution_s: m.resolution_s,
+                                start_ts: m.last_ts,
+                                end_ts: Math.floor(Date.now() / 1000),
+                              }),
+                            })
+                            btn.textContent = '\u2713'
+                            refreshInventory()
+                            loadData()
+                          } catch {
+                            btn.textContent = '\u2717'
+                          }
+                          setTimeout(() => { btn.textContent = '\u21BB' }, 2000)
+                        }}
+                        className="text-[10px] text-ghost/40 hover:text-amber tracking-wider transition-colors"
+                        title={`Update ${m.market} to latest`}
+                      >
+                        &#x21BB;
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
