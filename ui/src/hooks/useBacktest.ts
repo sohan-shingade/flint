@@ -144,5 +144,31 @@ export function useBacktest() {
     setProgress(null)
   }, [])
 
-  return { run, reset, runId, status, results, error, progress }
+  // D-4.5-ui — explicit cancel action. POSTs /cancel then polls until the
+  // server acknowledges the status transition. Safe to call when status
+  // is not 'running' — server returns a no-op.
+  const cancel = useCallback(async () => {
+    const id = runId
+    if (!id) return
+    try {
+      await fetch(`/api/v1/backtest/${id}/cancel`, { method: 'POST' })
+    } catch (e) {
+      console.warn('[useBacktest] cancel POST failed:', e)
+    }
+  }, [runId])
+
+  // D-4.5-ui — on unmount, best-effort POST cancel so the backend worker
+  // doesn't keep spinning after the user navigates away.
+  useEffect(() => {
+    return () => {
+      if (runId && status === 'running') {
+        fetch(`/api/v1/backtest/${runId}/cancel`, { method: 'POST' })
+          .catch((e) => {
+            console.warn('[useBacktest] unmount-cancel failed:', e)
+          })
+      }
+    }
+  }, [runId, status])
+
+  return { run, reset, cancel, runId, status, results, error, progress }
 }

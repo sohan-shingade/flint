@@ -5,6 +5,19 @@ Optional: pip install ccxt (not required for core Flint functionality).
 """
 from __future__ import annotations
 
+
+# Phase 1 T1.3.a + D-1.3-providers — point-in-time declaration.
+# Defaults are conservative — callers should verify against the
+# specific source API when using this data in parity/PIT-sensitive
+# contexts. Review date: 2026-04-24.
+PIT_METADATA = {
+    "candle_ts": "bar-close",
+    "funding_ts": "exchange-time",
+    "orderbook_ts": "exchange-time",
+    "oi_ts": "exchange-time",
+    "reviewed": "2026-04-24",
+}
+
 import logging
 import time
 from typing import Any, Dict, List, Optional

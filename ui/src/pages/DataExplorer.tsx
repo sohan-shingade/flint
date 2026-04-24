@@ -119,7 +119,7 @@ export default function DataExplorer() {
     fetch('/api/v1/data/markets')
       .then(r => r.json())
       .then(d => setMarkets(d.markets || []))
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/DataExplorer.tsx] fetch failed:", e) })
       .finally(() => setInventoryLoading(false))
   }, [])
 
@@ -133,7 +133,7 @@ export default function DataExplorer() {
         setAvailableForDownload(mkts)
         MARKET_PACKS.all.markets = mkts.map((m: any) => m.market)
       })
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/DataExplorer.tsx] fetch failed:", e) })
   }, [])
 
   const loadData = useCallback(async () => {
@@ -1215,7 +1215,7 @@ export default function DataExplorer() {
                             if (confirm(`Delete all data for ${m.market}?`)) {
                               fetch(`/api/v1/data/market/${encodeURIComponent(m.market)}`, { method: 'DELETE' })
                                 .then(() => refreshInventory())
-                                .catch(() => {})
+                                .catch((e) => { console.warn("[pages/DataExplorer.tsx] fetch failed:", e) })
                             }
                           }}
                           className="text-[11px] text-ghost/30 hover:text-loss tracking-wider transition-colors"

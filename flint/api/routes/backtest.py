@@ -8,6 +8,7 @@ import time
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime as dt, timezone as tz
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -636,21 +637,67 @@ def run_backtest(req: BacktestRequest, request: Request):
                     entry = _entries.get(run_id)
                     return entry is not None and entry.status == "cancelled"
 
-            engine = BacktestEngine(strategy, req.initial_capital, req.fee_rate,
-                                    fill_model=fill_model,
-                                    funding_rates=funding_rates,
-                                    orderbook_snapshots=orderbook_snapshots,
-                                    open_interest=open_interest,
-                                    margin_engine=margin_eng,
-                                    capital_allocator=cap_alloc,
-                                    max_runtime_s=_MAX_BACKTEST_SECONDS,
-                                    cancel_check=_cancelled)
-            if extra_candles:
-                # Multi-market: pass primary candles + extras separately
-                # so the engine doesn't pick a different primary by count
-                result = engine.run(candles, extra_markets=extra_candles)
+            # D-2.4.b — when the strategy came from user-supplied inline code
+            # or a user:* file path, run the backtest inside a subprocess
+            # sandbox (flint/strategy/sandbox.py) so rogue code cannot hang
+            # the API process or burn memory. Built-in strategies stay
+            # in-process (trusted; well-tested). Sandbox imposes wall-clock +
+            # RSS limit enforced by multiprocessing; parent watches via pipe.
+            #
+            # Multi-market backtests (extra_markets) and margin/capital/
+            # orderbook features are not wired through sandbox yet — those
+            # paths fall back to in-process execution with a warning.
+            is_user_code = bool(req.code) or str(req.strategy).startswith("user:")
+            can_sandbox = (
+                is_user_code
+                and not extra_candles
+                and margin_eng is None
+                and cap_alloc is None
+                and not orderbook_snapshots
+                and not funding_rates  # sandbox helper ignores these today
+            )
+            if can_sandbox:
+                from ...strategy.sandbox import (
+                    run_strategy_in_sandbox,
+                    SandboxConfig,
+                )
+                code_for_sandbox = (
+                    req.code
+                    if req.code else
+                    (Path(__file__).resolve().parents[3] / "strategies" / "user"
+                     / f"{req.strategy[5:]}.py").read_text(encoding="utf-8")
+                )
+                logger.info(
+                    "Backtest %s: routing through sandbox (user-supplied code)",
+                    run_id,
+                )
+                result = run_strategy_in_sandbox(
+                    code=code_for_sandbox,
+                    candles=candles,
+                    initial_capital=req.initial_capital,
+                    fee_rate=req.fee_rate,
+                    params=req.params or {},
+                    config=SandboxConfig(
+                        timeout_s=float(_MAX_BACKTEST_SECONDS),
+                        memory_mb=1024,
+                    ),
+                )
             else:
-                result = engine.run(candles)
+                engine = BacktestEngine(strategy, req.initial_capital, req.fee_rate,
+                                        fill_model=fill_model,
+                                        funding_rates=funding_rates,
+                                        orderbook_snapshots=orderbook_snapshots,
+                                        open_interest=open_interest,
+                                        margin_engine=margin_eng,
+                                        capital_allocator=cap_alloc,
+                                        max_runtime_s=_MAX_BACKTEST_SECONDS,
+                                        cancel_check=_cancelled)
+                if extra_candles:
+                    # Multi-market: pass primary candles + extras separately
+                    # so the engine doesn't pick a different primary by count
+                    result = engine.run(candles, extra_markets=extra_candles)
+                else:
+                    result = engine.run(candles)
 
             # Phase 4: Generate tearsheet
             _set_progress(run_id, phase="tearsheet", pct=90,

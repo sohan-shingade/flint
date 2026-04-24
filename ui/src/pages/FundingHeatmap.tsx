@@ -47,7 +47,7 @@ export default function FundingHeatmap() {
         setEntries(d.rates || d.funding || [])
         setLastUpdated(new Date().toLocaleTimeString('en-US', { hour12: false, timeZone: 'UTC' }) + ' UTC')
       })
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/FundingHeatmap.tsx] fetch failed:", e) })
       .finally(() => setLoading(false))
   }
 

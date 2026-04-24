@@ -101,7 +101,7 @@ export function useSessionTrades(sessionId: string | null) {
     fetch(`${API}/trades/${sessionId}`)
       .then(r => r.json())
       .then(d => setTrades(d.trades || []))
-      .catch(() => {})
+      .catch((e) => { console.warn("[hooks/usePaperTrading.ts] fetch failed:", e) })
   }, [sessionId])
 
   return trades

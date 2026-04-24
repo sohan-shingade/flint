@@ -1745,6 +1745,53 @@ class FlintStore:
             ).fetchone()
         return int(row[0] if row else 0)
 
+    # ─── D-2.2-internal — lock-wrapping SQL gateways ──────────────────────
+    # Not for API/MCP use (those must use typed methods above). Storage-layer
+    # helpers in flint/journal/ and flint/paper/session_store.py go through
+    # these to avoid touching self._conn / self._lock directly.
+
+    def _sql_exec(self, sql: str, params=None) -> None:
+        """Run a write statement under the store's lock. No return value."""
+        with self._lock:
+            if params is None:
+                self._conn.execute(sql)
+            else:
+                self._conn.execute(sql, params)
+
+    def _sql_read_all(self, sql: str, params=None) -> list:
+        """Run a read query under the lock. Returns all rows as a list of
+        tuples."""
+        with self._lock:
+            cur = (self._conn.execute(sql) if params is None
+                   else self._conn.execute(sql, params))
+            return cur.fetchall()
+
+    def _sql_read_one(self, sql: str, params=None):
+        """Run a read query under the lock. Returns first row or None."""
+        with self._lock:
+            cur = (self._conn.execute(sql) if params is None
+                   else self._conn.execute(sql, params))
+            return cur.fetchone()
+
+    def _sql_read_all_with_cols(self, sql: str, params=None):
+        """Read-all + column names as list[str]. Two-tuple return."""
+        with self._lock:
+            cur = (self._conn.execute(sql) if params is None
+                   else self._conn.execute(sql, params))
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description] if cur.description else []
+            return rows, cols
+
+    def _sql_exec_many(self, stmts: list) -> None:
+        """Run several write statements atomically under the lock. Each
+        stmt is (sql, params|None)."""
+        with self._lock:
+            for sql, params in stmts:
+                if params is None:
+                    self._conn.execute(sql)
+                else:
+                    self._conn.execute(sql, params)
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

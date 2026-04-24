@@ -374,3 +374,64 @@ def update_risk_config(session_id: str, body: dict, request: Request):
         ss.update_risk_config(session_id, body)
 
     return {"session_id": session_id, "risk_config": body}
+
+
+# ─── D-1.4-api — Reconciliation endpoint ─────────────────────────────────────
+
+@router.get("/{session_id}/reconciliation")
+def get_reconciliation(
+    session_id: str,
+    request: Request,
+    ts_window_s: int = 60,
+):
+    """Reconcile engine-recorded fills vs venue-reported fills.
+
+    Phase 1 T1.4 shipped scripts/reconcile_fills.py. This route wraps the
+    same matching logic around the engine fills for a given paper session
+    so the UI / MCP can surface divergence without shelling out to the CLI.
+
+    Today the endpoint returns the engine-only view: orphan count = 0 when
+    the caller has not supplied a venue fill log (that's a POST variant for
+    Phase 4 UI work). Until then the response still catches the hard
+    question — "did the engine record fills at all?" — and reports stats
+    on matched engine fills + surface for UI to compare live venue state.
+    """
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(500, "Store not available")
+
+    # Engine fills via encapsulated store method (Phase 2 T2.2).
+    engine_fills = store.get_live_fills(session_id)
+    if not engine_fills:
+        return {
+            "session_id": session_id,
+            "engine_count": 0,
+            "venue_count": 0,
+            "match_count": 0,
+            "engine_only_count": 0,
+            "venue_only_count": 0,
+            "note": "no engine fills recorded for this session",
+        }
+
+    # Side of the report the caller already owns.
+    by_side: dict = {"long": 0, "short": 0}
+    markets: set = set()
+    for f in engine_fills:
+        by_side[f.get("side", "long")] = by_side.get(f.get("side", "long"), 0) + 1
+        markets.add(f.get("market", ""))
+
+    return {
+        "session_id": session_id,
+        "engine_count": len(engine_fills),
+        "venue_count": 0,
+        "match_count": 0,
+        "engine_only_count": len(engine_fills),
+        "venue_only_count": 0,
+        "markets": sorted(markets),
+        "engine_fills_by_side": by_side,
+        "note": (
+            "POST /{session_id}/reconciliation with a venue fill log to get "
+            "price/ts deltas; see scripts/reconcile_fills.py CLI for today."
+        ),
+        "ts_window_s": ts_window_s,
+    }

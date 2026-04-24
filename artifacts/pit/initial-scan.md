@@ -1,36 +1,37 @@
-# Point-in-Time Audit — 2026-04-24 02:37 UTC
+# Point-in-Time Audit — 2026-04-24 21:05 UTC
 
 Every data provider must declare `PIT_METADATA` documenting its timestamp convention. Providers without a declaration are flagged for human review.
 
-**Summary:** 25 providers · 3 ✓ pass · 22 ⚠ warn · 0 ✗ fail
+**Summary:** 26 providers · 26 ✓ pass · 0 ⚠ warn · 0 ✗ fail
 
 | Provider | Verdict | Issues |
 |---|---|---|
-| `birdeye` | ⚠ warn | no PIT_METADATA — human review required |
-| `candle_aggregator` | ⚠ warn | no PIT_METADATA — human review required |
-| `ccxt_markets` | ⚠ warn | no PIT_METADATA — human review required |
-| `ccxt_provider` | ⚠ warn | no PIT_METADATA — human review required |
-| `coingecko` | ⚠ warn | no PIT_METADATA — human review required |
-| `drift_api` | ⚠ warn | no PIT_METADATA — human review required |
+| `birdeye` | ✓ pass | — |
+| `candle_aggregator` | ✓ pass | — |
+| `ccxt_markets` | ✓ pass | — |
+| `ccxt_provider` | ✓ pass | — |
+| `coingecko` | ✓ pass | — |
+| `custom` | ✓ pass | — |
+| `drift_api` | ✓ pass | — |
 | `drift_candles` | ✓ pass | — |
-| `drift_s3` | ⚠ warn | no PIT_METADATA — human review required |
-| `drift_ws` | ⚠ warn | no PIT_METADATA — human review required |
+| `drift_s3` | ✓ pass | — |
+| `drift_ws` | ✓ pass | — |
 | `funding_rates` | ✓ pass | — |
-| `gecko` | ⚠ warn | no PIT_METADATA — human review required |
-| `helius` | ⚠ warn | no PIT_METADATA — human review required |
+| `gecko` | ✓ pass | — |
+| `helius` | ✓ pass | — |
 | `hyperliquid_candles` | ✓ pass | — |
-| `hyperliquid_orderbook` | ⚠ warn | no PIT_METADATA — human review required |
-| `hyperliquid_ws` | ⚠ warn | no PIT_METADATA — human review required |
-| `jupiter` | ⚠ warn | no PIT_METADATA — human review required |
-| `jupiter_borrow` | ⚠ warn | no PIT_METADATA — human review required |
-| `open_interest` | ⚠ warn | no PIT_METADATA — human review required |
-| `orca` | ⚠ warn | no PIT_METADATA — human review required |
-| `orca_ticks` | ⚠ warn | no PIT_METADATA — human review required |
-| `pyth` | ⚠ warn | no PIT_METADATA — human review required |
-| `pyth_candles` | ⚠ warn | no PIT_METADATA — human review required |
-| `pyth_ws` | ⚠ warn | no PIT_METADATA — human review required |
-| `raydium` | ⚠ warn | no PIT_METADATA — human review required |
-| `tardis` | ⚠ warn | no PIT_METADATA — human review required |
+| `hyperliquid_orderbook` | ✓ pass | — |
+| `hyperliquid_ws` | ✓ pass | — |
+| `jupiter` | ✓ pass | — |
+| `jupiter_borrow` | ✓ pass | — |
+| `open_interest` | ✓ pass | — |
+| `orca` | ✓ pass | — |
+| `orca_ticks` | ✓ pass | — |
+| `pyth` | ✓ pass | — |
+| `pyth_candles` | ✓ pass | — |
+| `pyth_ws` | ✓ pass | — |
+| `raydium` | ✓ pass | — |
+| `tardis` | ✓ pass | — |
 
 ---
 

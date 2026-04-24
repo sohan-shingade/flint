@@ -182,13 +182,24 @@ impl PositionManager {
         total_payment
     }
 
-    /// Force-close all positions at given prices.
-    pub fn close_all(&mut self, prices: &HashMap<MarketId, f64>, ts: i64) {
+    /// Force-close all positions at given prices, charging the caller-supplied
+    /// FeeModel on each synthetic exit fill.
+    ///
+    /// D-1.1.b fix — previously the synthetic fill was built with fee=0.0,
+    /// producing Rust/Python divergence at force-close (Python engine did
+    /// charge fees, relaxed tolerance was captured in tests/test_rust_python_parity.py).
+    /// Now both engines charge the same exit fee.
+    pub fn close_all(
+        &mut self,
+        prices: &HashMap<MarketId, f64>,
+        ts: i64,
+        fee_model: &crate::engine::fees::FeeModel,
+    ) {
         let keys: Vec<PosKey> = self.positions.keys().cloned().collect();
         for key in keys {
             let pos = self.positions.get(&key).expect("position must exist for key in iter").clone();
             let price = prices.get(&pos.market_id).copied().unwrap_or(pos.entry_price);
-            let fill = FillResult {
+            let mut fill = FillResult {
                 order_id: String::new(),
                 market_id: pos.market_id,
                 venue_id: pos.venue_id,
@@ -202,6 +213,7 @@ impl PositionManager {
                 impact_bps: 0.0,
                 tx_cost: 0.0,
             };
+            fill.fee = fee_model.compute_fee(&fill);
             self.apply_fill(&fill);
         }
     }

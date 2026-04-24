@@ -215,6 +215,58 @@ def test_rejects_funding_rate_out_of_range(tmp_path):
 # Parquet
 # ---------------------------------------------------------------------------
 
+def test_load_fills_csv(tmp_path):
+    """D-1.6 — fill-log ingest returns parsed records."""
+    import csv as _csv
+
+    path = tmp_path / "fills.csv"
+    with open(path, "w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["ts_epoch_s", "market", "venue", "side", "size",
+                    "price", "fee", "mid_price", "realized_slippage_bps"])
+        w.writerow([1700000000, "custom:SOL-PERP", "drift", "long",
+                    10.0, 150.05, 0.05, 150.00, 3.33])
+        w.writerow([1700003600, "custom:SOL-PERP", "drift", "short",
+                    10.0, 149.90, 0.05, 150.00, 6.67])
+
+    store = _InMemStore()
+    provider = CustomCSVProvider(path=path, table="fills",
+                                 markets=["custom:SOL-PERP"])
+    result = provider.load_and_upsert(store)
+    assert result.rows_loaded == 2
+    assert result.fills is not None
+    assert len(result.fills) == 2
+    assert result.fills[0]["side"] == "long"
+    assert result.fills[0]["realized_slippage_bps"] == 3.33
+    assert result.fills[1]["side"] == "short"
+
+
+def test_fills_buy_normalized_to_long(tmp_path):
+    """buy/sell → long/short normalization."""
+    import csv as _csv
+    path = tmp_path / "fills.csv"
+    with open(path, "w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["ts_epoch_s", "market", "venue", "side", "size", "price"])
+        w.writerow([1700000000, "custom:X", "v", "buy", 1.0, 100.0])
+        w.writerow([1700003600, "custom:X", "v", "sell", 1.0, 100.0])
+    provider = CustomCSVProvider(path=path, table="fills", markets=["custom:X"])
+    result = provider.load_and_upsert(_InMemStore())
+    assert [f["side"] for f in result.fills] == ["long", "short"]
+
+
+def test_fills_negative_fee_rejected(tmp_path):
+    import csv as _csv
+    path = tmp_path / "fills.csv"
+    with open(path, "w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["ts_epoch_s", "market", "venue", "side", "size", "price", "fee"])
+        w.writerow([1700000000, "custom:X", "v", "long", 1.0, 100.0, -0.5])
+    provider = CustomCSVProvider(path=path, table="fills", markets=["custom:X"])
+    with pytest.raises(CustomDataValidationError, match="fee"):
+        provider.load_and_upsert(_InMemStore())
+
+
 def test_load_valid_parquet_candles(tmp_path):
     pytest.importorskip("pyarrow")
     import pyarrow as pa

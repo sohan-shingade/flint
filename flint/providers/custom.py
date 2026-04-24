@@ -51,6 +51,10 @@ class CustomDataImport:
     markets: List[str]
     table: str
     source_path: str
+    # D-1.6 — when `table == "fills"` the parsed fill records come back
+    # here so the caller (reconciliation / calibration) can iterate
+    # them directly rather than re-parsing the file.
+    fills: Optional[List[dict]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +220,61 @@ class CustomCSVProvider:
                 ))
         return rates
 
+    def _parse_fills(self) -> List[dict]:
+        """D-1.6 — parse a bring-your-own fill log. Shared schema with
+        scripts/reconcile_fills.py. Returns a list of plain dicts; caller
+        decides whether to push into `live_fills` (reconciliation) or feed
+        into calibration (Phase 3.6).
+
+        Required columns: ts_epoch_s, market, venue, side, size, price.
+        Optional: fee, order_id, mid_price, realized_slippage_bps.
+        """
+        fills: List[dict] = []
+        with open(self.path, newline="") as f:
+            reader = csv.DictReader(f)
+            required = {"ts_epoch_s", "market", "venue", "side", "size", "price"}
+            missing = required - set(reader.fieldnames or [])
+            if missing:
+                raise CustomDataValidationError(
+                    f"fill CSV missing required columns {sorted(missing)}"
+                )
+            for i, row in enumerate(reader, start=2):
+                market = row["market"]
+                _validate_market_namespace(market)
+                side = row["side"].lower()
+                if side not in {"long", "short", "buy", "sell"}:
+                    raise CustomDataValidationError(
+                        f"line {i}: invalid side {side!r}"
+                    )
+                side = "long" if side in {"long", "buy"} else "short"
+                size = float(row["size"])
+                price = float(row["price"])
+                if size <= 0:
+                    raise CustomDataValidationError(f"line {i}: size must be > 0")
+                if price <= 0:
+                    raise CustomDataValidationError(f"line {i}: price must be > 0")
+                fee = float(row.get("fee", 0.0) or 0.0)
+                if fee < 0:
+                    raise CustomDataValidationError(
+                        f"line {i}: fee must be ≥ 0 (got {fee})"
+                    )
+                fills.append({
+                    "ts_epoch_s": int(row["ts_epoch_s"]),
+                    "market": market,
+                    "venue": row["venue"],
+                    "side": side,
+                    "size": size,
+                    "price": price,
+                    "fee": fee,
+                    "order_id": row.get("order_id", ""),
+                    "mid_price": float(row["mid_price"]) if row.get("mid_price") else None,
+                    "realized_slippage_bps": (
+                        float(row["realized_slippage_bps"])
+                        if row.get("realized_slippage_bps") else None
+                    ),
+                })
+        return fills
+
     def load_and_upsert(self, store) -> CustomDataImport:
         """Parse file, validate, upsert into store. Returns provenance."""
         self.source_hash = compute_source_hash(self.path)
@@ -244,6 +303,23 @@ class CustomCSVProvider:
                 markets=sorted({r.market for r in rates}),
                 table="funding",
                 source_path=str(self.path),
+            )
+
+        if self.table == "fills":
+            fills = self._parse_fills()
+            logger.info("Loaded %d custom fills from %s (sha256=%s)",
+                        len(fills), self.path, self.source_hash[:16])
+            # Unlike candles/funding, fills aren't upserted into a generic
+            # store table — the caller (reconciliation, calibration) owns
+            # how to consume them. Return them in `rows_loaded` as count + a
+            # side channel via CustomDataImport.fills_preview.
+            return CustomDataImport(
+                rows_loaded=len(fills),
+                source_hash=self.source_hash,
+                markets=sorted({f["market"] for f in fills}),
+                table="fills",
+                source_path=str(self.path),
+                fills=fills,
             )
 
         raise CustomDataValidationError(

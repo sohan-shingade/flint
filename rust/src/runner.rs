@@ -193,7 +193,7 @@ impl BacktestRunner {
             let last = self.candles.last().expect("candles non-empty checked above");
             let mut prices = HashMap::new();
             prices.insert(last.market_id, last.close);
-            self.pos_mgr.close_all(&prices, last.ts);
+            self.pos_mgr.close_all(&prices, last.ts, &self.config.fee_model);
             self.equity_curve.push(self.pos_mgr.equity());
         }
 

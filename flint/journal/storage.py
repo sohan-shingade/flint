@@ -53,16 +53,15 @@ class JournalStorage:
 
     def __init__(self, store: FlintStore):
         self._store = store
-        with store._lock:
-            store._conn.execute(_CREATE_RUNS)
-            store._conn.execute(_CREATE_TRADES)
-            # Migration: add total_return_pct for existing databases
-            try:
-                store._conn.execute(
-                    "ALTER TABLE backtest_runs ADD COLUMN total_return_pct DOUBLE DEFAULT 0"
-                )
-            except Exception:
-                pass  # column already exists
+        # D-2.2-internal — schema creation through _sql_exec wrappers.
+        store._sql_exec(_CREATE_RUNS)
+        store._sql_exec(_CREATE_TRADES)
+        try:
+            store._sql_exec(
+                "ALTER TABLE backtest_runs ADD COLUMN total_return_pct DOUBLE DEFAULT 0"
+            )
+        except Exception:
+            pass  # column already exists
 
     def save_run(self, run_id, strategy_name, market, resolution_s,
                  start_ts, end_ts, initial_capital, params=None, result=None):
@@ -76,88 +75,78 @@ class JournalStorage:
         funding = getattr(result, "funding_paid", 0)
         total_return_pct = (total_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
 
-        with self._store._lock:
-            self._store._conn.execute(
-                "INSERT OR REPLACE INTO backtest_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [run_id, strategy_name, market, resolution_s, start_ts, end_ts,
-                 initial_capital, params_json, int(time.time()),
-                 total_pnl, total_return_pct, win_rate, sharpe, max_dd, trades, fees, funding],
-            )
-            if result and result.positions:
-                for idx, pos in enumerate(result.positions):
-                    self._store._conn.execute(
-                        "INSERT OR REPLACE INTO journal_trades VALUES (?,?,?,?,?,?,?,?,?)",
-                        [run_id, idx,
-                         pos.side.value if hasattr(pos.side, 'value') else str(pos.side),
-                         pos.entry_price, pos.exit_price,
-                         abs(pos.size), pos.entry_ts, pos.exit_ts, pos.pnl],
-                    )
-            # Save equity curve for later retrieval (no re-run needed)
-            if result and getattr(result, "equity_curve", None):
-                self._store._conn.execute(
-                    "DELETE FROM journal_equity WHERE run_id = ?", [run_id]
-                )
-                # Pair equity values with candle timestamps
-                eq = result.equity_curve
-                # Use start_ts + i * resolution as approximation if no ts available
-                res = resolution_s or 3600
-                for i, val in enumerate(eq):
-                    self._store._conn.execute(
-                        "INSERT INTO journal_equity VALUES (?, ?, ?)",
-                        [run_id, start_ts + i * res, float(val)],
-                    )
+        # D-2.2-internal — goes through _sql_* wrappers instead of raw
+        # self._store._conn / self._store._lock.
+        stmts = [(
+            "INSERT OR REPLACE INTO backtest_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [run_id, strategy_name, market, resolution_s, start_ts, end_ts,
+             initial_capital, params_json, int(time.time()),
+             total_pnl, total_return_pct, win_rate, sharpe, max_dd, trades, fees, funding],
+        )]
+        if result and result.positions:
+            for idx, pos in enumerate(result.positions):
+                stmts.append((
+                    "INSERT OR REPLACE INTO journal_trades VALUES (?,?,?,?,?,?,?,?,?)",
+                    [run_id, idx,
+                     pos.side.value if hasattr(pos.side, 'value') else str(pos.side),
+                     pos.entry_price, pos.exit_price,
+                     abs(pos.size), pos.entry_ts, pos.exit_ts, pos.pnl],
+                ))
+        if result and getattr(result, "equity_curve", None):
+            stmts.append(("DELETE FROM journal_equity WHERE run_id = ?", [run_id]))
+            res = resolution_s or 3600
+            for i, val in enumerate(result.equity_curve):
+                stmts.append((
+                    "INSERT INTO journal_equity VALUES (?, ?, ?)",
+                    [run_id, start_ts + i * res, float(val)],
+                ))
+        self._store._sql_exec_many(stmts)
 
     def list_runs(self, limit: int = 50) -> List[Dict[str, Any]]:
-        with self._store._lock:
-            rows = self._store._conn.execute(
-                "SELECT * FROM backtest_runs ORDER BY created_at DESC LIMIT ?", [limit],
-            ).fetchall()
-            cols = [d[0] for d in self._store._conn.description]
+        rows, cols = self._store._sql_read_all_with_cols(
+            "SELECT * FROM backtest_runs ORDER BY created_at DESC LIMIT ?",
+            [limit],
+        )
         return [dict(zip(cols, row)) for row in rows]
 
     def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
-        with self._store._lock:
-            row = self._store._conn.execute(
-                "SELECT * FROM backtest_runs WHERE run_id = ?", [run_id]
-            ).fetchone()
-            if row is None:
-                return None
-            cols = [d[0] for d in self._store._conn.description]
-            run = dict(zip(cols, row))
-            trade_rows = self._store._conn.execute(
-                "SELECT * FROM journal_trades WHERE run_id = ? ORDER BY trade_idx",
-                [run_id],
-            ).fetchall()
-            trade_cols = [d[0] for d in self._store._conn.description]
+        row, cols = self._store._sql_read_all_with_cols(
+            "SELECT * FROM backtest_runs WHERE run_id = ?", [run_id]
+        )
+        if not row:
+            return None
+        run = dict(zip(cols, row[0]))
+        trade_rows, trade_cols = self._store._sql_read_all_with_cols(
+            "SELECT * FROM journal_trades WHERE run_id = ? ORDER BY trade_idx",
+            [run_id],
+        )
         run["trades"] = [dict(zip(trade_cols, tr)) for tr in trade_rows]
         return run
 
     def get_equity_curve(self, run_id: str) -> list:
         """Retrieve saved equity curve for a backtest run."""
-        with self._store._lock:
-            rows = self._store._conn.execute(
-                "SELECT ts, equity FROM journal_equity WHERE run_id = ? ORDER BY ts",
-                [run_id],
-            ).fetchall()
+        rows = self._store._sql_read_all(
+            "SELECT ts, equity FROM journal_equity WHERE run_id = ? ORDER BY ts",
+            [run_id],
+        )
         return [{"ts": r[0], "equity": r[1]} for r in rows]
 
     def delete_run(self, run_id: str) -> bool:
-        with self._store._lock:
-            self._store._conn.execute("DELETE FROM journal_equity WHERE run_id = ?", [run_id])
-            self._store._conn.execute("DELETE FROM journal_trades WHERE run_id = ?", [run_id])
-            self._store._conn.execute("DELETE FROM backtest_runs WHERE run_id = ?", [run_id])
+        self._store._sql_exec_many([
+            ("DELETE FROM journal_equity WHERE run_id = ?", [run_id]),
+            ("DELETE FROM journal_trades WHERE run_id = ?", [run_id]),
+            ("DELETE FROM backtest_runs WHERE run_id = ?", [run_id]),
+        ])
         return True
 
     def compare_runs(self, run_ids: List[str]) -> List[Dict[str, Any]]:
         results = []
-        with self._store._lock:
-            for rid in run_ids:
-                row = self._store._conn.execute(
-                    "SELECT run_id, strategy_name, market, total_pnl, total_return_pct, win_rate, "
-                    "sharpe_ratio, max_drawdown, total_trades, total_fees "
-                    "FROM backtest_runs WHERE run_id = ?", [rid],
-                ).fetchone()
-                if row:
-                    cols = [d[0] for d in self._store._conn.description]
-                    results.append(dict(zip(cols, row)))
+        for rid in run_ids:
+            row, cols = self._store._sql_read_all_with_cols(
+                "SELECT run_id, strategy_name, market, total_pnl, total_return_pct, win_rate, "
+                "sharpe_ratio, max_drawdown, total_trades, total_fees "
+                "FROM backtest_runs WHERE run_id = ?", [rid],
+            )
+            if row:
+                results.append(dict(zip(cols, row[0])))
         return results

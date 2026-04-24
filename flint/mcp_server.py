@@ -15,11 +15,23 @@ Provides tools for:
 from __future__ import annotations
 
 import json
+import os
 import time
 import logging
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+
+
+def _api_base() -> str:
+    """D-4.7-mcp-inprocess (partial) — HTTP base URL for paper/journal tools.
+
+    Full in-process service layer (flint/services/*.py called directly by
+    MCP tools) is a larger refactor deferred as a sibling PR. This MVP at
+    least makes the URL configurable so MCP can talk to any local server
+    port, not just the hardcoded 8000. Set FLINT_API_URL to override.
+    """
+    return os.environ.get("FLINT_API_URL", "http://127.0.0.1:8000").rstrip("/")
 
 logger = logging.getLogger("flint.mcp")
 
@@ -223,7 +235,7 @@ def start_paper_trading(
             body["code"] = code
         else:
             body["strategy"] = strategy
-        r = requests.post("http://127.0.0.1:8000/api/v1/paper/start", json=body, timeout=120)
+        r = requests.post(f"{_api_base()}/api/v1/paper/start", json=body, timeout=120)
         return r.text
     except Exception as e:
         return json.dumps({"error": f"Failed to start paper trading: {e}. Is the Flint server running (flint serve)?"})
@@ -238,7 +250,7 @@ def stop_paper_trading(session_id: str) -> str:
     """
     import requests
     try:
-        r = requests.post("http://127.0.0.1:8000/api/v1/paper/stop",
+        r = requests.post(f"{_api_base()}/api/v1/paper/stop",
                           json={"session_id": session_id}, timeout=30)
         return r.text
     except Exception as e:
@@ -250,7 +262,7 @@ def get_paper_sessions() -> str:
     """List all paper trading sessions with their current status, equity, and trade count."""
     import requests
     try:
-        r = requests.get("http://127.0.0.1:8000/api/v1/paper/sessions", timeout=15)
+        r = requests.get(f"{_api_base()}/api/v1/paper/sessions", timeout=15)
         data = r.json()
         sessions = data.get("sessions", [])
         summary = []
@@ -278,7 +290,7 @@ def get_paper_status(session_id: str) -> str:
     """
     import requests
     try:
-        r = requests.get(f"http://127.0.0.1:8000/api/v1/paper/status/{session_id}", timeout=15)
+        r = requests.get(f"{_api_base()}/api/v1/paper/status/{session_id}", timeout=15)
         return r.text
     except Exception as e:
         return json.dumps({"error": f"Failed to get session status: {e}"})
@@ -298,7 +310,7 @@ def list_journal_runs(limit: int = 20) -> str:
     """
     import requests
     try:
-        r = requests.get(f"http://127.0.0.1:8000/api/v1/journal/runs?limit={limit}", timeout=15)
+        r = requests.get(f"{_api_base()}/api/v1/journal/runs?limit={limit}", timeout=15)
         data = r.json()
         runs = data if isinstance(data, list) else data.get("runs", [])
         summary = []
@@ -328,7 +340,7 @@ def compare_runs(run_ids: str) -> str:
     """
     import requests
     try:
-        r = requests.get(f"http://127.0.0.1:8000/api/v1/journal/compare?ids={run_ids}", timeout=15)
+        r = requests.get(f"{_api_base()}/api/v1/journal/compare?ids={run_ids}", timeout=15)
         return r.text
     except Exception as e:
         return json.dumps({"error": f"Failed to compare runs: {e}"})

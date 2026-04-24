@@ -147,7 +147,7 @@ function SessionDetail({ sessionId, onStop, onKill }: {
     fetch(`/api/v1/paper/${sessionId}/equity-history`)
       .then(r => r.json())
       .then(d => setEqHistory(d.equity_curve || []))
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/PaperTrading.tsx] fetch failed:", e) })
   }, [sessionId])
 
   // Fetch candle data for buy-and-hold baseline
@@ -171,7 +171,7 @@ function SessionDetail({ sessionId, onStop, onKill }: {
         ])
         setBuyHoldData(bh)
       })
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/PaperTrading.tsx] fetch failed:", e) })
   }, [status?.market, eqHistory])
 
   if (!status) {
@@ -555,17 +555,17 @@ function DeployPanel() {
       const strats = d.strategies || []
       setStrategies(strats)
       if (strats.length > 0 && !strategy) setStrategy(strats[0].name)
-    }).catch(() => {})
+    }).catch((e) => { console.warn("[pages/PaperTrading.tsx] fetch failed:", e) })
     fetch('/api/v1/data/markets').then(r => r.json()).then(d => {
       const raw = d.markets || []
       const mkts = raw.map((m: any) => typeof m === 'string' ? m : m.market)
       setMarkets(mkts)
       if (mkts.length > 0 && !market) setMarket(mkts[0])
-    }).catch(() => {})
+    }).catch((e) => { console.warn("[pages/PaperTrading.tsx] fetch failed:", e) })
     // Fetch venues from single source of truth
     fetch('/api/v1/system/venues').then(r => r.json()).then(d => {
       setVenues(d.venues || [])
-    }).catch(() => {})
+    }).catch((e) => { console.warn("[pages/PaperTrading.tsx] fetch failed:", e) })
   }, [isOpen])
 
   const selectedStrat = strategies.find(s => s.name === strategy)

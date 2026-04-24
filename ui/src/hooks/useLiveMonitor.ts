@@ -47,7 +47,7 @@ export function useLiveSessions() {
   useEffect(() => {
     fetch('/api/v1/live/sessions').then(r => r.json()).then(d => {
       if (d.sessions) setSessions(d.sessions)
-    }).catch(() => {})
+    }).catch((e) => { console.warn("[hooks/useLiveMonitor.ts] fetch failed:", e) })
   }, [])
   return sessions
 }
