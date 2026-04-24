@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ...backtest.engine import BacktestEngine
+from ...backtest.engine import BacktestCancelled, BacktestEngine
 from ...models import Candle
 from ...analytics.tearsheet import generate_tearsheet
 from ...analytics.monte_carlo import run_monte_carlo
@@ -627,6 +627,15 @@ def run_backtest(req: BacktestRequest, request: Request):
                     latency_enabled=req.latency_enabled,
                 )
 
+            # Phase 4 T4.5 — cancel_check closure polls _entries for the
+            # 'cancelled' status set by POST /{run_id}/cancel. Engine checks
+            # every 100 bars and raises BacktestCancelled; the except block
+            # below cleans up state so the concurrent slot frees immediately.
+            def _cancelled() -> bool:
+                with _state_lock:
+                    entry = _entries.get(run_id)
+                    return entry is not None and entry.status == "cancelled"
+
             engine = BacktestEngine(strategy, req.initial_capital, req.fee_rate,
                                     fill_model=fill_model,
                                     funding_rates=funding_rates,
@@ -634,7 +643,8 @@ def run_backtest(req: BacktestRequest, request: Request):
                                     open_interest=open_interest,
                                     margin_engine=margin_eng,
                                     capital_allocator=cap_alloc,
-                                    max_runtime_s=_MAX_BACKTEST_SECONDS)
+                                    max_runtime_s=_MAX_BACKTEST_SECONDS,
+                                    cancel_check=_cancelled)
             if extra_candles:
                 # Multi-market: pass primary candles + extras separately
                 # so the engine doesn't pick a different primary by count
@@ -714,6 +724,12 @@ def run_backtest(req: BacktestRequest, request: Request):
                 except Exception as journal_err:
                     logger.warning("Journal save failed: %s", journal_err)
 
+        except BacktestCancelled as ce:
+            # Phase 4 T4.5 — clean exit path for user-initiated cancellation.
+            logger.info("Backtest %s cancelled: %s", run_id, ce)
+            _set_status(run_id, "cancelled")
+            _set_result(run_id, {"error": "Cancelled by user"})
+            _set_progress(run_id, phase="cancelled", pct=0, detail=str(ce))
         except Exception as e:
             import traceback
             logger.exception("Backtest %s failed", run_id)

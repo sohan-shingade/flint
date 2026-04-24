@@ -1,6 +1,7 @@
 import { Routes, Route, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import AsciiBackground from './components/AsciiBackground'
+import ConnectionBanner from './components/ConnectionBanner'
 import Dashboard from './pages/Dashboard'
 import BacktestLab from './pages/BacktestLab'
 import DataExplorer from './pages/DataExplorer'
@@ -60,12 +61,17 @@ export default function App() {
           navigate('/setup', { replace: true })
         }
       })
-      .catch(() => {})
+      .catch(err => {
+        // Phase 4 T4.2 — ConnectionBanner handles user-facing signaling;
+        // log here so devtools still shows the failure cause.
+        console.warn('status probe failed:', err)
+      })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
     <div className="min-h-screen relative">
+      <ConnectionBanner />
       <AsciiBackground />
 
       {/* top border accent line */}
