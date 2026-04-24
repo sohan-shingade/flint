@@ -72,15 +72,29 @@ class PortfolioEngine:
             final_results[name] = result
 
         # Phase 4: Combine equity curves
-        n_candles = len(candles)
-        combined = [0.0] * n_candles
+        # Use max curve length so Phase 1 T1.1.f force-close terminal points
+        # (one extra entry after last candle when a position had to be closed
+        # at engine exit) aren't silently dropped from the aggregate.
+        curve_len = max(
+            (len(r.equity_curve) for r in final_results.values()),
+            default=len(candles),
+        )
+        combined = [0.0] * curve_len
         for name, result in final_results.items():
-            for i, eq in enumerate(result.equity_curve):
-                if i < n_candles:
-                    combined[i] += eq
+            eq_last = (
+                result.equity_curve[-1] if result.equity_curve else 0.0
+            )
+            for i in range(curve_len):
+                if i < len(result.equity_curve):
+                    combined[i] += result.equity_curve[i]
+                else:
+                    # Strategy's curve ran shorter than the max — extend with
+                    # its final value so the combined curve doesn't collapse
+                    # a missing tail to zero.
+                    combined[i] += eq_last
 
-        # Fill any gaps (strategies with fewer equity points)
-        for i in range(n_candles):
+        # Fill any initial gaps (strategies produced no data yet).
+        for i in range(curve_len):
             if combined[i] == 0:
                 combined[i] = combined[i - 1] if i > 0 else self.initial_capital
 
