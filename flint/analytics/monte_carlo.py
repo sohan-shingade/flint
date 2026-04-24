@@ -49,6 +49,7 @@ def run_monte_carlo(
     n_simulations: int = 1000,
     ruin_threshold: float = 0.50,
     period_seconds: int = 0,
+    seed: int = 42,
 ) -> MonteCarloResult:
     """Run Monte Carlo analysis by shuffling trade sequence.
 
@@ -63,6 +64,9 @@ def run_monte_carlo(
         period_seconds: Total backtest period in seconds (used to compute
             trade frequency for Sharpe annualization). When 0, assumes
             1 year as fallback.
+        seed: PRNG seed for shuffle reproducibility. Default 42 preserves
+            historical behavior; callers threading seed from BacktestConfig
+            override to match their run. Phase 1 T1.3.b.
     """
     if not trade_pnls or len(trade_pnls) < 3:
         return MonteCarloResult(n_simulations=0)
@@ -85,7 +89,7 @@ def run_monte_carlo(
     ruin_count = 0
     all_equity_curves = []
 
-    rng = np.random.default_rng(seed=42)
+    rng = np.random.default_rng(seed=seed)
     for _ in range(n_simulations):
         # Shuffle trade order (seeded for reproducibility)
         shuffled = rng.permutation(pnls)

@@ -46,7 +46,8 @@ class TestMultiMarket:
         btc = [_c(i*3600, 40000+i*100, "BTC-PERP") for i in range(50)]
         engine = BacktestEngine(CrossMarketStrategy(), fee_rate=0.0)
         result = engine.run(sol, extra_markets={"BTC-PERP": btc})
-        assert len(result.equity_curve) == 50
+        # Curve = N candles + 0..1 terminal points (force-close if position open).
+        assert len(result.equity_curve) in (50, 51)
 
     def test_get_candles_returns_data(self):
         sol = [_c(i*3600, 100+i, "SOL-PERP") for i in range(50)]
@@ -70,4 +71,45 @@ class TestMultiMarket:
         candles = [_c(i*3600, 100 + (i%20 - 10)*0.5) for i in range(60)]
         engine = BacktestEngine(MACrossoverStrategy(5, 10), fee_rate=0.0)
         result = engine.run(candles)
-        assert len(result.equity_curve) == 60
+        # Curve = N candles + 0..1 terminal points (force-close if position open).
+        assert len(result.equity_curve) in (60, 61)
+
+    def test_cross_market_history_excludes_current_ts(self):
+        """Regression for Phase 1 T1.1.g — cross-market history must not
+        include bars at the primary's current ts (strict `<`), to avoid
+        implicit simultaneity assumptions."""
+        observations = []
+
+        class InspectStrategy(Strategy):
+            @property
+            def name(self): return "Inspect"
+            def reset(self): pass
+
+            def on_candle(self, candle, history, ctx=None):
+                if ctx is None:
+                    return Signal.HOLD
+                btc = ctx.get_candles("BTC-PERP", 100)
+                observations.append({
+                    "primary_ts": candle.ts,
+                    "btc_max_ts": btc[-1].ts if btc else None,
+                    "btc_count": len(btc),
+                })
+                return Signal.HOLD
+
+        sol = [_c(i * 3600, 100 + i, "SOL-PERP") for i in range(10)]
+        btc = [_c(i * 3600, 40000 + i, "BTC-PERP") for i in range(10)]
+        engine = BacktestEngine(InspectStrategy(), fee_rate=0.0)
+        engine.run(sol, extra_markets={"BTC-PERP": btc})
+
+        # On primary bar 0, cross-history must be empty (no BTC bars with
+        # ts < 0).
+        assert observations[0]["btc_count"] == 0
+
+        # On every primary bar, every cross-bar returned must have ts
+        # strictly less than primary ts.
+        for obs in observations:
+            if obs["btc_max_ts"] is not None:
+                assert obs["btc_max_ts"] < obs["primary_ts"], (
+                    f"Cross-market lookahead: primary_ts={obs['primary_ts']}, "
+                    f"btc_max_ts={obs['btc_max_ts']}"
+                )

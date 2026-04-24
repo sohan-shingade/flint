@@ -40,8 +40,19 @@ class TestLatencyDelay:
             results_b.append(stage_b.compute_eligible_ts(_order(ts=1000)))
         assert results_a == results_b
 
-    def test_unseeded_jitter_varies(self):
-        stage = LatencyStage(base_latency_s=8.0, latency_jitter_s=5.0)
+    def test_default_seed_is_deterministic(self):
+        """Phase 1 T1.1.e — omitting seed must produce deterministic output.
+        Two LatencyStage instances with no seed must compute identical jitter."""
+        stage_a = LatencyStage(base_latency_s=8.0, latency_jitter_s=5.0)
+        stage_b = LatencyStage(base_latency_s=8.0, latency_jitter_s=5.0)
+        for _ in range(10):
+            a = stage_a.compute_eligible_ts(_order(ts=1000))
+            b = stage_b.compute_eligible_ts(_order(ts=1000))
+            assert a == b, f"Default seed not deterministic: {a} vs {b}"
+
+    def test_explicit_unseeded_varies(self):
+        """seed=-1 opts into non-deterministic system-time seeding."""
+        stage = LatencyStage(base_latency_s=8.0, latency_jitter_s=5.0, seed=-1)
         results = {stage.compute_eligible_ts(_order(ts=1000)) for _ in range(50)}
         assert len(results) > 1
 

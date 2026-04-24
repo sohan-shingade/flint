@@ -176,7 +176,9 @@ class ParityTest:
 
             equity_curve.append(broker.equity)
 
-        # Close any remaining position at the last candle
+        # Close any remaining position at the last candle.
+        # Append terminal equity rather than overwriting so the mark-to-market
+        # final-bar equity is preserved — matches behavior in engine.py.
         if self._candles and has_position:
             last = self._candles[-1]
             pos = broker.positions.get(last.market)
@@ -185,7 +187,7 @@ class ParityTest:
                 ctx.market_order(last.market, close_side, pos["size"])
                 close_fills = broker.process_candle(last)
                 all_fills.extend(close_fills)
-                equity_curve[-1] = broker.equity
+                equity_curve.append(broker.equity)
 
         return all_fills, equity_curve
 

@@ -96,7 +96,7 @@ def _print_results(result, strategy_name: str, elapsed: float):
     table.add_row("Winners / Losers", f"{result.winning_trades} / {result.losing_trades}")
     table.add_row("Total Fees", f"${result.total_fees:.2f}")
     table.add_row("Funding Paid", f"${result.funding_paid:.2f}")
-    table.add_row("Candles", f"{len(result.equity_curve):,}")
+    table.add_row("Equity Points", f"{len(result.equity_curve):,}")
     table.add_row("Elapsed", f"{elapsed:.2f}s")
 
     console.print()

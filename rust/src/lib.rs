@@ -54,17 +54,19 @@ fn parse_fill_model(s: &str) -> FillModelType {
 struct RustEngine {
     runner: BacktestRunner,
     registry: NameRegistry,
+    seed: u64,
 }
 
 #[pymethods]
 impl RustEngine {
     #[new]
-    #[pyo3(signature = (initial_capital=10000.0, fee_bps=5.0, fill_model="pipeline", slippage_bps=5.0))]
+    #[pyo3(signature = (initial_capital=10000.0, fee_bps=5.0, fill_model="pipeline", slippage_bps=5.0, seed=0))]
     fn new(
         initial_capital: f64,
         fee_bps: f64,
         fill_model: &str,
         slippage_bps: f64,
+        seed: u64,
     ) -> Self {
         let config = RunConfig {
             initial_capital,
@@ -76,6 +78,7 @@ impl RustEngine {
         Self {
             runner: BacktestRunner::new(config),
             registry: NameRegistry::new(),
+            seed,
         }
     }
 
@@ -110,7 +113,11 @@ impl RustEngine {
         for vid in seen_venues {
             let name = self.registry.venue_name(vid).to_string();
             use crate::engine::venue_fills::VenueFiller;
-            let filler = VenueFiller::for_venue(&name, 42);
+            // Seed is threaded from Python via RustEngine::new; each venue filler
+            // gets a deterministic seed offset by venue_id so per-venue RNGs
+            // are independent but reproducible. Phase 1 T1.1.c.
+            let venue_seed = self.seed.wrapping_add(vid.0 as u64);
+            let filler = VenueFiller::for_venue(&name, venue_seed);
             self.runner.register_venue_filler(vid, filler);
         }
         Ok(())
@@ -319,9 +326,45 @@ impl RustEngine {
     fn equity(&self) -> f64 { self.runner.equity() }
 }
 
+/// Capability flags exposed to Python.
+///
+/// Phase 3 T3.2. Drives the `can_use_rust` dispatch in BacktestEngine and
+/// the `--rust-required` gate. Keep this in sync with what runner.rs /
+/// engine/* actually implements; lying here = silent wrong numbers.
+#[pyfunction]
+fn capabilities(py: Python<'_>) -> PyResult<PyObject> {
+    let d = PyDict::new(py);
+
+    // Fill models actually supported by runner.rs dispatch
+    let fill_models = PyList::new(py, ["close", "next_bar_open", "slippage",
+                                        "pipeline"])?;
+    d.set_item("fill_models", fill_models)?;
+
+    // Fee models — today only flat fees are in Rust. MakerTakerFee /
+    // DriftFee / HyperliquidFee land in T3.3.
+    let fee_models = PyList::new(py, ["flat"])?;
+    d.set_item("fee_models", fee_models)?;
+
+    // Feature flags — the Python-side can_use_rust gate mirrors these.
+    d.set_item("supports_partial_fills", false)?;   // T3.4
+    d.set_item("supports_latency_stage", false)?;   // T3.4
+    d.set_item("supports_tx_costs", false)?;        // Phase 1 T1.1.b
+    d.set_item("supports_orderbook_walk", false)?;  // T3.1 Rust port
+    d.set_item("supports_cross_market", false)?;    // Phase 2 follow-up
+    d.set_item("supports_multi_venue_margin", false)?;  // T3.5
+    d.set_item("supports_borrow_snapshots", false)?;
+    d.set_item("supports_maker_taker_fees", false)?;    // T3.3
+
+    // Engine identity + version — helps UI surface which engine ran.
+    d.set_item("engine", "rust")?;
+    d.set_item("engine_version", env!("CARGO_PKG_VERSION"))?;
+    Ok(d.into())
+}
+
 /// Python module definition.
 #[pymodule]
 fn flint_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustEngine>()?;
+    m.add_function(wrap_pyfunction!(capabilities, m)?)?;
     Ok(())
 }

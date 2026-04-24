@@ -9,6 +9,18 @@ Endpoint: GET /market/{symbol}/candles/{resolution}
 """
 from __future__ import annotations
 
+# Phase 1 T1.3.a — point-in-time declaration.
+# Drift API returns candles with ts = bar START (UTC epoch seconds); this
+# provider normalizes to bar CLOSE by adding resolution_s, so downstream
+# consumers treat ts as close-time. Funding/orderbook not applicable here.
+PIT_METADATA = {
+    "candle_ts": "bar-close",
+    "funding_ts": "exchange-time",  # unused by this provider
+    "orderbook_ts": "exchange-time",  # unused by this provider
+    "oi_ts": "exchange-time",  # unused by this provider
+    "reviewed": "2026-04-23",
+}
+
 import logging
 import time
 from typing import Callable, List, Optional
