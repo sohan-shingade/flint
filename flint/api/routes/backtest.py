@@ -686,6 +686,11 @@ def run_backtest(req: BacktestRequest, request: Request):
                 "warnings": data_warnings,
             }
 
+            # Phase 3 T3.2 / Phase 4 T4.6 — thread engine telemetry into
+            # the API response so UI can surface which engine ran + why.
+            ts_dict["engine_used"] = getattr(result, "engine_used", None)
+            ts_dict["fallback_reason"] = getattr(result, "fallback_reason", None)
+
             # Run Monte Carlo if enough trades
             if result.total_trades >= 5:
                 trade_pnls = [p.pnl for p in result.positions]

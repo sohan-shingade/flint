@@ -1610,7 +1610,7 @@ class FlintStore:
         """List recent live trading sessions (most recent first)."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT session_id, strategy, market, venue, status, "
+                "SELECT session_id, strategy_name, market, venue, status, "
                 "started_at, stopped_at FROM live_sessions "
                 "ORDER BY started_at DESC LIMIT ?",
                 [limit],

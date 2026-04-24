@@ -27,8 +27,19 @@ const navItems = [
 
 export default function App() {
   const [clock, setClock] = useState('')
+  // Phase 4 T4.6 / BUG-3 — pull live version from /api/v1/capabilities so
+  // the footer never drifts from pyproject. Falls back to "?.?.?" if probe
+  // fails (ConnectionBanner surfaces the connectivity error separately).
+  const [version, setVersion] = useState('?.?.?')
   const navigate = useNavigate()
   const location = useLocation()
+
+  useEffect(() => {
+    fetch('/api/v1/capabilities')
+      .then(r => r.json())
+      .then(d => { if (d?.version) setVersion(String(d.version)) })
+      .catch(err => { console.warn('capabilities probe failed:', err) })
+  }, [])
 
   useEffect(() => {
     const tick = () => {
@@ -129,7 +140,7 @@ export default function App() {
       {/* footer */}
       <footer className="relative z-10 border-t border-border py-3 px-6">
         <div className="max-w-[1400px] mx-auto flex items-center justify-between text-[10px] text-ghost/70 tracking-wider">
-          <span>FLINT v0.3.0</span>
+          <span>FLINT v{version}</span>
           <span className="font-[var(--font-display)] italic text-[11px] text-ghost/60">
             Strike alpha on Solana
           </span>

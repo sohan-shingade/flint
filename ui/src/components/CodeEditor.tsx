@@ -1,7 +1,17 @@
 import { Suspense, lazy } from 'react'
+import { loader } from '@monaco-editor/react'
+import * as monaco from 'monaco-editor'
 
-// Phase 4 T4.4 — lazy-load Monaco (~1MB) so pages that never show the editor
-// don't pay the cost. BacktestLab is the only page that mounts this component.
+// BUG-4 fix — point @monaco-editor/react at the bundled Monaco instance
+// instead of its default CDN loader (https://cdn.jsdelivr.net/...).
+// Flint's README + home page promise "local-first, nothing leaves your
+// machine"; the default CDN fetch silently broke that. This block ships
+// Monaco inside the app bundle so the editor works fully offline.
+loader.config({ monaco })
+
+// Phase 4 T4.4 — lazy-load the Monaco wrapper (~1MB) so pages that never
+// show the editor don't pay the cost. BacktestLab is the only page that
+// mounts this component.
 const Editor = lazy(() => import('@monaco-editor/react'))
 
 interface Props {

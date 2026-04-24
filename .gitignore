@@ -77,3 +77,4 @@ ui/dist/
 # Debug / test artifacts
 db_info/
 test_client/
+.playwright-mcp/
