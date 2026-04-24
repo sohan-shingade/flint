@@ -136,9 +136,21 @@ class OrderbookFillModel(FillModel):
                                 orderbook_snapshots=snapshots)
     """
 
-    def __init__(self, fallback_slippage_bps: float = 5.0):
+    def __init__(self, fallback_slippage_bps: float = 5.0,
+                 reject_on_insufficient_depth: bool = True):
+        """
+        Args:
+            fallback_slippage_bps: slippage rate when no book data is available
+                and we fall through to the bps-based fallback.
+            reject_on_insufficient_depth: if True (default — Phase 3 T3.1),
+                orders whose size exceeds total book depth on the taking side
+                are REJECTED rather than silently underfilled. Set to False
+                only if you understand that silent underfills hide liquidity
+                constraints.
+        """
         self._fallback = SlippageFill(fallback_slippage_bps)
         self._current_book: Optional[OrderbookSnapshot] = None
+        self._reject_on_insufficient_depth = reject_on_insufficient_depth
 
     def set_orderbook(self, book: Optional[OrderbookSnapshot]) -> None:
         """Called by the engine/context to set the current orderbook state."""
@@ -150,15 +162,27 @@ class OrderbookFillModel(FillModel):
         return self._walk_book(order, candle)
 
     def _walk_book(self, order: Order, candle: Candle) -> Optional[Fill]:
-        """Walk the orderbook levels to compute volume-weighted average fill."""
-        levels = self._current_book.asks if order.side == Side.LONG else self._current_book.bids
+        """Walk the orderbook levels to compute volume-weighted average fill.
+
+        Phase 3 T3.1 hardening:
+        - Rejects orders when size exceeds aggregate book depth on the taking
+          side (when reject_on_insufficient_depth=True, the default).
+        - Populates impact_bps on the returned Fill = (vwap - mid) / mid * 10_000,
+          signed positive = fill worse than mid for the taker.
+        """
+        book = self._current_book
+        levels = book.asks if order.side == Side.LONG else book.bids
         if not levels:
             return self._fallback.fill_market(order, candle)
+
+        total_depth = sum(lv.size for lv in levels)
+        if self._reject_on_insufficient_depth and order.size > total_depth:
+            # Reject — signals "insufficient liquidity at this book state".
+            return None
 
         remaining = order.size
         total_cost = 0.0
         filled = 0.0
-
         for level in levels:
             take = min(remaining, level.size)
             total_cost += take * level.price
@@ -171,10 +195,32 @@ class OrderbookFillModel(FillModel):
             return self._fallback.fill_market(order, candle)
 
         avg_price = total_cost / filled
+
+        # Impact / slippage attribution: vwap vs book mid, signed by side.
+        # Positive impact = fill worse than mid for the taker.
+        mid = self._book_mid(book)
+        if mid > 0:
+            if order.side == Side.LONG:
+                impact_bps = (avg_price - mid) / mid * 10_000.0
+            else:
+                impact_bps = (mid - avg_price) / mid * 10_000.0
+        else:
+            impact_bps = 0.0
+
         return Fill(
             market=order.market, side=order.side, price=avg_price,
             size=filled, fee=0.0, ts=candle.ts, order_id=order.order_id,
+            impact_bps=impact_bps,
         )
+
+    @staticmethod
+    def _book_mid(book: OrderbookSnapshot) -> float:
+        """Best bid / best ask midpoint; 0 if the book has no top level."""
+        best_bid = book.bids[0].price if book.bids else 0.0
+        best_ask = book.asks[0].price if book.asks else 0.0
+        if best_bid > 0 and best_ask > 0:
+            return (best_bid + best_ask) / 2.0
+        return best_bid or best_ask or 0.0
 
     def fill_limit(self, order: Order, candle: Candle) -> Optional[Fill]:
         if order.side == Side.LONG and candle.low <= order.price:
