@@ -230,8 +230,12 @@ class TestListAvailableMarkets:
 class TestListLocalMarkets:
     def test_returns_local_data(self, patch_store):
         from flint.mcp_server import list_local_markets
-        patch_store._conn.execute.return_value.fetchall.return_value = [
-            ("SOL-PERP", 3600, 1000, 1700000000, 1700360000),
+        # Phase 2 T2.2: MCP now calls store.list_markets_with_data() which
+        # returns dicts, not raw tuples from _conn.
+        patch_store.list_markets_with_data.return_value = [
+            {"market": "SOL-PERP", "resolution_s": 3600,
+             "candle_count": 1000, "first_ts": 1700000000,
+             "last_ts": 1700360000},
         ]
         result = json.loads(list_local_markets())
         assert "markets" in result

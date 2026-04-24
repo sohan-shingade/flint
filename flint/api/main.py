@@ -7,7 +7,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -67,23 +67,13 @@ async def lifespan(app: FastAPI):
         # Mark stale live sessions as interrupted (they can't auto-resume
         # because live trading requires venue credentials and connections)
         try:
-            with store._lock:
-                stale = store._conn.execute(
-                    "SELECT session_id, strategy_name, market, venue FROM live_sessions "
-                    "WHERE status = 'running'"
-                ).fetchall()
-                if stale:
-                    store._conn.execute(
-                        "UPDATE live_sessions SET status = 'interrupted', "
-                        "stopped_at = ? WHERE status = 'running'",
-                        [int(time.time())],
-                    )
-                    for s in stale:
-                        logger.warning(
-                            "Live session %s (%s on %s/%s) marked interrupted — "
-                            "redeploy manually via the Live Trading page",
-                            s[0], s[1], s[2], s[3],
-                        )
+            stale = store.mark_running_live_sessions_interrupted(int(time.time()))
+            for s in stale:
+                logger.warning(
+                    "Live session %s (%s on %s/%s) marked interrupted — "
+                    "redeploy manually via the Live Trading page",
+                    s["session_id"], s["strategy"], s["market"], s["venue"],
+                )
         except Exception as e:
             logger.debug("Live session cleanup: %s", e)
 
@@ -159,6 +149,16 @@ app.include_router(live_router)
 @app.get("/api/v1/health")
 def health():
     return {"status": "ok", "service": "flint"}
+
+
+@app.get("/api/v1/capabilities")
+def capabilities_root(request: Request):
+    """Phase 4 T4.6 — alias for GET /api/v1/system/capabilities at root.
+
+    UI + MCP clients probe this to feature-flag missing surface.
+    """
+    from .routes.system import get_capabilities
+    return get_capabilities(request)
 
 
 # ─── Serve built UI static files ───────────────────────────────

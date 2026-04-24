@@ -499,21 +499,17 @@ def list_local_markets() -> str:
 
     store = _get_store()
 
-    with store._lock:
-        rows = store._conn.execute(
-            "SELECT market, resolution_s, COUNT(*) as cnt, MIN(ts) as first_ts, MAX(ts) as last_ts "
-            "FROM candles GROUP BY market, resolution_s ORDER BY market"
-        ).fetchall()
+    rows = store.list_markets_with_data()
 
     markets = []
     for r in rows:
         markets.append({
-            "market": r[0],
-            "resolution": f"{r[1]}s",
-            "candle_count": r[2],
-            "from": datetime.fromtimestamp(r[3], tz=timezone.utc).strftime("%Y-%m-%d"),
-            "to": datetime.fromtimestamp(r[4], tz=timezone.utc).strftime("%Y-%m-%d"),
-            "type": "perp" if "-PERP" in r[0] else "spot",
+            "market": r["market"],
+            "resolution": f"{r['resolution_s']}s",
+            "candle_count": r["candle_count"],
+            "from": datetime.fromtimestamp(r["first_ts"], tz=timezone.utc).strftime("%Y-%m-%d"),
+            "to": datetime.fromtimestamp(r["last_ts"], tz=timezone.utc).strftime("%Y-%m-%d"),
+            "type": "perp" if "-PERP" in r["market"] else "spot",
         })
 
     return json.dumps({"markets": markets, "total_markets": len(markets),

@@ -106,11 +106,7 @@ def get_volume(
     try:
         # Get all venues that have candle data for this market (exclude pyth — no volume)
         result: Dict[str, list] = {}
-        with store._lock:
-            venues_rows = store._conn.execute(
-                "SELECT DISTINCT venue FROM candles WHERE market = ? AND venue NOT IN ('pyth', 'default')",
-                [market]
-            ).fetchall()
+        venues_rows = [(v,) for v in store.list_venues_for_market(market)]
 
         for (venue_name,) in venues_rows:
             candles = store.query_candles(market, resolution_s, start_ts, end_ts, venue=venue_name)
@@ -183,30 +179,7 @@ def delete_market_data(market: str, request: Request):
         from fastapi import HTTPException
         raise HTTPException(500, "Store not available")
 
-    deleted = {}
-    tables = [
-        ("candles", "market"),
-        ("venue_funding_rates", "market"),
-        ("oracle_prices", "market"),
-        ("orderbook_snapshots", "market"),
-        ("open_interest", "market"),
-        ("liquidations", "market"),
-    ]
-    with store._lock:
-        for table, col in tables:
-            try:
-                before = store._conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} = ?", [market]).fetchone()[0]
-                if before > 0:
-                    store._conn.execute(f"DELETE FROM {table} WHERE {col} = ?", [market])
-                    deleted[table] = before
-            except Exception:
-                pass
-        # Also clean sync metadata
-        try:
-            store._conn.execute("DELETE FROM sync_metadata WHERE market = ?", [market])
-        except Exception:
-            pass
-
+    deleted = store.delete_market_data(market)
     return {"market": market, "deleted": deleted, "total_records": sum(deleted.values())}
 
 
@@ -217,19 +190,7 @@ def list_markets(request: Request):
     if store is None:
         return {"markets": []}
     try:
-        with store._lock:
-            rows = store._conn.execute(
-                "SELECT DISTINCT market, resolution_s, COUNT(*) as candle_count, "
-                "MIN(ts) as first_ts, MAX(ts) as last_ts "
-                "FROM candles GROUP BY market, resolution_s ORDER BY market"
-            ).fetchall()
-        return {
-            "markets": [
-                {"market": r[0], "resolution_s": r[1],
-                 "candle_count": r[2], "first_ts": r[3], "last_ts": r[4]}
-                for r in rows
-            ]
-        }
+        return {"markets": store.list_markets_with_data()}
     except Exception as e:
         return {"markets": [], "error": str(e)}
 
@@ -278,13 +239,7 @@ def _check_single_market(
         # --- Funding rates ---
         funding_info = {"available": False, "count": 0}
         try:
-            with store._lock:
-                fr_row = store._conn.execute(
-                    "SELECT COUNT(*) FROM venue_funding_rates "
-                    "WHERE market = ? AND ts >= ? AND ts <= ?",
-                    [market, start_ts, end_ts],
-                ).fetchone()
-            fr_count = fr_row[0] if fr_row else 0
+            fr_count = store.count_funding_rates(market, start_ts, end_ts)
             funding_info = {"available": fr_count > 0, "count": fr_count}
         except Exception:
             pass
@@ -292,13 +247,7 @@ def _check_single_market(
         # --- Orderbook snapshots ---
         orderbook_info = {"available": False, "count": 0}
         try:
-            with store._lock:
-                ob_row = store._conn.execute(
-                    "SELECT COUNT(*) FROM orderbook_snapshots "
-                    "WHERE market = ? AND ts >= ? AND ts <= ?",
-                    [market, start_ts, end_ts],
-                ).fetchone()
-            ob_count = ob_row[0] if ob_row else 0
+            ob_count = store.count_orderbook_snapshots(market, start_ts, end_ts)
             orderbook_info = {"available": ob_count > 0, "count": ob_count}
         except Exception:
             pass
@@ -306,13 +255,7 @@ def _check_single_market(
         # --- Open interest ---
         oi_info = {"available": False, "count": 0}
         try:
-            with store._lock:
-                oi_row = store._conn.execute(
-                    "SELECT COUNT(*) FROM open_interest "
-                    "WHERE market = ? AND ts >= ? AND ts <= ?",
-                    [market, start_ts, end_ts],
-                ).fetchone()
-            oi_count = oi_row[0] if oi_row else 0
+            oi_count = store.count_open_interest(market, start_ts, end_ts)
             oi_info = {"available": oi_count > 0, "count": oi_count}
         except Exception:
             pass
@@ -696,13 +639,7 @@ def download_market_data(request: Request, body: dict):
             volume_merged = 0
             has_venue_data = False
             try:
-                with store._lock:
-                    vc = store._conn.execute(
-                        "SELECT COUNT(*) FROM candles WHERE market = ? AND venue NOT IN ('pyth', 'default') "
-                        "AND ts >= ? AND ts <= ?",
-                        [market, start_ts, end_ts],
-                    ).fetchone()
-                has_venue_data = vc and vc[0] > 100
+                has_venue_data = store.count_venue_candles(market, start_ts, end_ts) > 100
             except Exception:
                 pass
             if not has_venue_data:
