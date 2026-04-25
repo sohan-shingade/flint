@@ -26,7 +26,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 
 | ID | State | Effort | Owner | Last update | Notes |
 |---|---|---|---|---|---|
-| D-2.1.b | 🔴 | 2w | TBD | 2026-04-24 | Extract `PositionManager` first (step 1 of 7); biggest unlock |
+| D-2.1.b | 🟡 | 2w | claude | 2026-04-24 | Step 1 of 7 shipped: `PositionManager` extracted, BacktestContext composes via legacy dict aliases · Steps 2–7 (CashManager, FillRecorder, etc.) deferred |
 | D-3.4-rust | 🔴 | 1w | TBD | 2026-04-24 | Rust port; needs cargo + PyO3 work |
 | D-5.1-ruff | 🟢 | 1d | claude | 2026-04-24 | Auto-fix sweep done · ruff configured to F-class only · CI hard-fails on `ruff check` |
 | D-4.7-full | 🟢 | 3d | claude | 2026-04-24 | Services layer (strategies/backtest/journal/data/paper) shipped · MCP backtest+journal in-process · 12 standalone tests |
@@ -122,4 +122,5 @@ PR-ready: `https://github.com/sohan-shingade/flint/pull/new/restructure`.
 
 - **D-5.1-ruff (🟢)** — `pyproject.toml` adds `[tool.ruff.lint]` selecting F401/F811/F821/F841 only; ignored E402 (PIT_METADATA pattern), E501, E702/E701, E741. 315 errors auto-fixed by ruff; 26 remaining were real bugs (unused vars, missing TYPE_CHECKING imports). All resolved. CI lint job flipped from `|| echo` soft-fail to hard-fail.
 - **D-4.7-full (🟢)** — `flint/services/{__init__,strategies,backtest,journal,data,paper}.py` ships. `run_backtest_sync(req, store)` returns the same tearsheet dict shape as the HTTP route. MCP `run_backtest`, `list_journal_runs`, `compare_runs` now call services in-process; `get_paper_sessions` falls back to a store-only view when no daemon is running. Routes in `journal.py` and `paper.py` thinned to adapters. `tests/test_mcp_standalone.py`: 12 tests, all green. 105/105 regression tests on affected paths green.
-- **Next:** D-2.1.b step 1 (extract `PositionManager` from BacktestContext god class).
+- **D-2.1.b Step 1 (🟡 — 1/7)** — `flint/execution/position_manager.py:PositionManager` extracted. BacktestContext composes a manager and exposes `self._positions` / `self._closed_positions` as property aliases that return the manager's underlying dict/list, so existing call sites (`_apply_fill`, `apply_funding`, `check_liquidations`, `close_all_positions`) keep mutating in-place without needing migration in this commit. 8 new unit tests; 90 regression tests on context-using paths green. Steps 2–7 (CashManager, FillRecorder, Risk surface, etc.) deferred to a follow-up.
+- **Next:** D-1.4-ui (multipart CSV upload + reconciliation panel) — last Wave 1 unblocker.

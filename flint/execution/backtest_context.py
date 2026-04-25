@@ -22,6 +22,7 @@ from ..models import (
 from .context import ExecutionContext
 from .fee_models import FeeModel, FlatFeeModel
 from .fill_models import FillModel, FillPipeline
+from .position_manager import PositionManager
 
 logger = logging.getLogger("flint.backtest")
 
@@ -88,11 +89,14 @@ class BacktestContext(ExecutionContext):
         if self._allocator:
             self._cash = self._allocator.total_cash  # sync initial
 
-        self._positions: Dict[tuple, _Position] = {}  # key: (venue, market)
+        # D-2.1.b Step 1: position state owned by PositionManager.
+        # `self._positions` and `self._closed_positions` remain as
+        # property aliases below so existing call sites keep working
+        # while we migrate Steps 2–7.
+        self._pm = PositionManager()
         self._pending_orders: List[Order] = []
         self._market_orders_queue: List[Order] = []  # orders placed this bar
         self._fills: List[Fill] = []
-        self._closed_positions: List[dict] = []  # for result building
         self._total_fees = 0.0
         self._total_tx_costs = 0.0
         self._total_funding = 0.0
@@ -120,6 +124,21 @@ class BacktestContext(ExecutionContext):
     def _next_order_id(self) -> str:
         self._order_counter += 1
         return f"bt-{self._order_counter}"
+
+    # --- Position state (delegates to PositionManager) ---
+    # D-2.1.b Step 1: existing call sites use `self._positions[...]` /
+    # `del self._positions[...]` / `self._closed_positions.append(...)`.
+    # These properties return the underlying mutable dict/list so those
+    # mutations still work. Steps 2–7 migrate the call sites to
+    # `self._pm.set/delete/record_close`.
+
+    @property
+    def _positions(self) -> Dict[tuple, "_Position"]:
+        return self._pm.positions
+
+    @property
+    def _closed_positions(self) -> List[dict]:
+        return self._pm._closed  # noqa: SLF001 — internal aliasing during step 1
 
     # --- ExecutionContext properties ---
 
