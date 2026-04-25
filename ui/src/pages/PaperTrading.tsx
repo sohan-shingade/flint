@@ -7,7 +7,20 @@ import {
   stopSession,
   killSession,
 } from '../hooks/usePaperTrading'
+import { useWebSocket } from '../hooks/useWebSocket'
 import EquityCurve from '../components/EquityCurve'
+
+/** D-4.3-websocket: payload shape PaperTradingEngine broadcasts. */
+interface PaperWsTick {
+  type: 'tick' | 'trade' | 'ping'
+  ts?: number
+  equity?: number
+  cash?: number
+  unrealized_pnl?: number
+  total_trades?: number
+  pnl?: number
+  market?: string
+}
 
 /* ── helpers ─────────────────────────────────────────────── */
 
@@ -118,6 +131,15 @@ function SessionDetail({ sessionId, onStop, onKill }: {
   const [reconcileError, setReconcileError] = useState<string | null>(null)
   const reconcileInputRef = useRef<HTMLInputElement | null>(null)
 
+  // D-4.3-websocket: subscribe to per-session WS tick + trade stream.
+  // Augments (doesn't replace) the polling hooks above — equity from
+  // the WS path is fresher than the 2s poll, and the live indicator
+  // dot reflects actual socket health, not just "we got a 200 once".
+  const ws = useWebSocket<PaperWsTick>(`/ws/paper/${sessionId}`, {
+    enabled: !!sessionId,
+  })
+  const wsTick = ws.data && ws.data.type === 'tick' ? ws.data : null
+
   async function handleReconcileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
     if (!f) return
@@ -214,7 +236,11 @@ function SessionDetail({ sessionId, onStop, onKill }: {
   }
 
   const realizedPnl = status.realized_pnl ?? 0
-  const unrealizedPnl = status.unrealized_pnl ?? 0
+  // D-4.3-websocket: live unrealized PnL pulled from the WS tick when
+  // available — it's fresher than the 2s poll. Fall back to the polled
+  // status when no tick has arrived yet (or on socket failure).
+  const unrealizedPnl = wsTick?.unrealized_pnl ?? status.unrealized_pnl ?? 0
+  const liveEquity = wsTick?.equity ?? status.equity
   const rpnlPositive = realizedPnl >= 0
   const upnlPositive = unrealizedPnl >= 0
 
@@ -222,10 +248,10 @@ function SessionDetail({ sessionId, onStop, onKill }: {
   const equityCurve = eqHistory.length > 0 ? eqHistory : (status.equity_curve || [])
 
   const metrics: { label: string; value: string; accent: boolean | undefined }[] = [
-    { label: 'EQUITY', value: fmtUsd(status.equity), accent: undefined },
+    { label: 'EQUITY', value: fmtUsd(liveEquity), accent: undefined },
     { label: 'REALIZED.PNL', value: (rpnlPositive ? '+' : '') + fmtUsd(realizedPnl), accent: rpnlPositive },
     { label: 'UNREALIZED.PNL', value: (upnlPositive ? '+' : '') + fmtUsd(unrealizedPnl), accent: upnlPositive },
-    { label: 'TOTAL.TRADES', value: String(status.total_trades ?? 0), accent: undefined },
+    { label: 'TOTAL.TRADES', value: String(wsTick?.total_trades ?? status.total_trades ?? 0), accent: undefined },
     { label: 'TOTAL.FEES', value: fmtUsd(status.total_fees), accent: undefined },
     { label: 'STATUS', value: statusLabel(status.status ?? status.phase), accent: undefined },
   ]
@@ -267,6 +293,15 @@ function SessionDetail({ sessionId, onStop, onKill }: {
             <span className="text-[10px] text-ghost tracking-[0.2em]">// {status.market}</span>
             <span className={`text-[10px] tracking-[0.15em] ${statusTextColor(status.status ?? status.phase)}`}>
               {statusLabel(status.status ?? status.phase)}
+            </span>
+            {/* D-4.3-websocket: live indicator reflects actual socket health */}
+            <span
+              className={`text-[10px] tracking-[0.15em] ${
+                ws.status === 'open' ? 'text-gain' : ws.status === 'connecting' ? 'text-amber' : 'text-ghost/40'
+              }`}
+              title={`WebSocket ${ws.status}${ws.errorCount > 0 ? ` (${ws.errorCount} errors)` : ''}`}
+            >
+              {ws.status === 'open' ? 'WS LIVE' : ws.status === 'connecting' ? 'WS CONNECTING' : 'WS OFFLINE'}
             </span>
           </div>
           {/* deployment info */}
