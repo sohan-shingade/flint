@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel
 
 from ...services.strategies import build_strategy
@@ -352,3 +352,87 @@ def get_reconciliation(
         ),
         "ts_window_s": ts_window_s,
     }
+
+
+# ─── D-1.4-ui — POST variant: upload venue CSV → match against engine fills ──
+
+# Cap upload size to keep a hostile request from OOMing the server.
+_MAX_RECONCILE_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+@router.post("/{session_id}/reconciliation")
+async def post_reconciliation(
+    session_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    ts_window_s: int = 60,
+):
+    """Match engine fills against a user-uploaded venue fill CSV.
+
+    Wraps `scripts.reconcile_fills.reconcile()` over the engine fills for
+    `session_id` plus the freshly uploaded CSV. Returns the same dict
+    shape as the CLI: counts + p50/p95/p99 deltas. UI panel reads it
+    directly.
+
+    Schema for the upload (see docs/reference/custom-data-schema.md#fills):
+        ts_epoch_s,market,venue,side,size,price,fee,order_id
+
+    Errors:
+      - 400: missing columns / malformed row / file > 10 MB
+      - 500: store unavailable
+    """
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(500, "Store not available")
+
+    raw = await file.read()
+    if len(raw) > _MAX_RECONCILE_UPLOAD_BYTES:
+        raise HTTPException(
+            400,
+            f"Upload exceeds {_MAX_RECONCILE_UPLOAD_BYTES // (1024*1024)} MB cap"
+        )
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "Upload must be UTF-8 encoded CSV")
+
+    # Lazy-import the reconciler to avoid pulling argparse/etc. into the
+    # API process at startup.
+    from scripts.reconcile_fills import (
+        CSVSchemaError, Fill, parse_venue_fills_csv_text, reconcile,
+    )
+
+    try:
+        venue_fills = parse_venue_fills_csv_text(text)
+    except CSVSchemaError as e:
+        raise HTTPException(400, str(e))
+
+    raw_engine = store.get_live_fills(session_id)
+    if not raw_engine:
+        return {
+            "session_id": session_id,
+            "engine_count": 0,
+            "venue_count": len(venue_fills),
+            "match_count": 0,
+            "engine_only_count": 0,
+            "venue_only_count": len(venue_fills),
+            "note": "no engine fills recorded for this session",
+        }
+
+    engine_fills = [
+        Fill(
+            ts=r["ts"], market=r["market"],
+            venue=r.get("venue", "default"),
+            side=r["side"], size=r["size"], price=r["price"],
+            fee=r.get("fee", 0.0),
+            order_id=str(r.get("order_id", "")),
+            source="engine",
+        )
+        for r in raw_engine
+    ]
+
+    result = reconcile(engine_fills, venue_fills, ts_window_s=ts_window_s)
+    result["session_id"] = session_id
+    result["ts_window_s"] = ts_window_s
+    return result

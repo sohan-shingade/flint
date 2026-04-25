@@ -30,7 +30,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 | D-3.4-rust | 🔴 | 1w | TBD | 2026-04-24 | Rust port; needs cargo + PyO3 work |
 | D-5.1-ruff | 🟢 | 1d | claude | 2026-04-24 | Auto-fix sweep done · ruff configured to F-class only · CI hard-fails on `ruff check` |
 | D-4.7-full | 🟢 | 3d | claude | 2026-04-24 | Services layer (strategies/backtest/journal/data/paper) shipped · MCP backtest+journal in-process · 12 standalone tests |
-| D-1.4-ui | 🔴 | 3d | TBD | 2026-04-24 | Multipart CSV upload + UI panel for reconciliation |
+| D-1.4-ui | 🟢 | 3d | claude | 2026-04-24 | POST /paper/{id}/reconciliation accepts multipart CSV · PaperTrading.tsx Reconcile button + results panel · 6 endpoint tests |
 | D-4.2-backoff-full | 🔴 | 3d | TBD | 2026-04-24 | Generic `useBackoffPoll<T>` hook + migrate 5 hooks |
 
 ## Wave 2 — weeks 4–5
@@ -123,4 +123,5 @@ PR-ready: `https://github.com/sohan-shingade/flint/pull/new/restructure`.
 - **D-5.1-ruff (🟢)** — `pyproject.toml` adds `[tool.ruff.lint]` selecting F401/F811/F821/F841 only; ignored E402 (PIT_METADATA pattern), E501, E702/E701, E741. 315 errors auto-fixed by ruff; 26 remaining were real bugs (unused vars, missing TYPE_CHECKING imports). All resolved. CI lint job flipped from `|| echo` soft-fail to hard-fail.
 - **D-4.7-full (🟢)** — `flint/services/{__init__,strategies,backtest,journal,data,paper}.py` ships. `run_backtest_sync(req, store)` returns the same tearsheet dict shape as the HTTP route. MCP `run_backtest`, `list_journal_runs`, `compare_runs` now call services in-process; `get_paper_sessions` falls back to a store-only view when no daemon is running. Routes in `journal.py` and `paper.py` thinned to adapters. `tests/test_mcp_standalone.py`: 12 tests, all green. 105/105 regression tests on affected paths green.
 - **D-2.1.b Step 1 (🟡 — 1/7)** — `flint/execution/position_manager.py:PositionManager` extracted. BacktestContext composes a manager and exposes `self._positions` / `self._closed_positions` as property aliases that return the manager's underlying dict/list, so existing call sites (`_apply_fill`, `apply_funding`, `check_liquidations`, `close_all_positions`) keep mutating in-place without needing migration in this commit. 8 new unit tests; 90 regression tests on context-using paths green. Steps 2–7 (CashManager, FillRecorder, Risk surface, etc.) deferred to a follow-up.
-- **Next:** D-1.4-ui (multipart CSV upload + reconciliation panel) — last Wave 1 unblocker.
+- **D-1.4-ui (🟢)** — `POST /api/v1/paper/{id}/reconciliation` accepts multipart CSV upload, parses via `scripts.reconcile_fills.parse_venue_fills_csv_text` (extracted alongside the existing path-based loader), runs `reconcile()` against engine fills from `store.get_live_fills()`. 10 MB upload cap, schema errors → 400. PaperTrading.tsx adds a hidden file input wired to a "RECONCILE FILLS" button; results panel mirrors the parity report layout (matched/orphan counts + p50/p95/p99 bps and ts deltas). 6 endpoint tests + UI vite build green.
+- **Next (Wave 1 remainder):** D-3.4-rust (Rust port of TxCostStage — needs Rust expertise, ~1w), D-4.2-backoff-full (generic useBackoffPoll<T> hook + 5-hook migration, ~3d).

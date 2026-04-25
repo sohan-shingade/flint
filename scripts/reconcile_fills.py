@@ -89,34 +89,58 @@ def load_engine_fills(session_id: str) -> List[Fill]:
     return fills
 
 
-def load_venue_fills_csv(path: Path) -> List[Fill]:
-    """Parse venue-exported fill CSV. See custom-data-schema.md#fills."""
+class CSVSchemaError(ValueError):
+    """Raised when an uploaded venue fill CSV is missing required columns
+    or has malformed rows. Distinguishable from generic ValueError so the
+    API layer can return a 400 with a helpful message."""
+
+
+def _parse_venue_fills_reader(reader: csv.DictReader, source_label: str) -> List[Fill]:
+    """Shared parsing logic — used by both the CLI loader and the
+    HTTP `POST /paper/{id}/reconciliation` route."""
+    required = {"ts_epoch_s", "market", "venue", "side", "size", "price"}
+    if not required.issubset(reader.fieldnames or set()):
+        missing = required - set(reader.fieldnames or [])
+        raise CSVSchemaError(
+            f"{source_label}: missing required columns {sorted(missing)}"
+        )
     fills: List[Fill] = []
+    for i, row in enumerate(reader, start=2):
+        side = (row.get("side") or "").lower()
+        if side not in {"long", "short", "buy", "sell"}:
+            raise CSVSchemaError(f"{source_label}:{i} invalid side {side!r}")
+        side = "long" if side in {"long", "buy"} else "short"
+        fills.append(Fill(
+            ts=int(row["ts_epoch_s"]),
+            market=row["market"],
+            venue=row["venue"],
+            side=side,
+            size=float(row["size"]),
+            price=float(row["price"]),
+            fee=float(row.get("fee", 0.0) or 0.0),
+            order_id=row.get("order_id", ""),
+            source="venue",
+        ))
+    return fills
+
+
+def load_venue_fills_csv(path: Path) -> List[Fill]:
+    """Parse venue-exported fill CSV from disk. See custom-data-schema.md#fills."""
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
-        required = {"ts_epoch_s", "market", "venue", "side", "size", "price"}
-        if not required.issubset(reader.fieldnames or set()):
-            raise SystemExit(
-                f"{path}: missing required columns "
-                f"{required - set(reader.fieldnames or [])}"
-            )
-        for i, row in enumerate(reader, start=2):
-            side = row["side"].lower()
-            if side not in {"long", "short", "buy", "sell"}:
-                raise SystemExit(f"{path}:{i} invalid side {side!r}")
-            side = "long" if side in {"long", "buy"} else "short"
-            fills.append(Fill(
-                ts=int(row["ts_epoch_s"]),
-                market=row["market"],
-                venue=row["venue"],
-                side=side,
-                size=float(row["size"]),
-                price=float(row["price"]),
-                fee=float(row.get("fee", 0.0) or 0.0),
-                order_id=row.get("order_id", ""),
-                source="venue",
-            ))
-    return fills
+        try:
+            return _parse_venue_fills_reader(reader, str(path))
+        except CSVSchemaError as e:
+            # CLI surfaces schema errors as SystemExit (the original behavior)
+            raise SystemExit(str(e))
+
+
+def parse_venue_fills_csv_text(text: str) -> List[Fill]:
+    """Parse venue fills from an in-memory CSV string — used by the
+    `POST /api/v1/paper/{id}/reconciliation` multipart upload route."""
+    import io
+    reader = csv.DictReader(io.StringIO(text))
+    return _parse_venue_fills_reader(reader, "<upload>")
 
 
 # ---------------------------------------------------------------------------
