@@ -53,6 +53,31 @@ An abstract base class with a uniform API (`market_order`, `limit_order`, `stop_
 
 See [concepts/execution-contexts.md](execution-contexts.md) for the semantic differences between the three.
 
+#### `BacktestContext` composes seven managers
+
+The simulation context isn't a god class — it's a thin orchestrator that delegates state to seven dedicated owners in `flint/execution/`:
+
+| Manager | Owns |
+|---|---|
+| `PositionManager` | Open + closed-trade dicts |
+| `CashManager` | Cash, optional `VenueAllocator`, running counters (fees / tx cost / funding) |
+| `FillRecorder` | Recorded-fill list + diagnostic log messages |
+| `OrderQueue` | Pending limit/stop/TP queue + this-bar market queue |
+| `FundingLedger` | Per-market and per-venue funding history |
+| `BorrowLedger` | Jupiter Perps borrow rates + paid-borrow ledger |
+| `MarketDataFeed` | Cross-market candle history + orderbook snapshots + OI |
+
+Pre-trade checks flow through one facade — `flint/risk/portfolio_orchestrator.py:PortfolioMarginEngine` — that composes the venue-level `MarginEngine`, the per-venue `VenueAllocator`, and the book-level `PortfolioRiskEngine`. `BacktestContext.market_order` consults the orchestrator once per order; rejection comes back tagged with the source component (`MARGIN`/`ALLOCATOR`/`PORTFOLIO`) so the warn-line names which engine vetoed.
+
+#### Event sourcing + replay
+
+When `BacktestContext` is built with `event_log_writer + event_session_id`, every order submit, fill, funding payment, liquidation, and Jupiter borrow cost is appended to a `portfolio_events` DuckDB table (`flint/portfolio/event_log.py`). Two read primitives sit on top:
+
+- `flint/portfolio/replay.py:replay(store, session_id, target_ts, initial_capital) → BookState` folds the event stream into the book's exact state at any point in the past. Fast-forwards via `flint/portfolio/snapshots.py:SnapshotStore` when a snapshot exists at-or-before `target_ts`.
+- REST: `GET /api/v1/replay/{id}/{events,state,summary}`. MCP: `replay_summary`, `replay_state`, `list_replay_events`. UI: the `/replay` page in the browser.
+
+Replay reproduces final state byte-for-byte against the live `BacktestContext.account.cash` — pinned by `tests/test_event_log_engine_hooks.py::TestEndToEndReplayParity`.
+
 ## Data flow
 
 Per bar, in any engine:
