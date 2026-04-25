@@ -19,6 +19,7 @@ from ..models import (
     Side,
     TimeInForce,
 )
+from .borrow_ledger import BorrowLedger
 from .cash_manager import CashManager
 from .context import ExecutionContext
 from .fee_models import FeeModel, FlatFeeModel
@@ -125,10 +126,11 @@ class BacktestContext(ExecutionContext):
         # legacy code paths.
         self._fl = FundingLedger()
 
-        # Borrow rate data for Jupiter Perps
-        self._borrow_history: Dict[str, List[BorrowSnapshot]] = {}  # market -> [BorrowSnapshot]
-        self._total_borrow_paid: float = 0.0
-        self._borrow_payments: list = []
+        # D-2.1.b Step 6: Jupiter borrow rates + paid-borrow ledger
+        # owned by BorrowLedger. Property aliases below preserve the
+        # `self._borrow_history` / `self._total_borrow_paid` /
+        # `self._borrow_payments` access patterns used by `_apply_fill`.
+        self._bl = BorrowLedger()
 
         # Orderbook data for strategy access and fill models
         self._orderbook_history: Dict[str, List] = {}  # market -> [OrderbookSnapshot]
@@ -244,6 +246,27 @@ class BacktestContext(ExecutionContext):
     @property
     def _venue_funding(self) -> Dict[str, Dict[str, List[FundingRate]]]:
         return self._fl.venue_history
+
+    # --- Borrow state (delegates to BorrowLedger) ---
+    # D-2.1.b Step 6: `_apply_fill` reads `self._borrow_payments` and
+    # writes `self._total_borrow_paid += borrow_cost`. Both routes
+    # surface here so the existing call sites keep working unchanged.
+
+    @property
+    def _borrow_history(self) -> Dict[str, List[BorrowSnapshot]]:
+        return self._bl.history
+
+    @property
+    def _borrow_payments(self) -> list:
+        return self._bl.payments
+
+    @property
+    def _total_borrow_paid(self) -> float:
+        return self._bl.total_paid
+
+    @_total_borrow_paid.setter
+    def _total_borrow_paid(self, value: float) -> None:
+        self._bl.total_paid = value
 
     # --- ExecutionContext properties ---
 
@@ -465,40 +488,25 @@ class BacktestContext(ExecutionContext):
 
     def add_borrow_rate(self, bs: BorrowSnapshot) -> None:
         """Record a borrow rate snapshot for strategy access."""
-        mkt = bs.market
-        if mkt not in self._borrow_history:
-            self._borrow_history[mkt] = []
-        self._borrow_history[mkt].append(bs)
+        self._bl.record(bs)
 
     def get_borrow_rate(self, market: str = None, venue: str = None) -> Optional[float]:
         """Get the most recent hourly borrow rate for a market."""
         mkt = market or (self._current_candle.market if self._current_candle else None)
         if not mkt:
             return None
-        history = self._borrow_history.get(mkt)
-        if not history:
-            return None
-        return history[-1].rate_hourly
+        return self._bl.latest(mkt)
 
     def get_borrow_rates(self, market: str = None, venue: str = None, lookback: int = 24) -> list:
         """Get recent borrow rate history as [(ts, rate_hourly), ...]."""
         mkt = market or (self._current_candle.market if self._current_candle else None)
         if not mkt:
             return []
-        history = self._borrow_history.get(mkt, [])
-        sliced = history[-lookback:] if lookback < len(history) else history
-        return [(bs.ts, bs.rate_hourly) for bs in sliced]
+        return self._bl.recent(mkt, lookback)
 
     def get_borrow_cumulative_at(self, market: str, ts: int) -> Optional[float]:
         """Get the cumulative borrow rate at or before a timestamp. Returns None if no data."""
-        history = self._borrow_history.get(market, [])
-        result = None
-        for bs in history:
-            if bs.ts <= ts:
-                result = bs.cumulative_rate
-            else:
-                break
-        return result
+        return self._bl.cumulative_at(market, ts)
 
     def add_orderbook_snapshot(self, snapshot) -> None:
         """Record an orderbook snapshot. Called by engine."""
