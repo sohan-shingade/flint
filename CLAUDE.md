@@ -72,6 +72,7 @@ Service layer in `flint/services/`: `strategies.py` (single builder source), `ba
 
 ## Rules
 
+- **DRIFT IS DOWN — DO NOT USE.** Drift Protocol is offline following a security incident. Treat every Drift surface as unavailable: `dlob.drift.trade` (DLOB), `data.api.drift.trade` (Data API), the Drift WebSocket feed, and any `flint/connectors/drift/` paths. New code must not introduce Drift dependencies; any code that today touches Drift needs a Hyperliquid / Pyth / DuckDB-cache fallback before it can run. Hyperliquid + Pyth are the live data sources right now.
 - Always use the shared `FlintStore` from `app.state.store` -- never create a new DuckDB connection
 - Every store method must wrap `self._conn.execute()` in `with self._lock:` -- DuckDB is not thread-safe
 - Never access `store._conn` or `store._lock` from API routes -- add a method to `FlintStore` instead
