@@ -355,6 +355,117 @@ def compare_runs(run_ids: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
+# REPLAY TOOLS  (D-6.4-replay slice 5)
+# ═══════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+def replay_summary(session_id: str) -> str:
+    """Show replay-log summary for a backtest or paper session: total
+    event count, latest seq, snapshot count.
+
+    Args:
+        session_id: Session id from a backtest run or paper trading session.
+    """
+    from flint.portfolio.event_log import EventLogReader
+    from flint.portfolio.snapshots import SnapshotStore
+    try:
+        store = _get_store()
+        reader = EventLogReader(store)
+        snaps = SnapshotStore(store)
+        return json.dumps({
+            "session_id": session_id,
+            "event_count": reader.count(session_id),
+            "latest_seq": reader.latest_seq(session_id),
+            "snapshot_count": snaps.count(session_id),
+        })
+    except Exception as e:
+        return json.dumps({"error": f"replay_summary failed: {e}"})
+
+
+@mcp.tool()
+def replay_state(
+    session_id: str,
+    target_ts: int,
+    initial_capital: float = 10_000.0,
+) -> str:
+    """Replay-fold the portfolio event log up to `target_ts` and
+    return the BookState — cash, positions, realized PnL, fees,
+    funding, borrow, fill counts. Useful for time-travel debugging.
+
+    Args:
+        session_id: Session id to replay.
+        target_ts: Epoch seconds; events with `ts <= target_ts` are
+            folded into the returned state.
+        initial_capital: Seed capital for the fold (defaults to $10k).
+    """
+    from flint.portfolio.replay import replay
+    try:
+        state = replay(_get_store(), session_id,
+                       target_ts=int(target_ts),
+                       initial_capital=float(initial_capital))
+        positions = {
+            f"{venue}|{market}": {
+                "market": pos.market, "venue": pos.venue,
+                "side": pos.side, "size": pos.size,
+                "entry_price": pos.entry_price,
+            }
+            for (venue, market), pos in state.positions.items()
+        }
+        return json.dumps({
+            "session_id": session_id,
+            "target_ts": int(target_ts),
+            "cash": round(state.cash, 4),
+            "realized_pnl": round(state.realized_pnl, 4),
+            "total_fees": round(state.total_fees, 4),
+            "total_funding": round(state.total_funding, 4),
+            "total_borrow_paid": round(state.total_borrow_paid, 4),
+            "fill_count": state.fill_count,
+            "liquidation_count": state.liquidation_count,
+            "positions": positions,
+        })
+    except Exception as e:
+        return json.dumps({"error": f"replay_state failed: {e}"})
+
+
+@mcp.tool()
+def list_replay_events(
+    session_id: str,
+    since: int = -1,
+    limit: int = 50,
+) -> str:
+    """Page through portfolio events for a session in seq order.
+
+    Args:
+        session_id: Session id to read.
+        since: Return events with seq > since. -1 (default) reads from
+            the start.
+        limit: Max events to return (default 50, capped at 5000).
+    """
+    from flint.portfolio.event_log import EventLogReader
+    try:
+        reader = EventLogReader(_get_store())
+        if since >= 0:
+            events = reader.read_after_seq(session_id, after_seq=since, target_ts=2**62)
+        else:
+            events = reader.read_all(session_id)
+        capped = min(max(1, limit), 5000)
+        page = events[:capped]
+        return json.dumps({
+            "session_id": session_id,
+            "since": since if since >= 0 else None,
+            "count": len(page),
+            "has_more": len(events) > capped,
+            "events": [
+                {"seq": e.seq, "ts": e.ts, "kind": e.kind, "payload": e.payload}
+                for e in page
+            ],
+        })
+    except Exception as e:
+        return json.dumps({"error": f"list_replay_events failed: {e}"})
+
+
+# ═══════════════════════════════════════════════════════════════
 # DATA TOOLS
 # ═══════════════════════════════════════════════════════════════
 
