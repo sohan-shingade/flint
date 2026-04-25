@@ -52,6 +52,17 @@ closed, remainder scoped with honest blockers).
 
 ---
 
+## Sequenced execution plan
+
+**Full delivery plan for the 16 items below:**
+[`docs/specs/deferred-execution-plan.md`](docs/specs/deferred-execution-plan.md).
+
+5 waves, single-engineer ~22 weeks or 3-engineer parallel ~12 weeks.
+Critical path: god-class breakup → live-context merge → live-deploy API →
+Jito bundles.
+
+---
+
 ## Still deferred
 
 ### D-1.4-ui — Reconciliation UI panel + POST variant

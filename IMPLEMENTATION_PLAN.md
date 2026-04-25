@@ -83,6 +83,8 @@ Live tracker: [TRUST_ARTIFACTS.md](TRUST_ARTIFACTS.md). Updated on every trust-a
 
 Items scoped in a phase but split into sibling PRs (review size, external validation, or UI coupling) live in [DEFERRED.md](DEFERRED.md). Every deferred item has a prerequisites list and effort estimate so pickup is mechanical.
 
+**Sequenced delivery plan for the 16 still-open items:** [`docs/specs/deferred-execution-plan.md`](docs/specs/deferred-execution-plan.md). 5 waves over ~17 weeks (single engineer) or ~12 weeks (3 engineers). Critical path: god-class breakup → live-context merge → live-deploy API → Jito bundles.
+
 ---
 
 ## Overpromise-to-reality corrections (tracked under Phase 4.1)
