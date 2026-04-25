@@ -85,6 +85,8 @@ class BacktestContext(ExecutionContext):
         portfolio_risk=None,
         event_log_writer=None,
         event_session_id: Optional[str] = None,
+        snapshot_store=None,
+        snapshot_every: int = 10_000,
     ):
         self._initial_capital = initial_capital
         self._fill_model = fill_model or FillPipeline()
@@ -103,6 +105,13 @@ class BacktestContext(ExecutionContext):
         # side disables logging entirely (no overhead in legacy paths).
         self._event_log = event_log_writer
         self._event_session_id = event_session_id
+        # D-6.4-replay auto-compaction: track events emitted since the
+        # last snapshot. When the count crosses `_snapshot_every`, write
+        # a fresh BookState to SnapshotStore and reset the counter.
+        # `snapshot_store=None` disables auto-compaction entirely.
+        self._snapshot_store = snapshot_store
+        self._snapshot_every = max(1, int(snapshot_every))
+        self._events_since_snapshot = 0
 
         # D-3.5-orchestrator: single facade composing the three pre-trade
         # check engines. None when none of margin/allocator/portfolio_risk
@@ -169,15 +178,48 @@ class BacktestContext(ExecutionContext):
     def _emit(self, kind: str, payload: dict, ts: Optional[int] = None) -> None:
         """D-6.4-replay slice 4: append one event to the log when
         logging is enabled. No-op when the writer or session_id are
-        unset, so legacy backtests pay zero overhead."""
+        unset, so legacy backtests pay zero overhead.
+
+        Auto-compaction (slice 6): when a `_snapshot_store` is wired
+        and `_events_since_snapshot` crosses `_snapshot_every`, fold
+        the entire log into a fresh BookState and persist it. Replay
+        from later target_ts then fast-forwards through the snapshot
+        rather than re-folding from seq=0.
+        """
         if self._event_log is None or self._event_session_id is None:
             return
-        self._event_log.append(
+        seq = self._event_log.append(
             self._event_session_id,
             ts=ts if ts is not None else self.timestamp,
             kind=kind,
             payload=payload,
         )
+        self._events_since_snapshot += 1
+        if (
+            self._snapshot_store is not None
+            and self._events_since_snapshot >= self._snapshot_every
+        ):
+            self._compact_snapshot(seq)
+
+    def _compact_snapshot(self, seq: int) -> None:
+        """Fold the full event log into a BookState and persist it as
+        the latest snapshot. Called by `_emit` when the
+        events-since-snapshot counter crosses the threshold."""
+        from ..portfolio.replay import replay
+        try:
+            state = replay(
+                self._event_log._store,  # noqa: SLF001 — internal store
+                self._event_session_id,
+                target_ts=2**62,
+                initial_capital=self._initial_capital,
+                use_snapshot=True,  # honor any earlier snapshot for speed
+            )
+            self._snapshot_store.write(
+                self._event_session_id, seq=int(seq), ts=self.timestamp, state=state,
+            )
+            self._events_since_snapshot = 0
+        except Exception as e:
+            logger.debug("snapshot compaction skipped: %s", e)
 
     # --- Position state (delegates to PositionManager) ---
     # D-2.1.b Step 1: existing call sites use `self._positions[...]` /
