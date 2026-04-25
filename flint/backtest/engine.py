@@ -707,7 +707,7 @@ class BacktestEngine:
             per_venue_trades=per_venue_trades_count,
             per_venue_funding_income=per_venue_funding,
             jupiter_borrow_paid=ctx.total_borrow_paid,
-            borrow_payments=ctx._borrow_payments,
+            borrow_payments=ctx.borrow_payments,
             margin_stats=self._margin_engine.stats if self._margin_engine else None,
         )
 

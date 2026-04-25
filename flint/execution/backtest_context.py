@@ -306,32 +306,33 @@ class BacktestContext(ExecutionContext):
 
     @property
     def account(self) -> AccountState:
-        unrealized = sum(p.unrealized_pnl for p in self._positions.values())
-        equity = self._cash + unrealized
+        unrealized = sum(p.unrealized_pnl for p in self._pm.values())
+        cash = self._cm.cash
+        equity = cash + unrealized
 
         margin_used = 0.0
         leverage = 0.0
-        if self._margin_engine and self._positions:
-            ms = self._margin_engine.compute_margin_state(self._cash, self.positions)
+        if self._margin_engine and self._pm:
+            ms = self._margin_engine.compute_margin_state(cash, self.positions)
             margin_used = ms.total_margin_used
             leverage = ms.leverage
 
         return AccountState(
             equity=equity,
-            cash=self._cash,
+            cash=cash,
             unrealized_pnl=unrealized,
             margin_used=margin_used,
-            free_margin=self._cash - margin_used,
+            free_margin=cash - margin_used,
             leverage=leverage,
         )
 
     @property
     def positions(self) -> List[PositionInfo]:
-        return [p.to_info() for p in self._positions.values()]
+        return [p.to_info() for p in self._pm.values()]
 
     @property
     def pending_orders(self) -> List[Order]:
-        return list(self._pending_orders)
+        return self._oq.snapshot()
 
     @property
     def current_candle(self) -> Optional[Candle]:
@@ -367,11 +368,12 @@ class BacktestContext(ExecutionContext):
         if reduce_only:
             has_opposite = any(
                 p.side != side and m == market
-                for (v, m), p in self._positions.items()
+                for (v, m), p in self._pm.items()
             )
             if not has_opposite:
-                self._log_messages.append(
-                    f"[{self.timestamp}] WARNING: reduce_only rejected — no opposite position in {market}")
+                self._fr.log(
+                    f"[{self.timestamp}] WARNING: reduce_only rejected — no opposite position in {market}"
+                )
                 return oid
 
         # D-3.5-orchestrator: single pre-trade check that walks
@@ -380,103 +382,91 @@ class BacktestContext(ExecutionContext):
         # margin/book checks when the engine is doing its job).
         if not reduce_only:
             price = self._current_candle.close if self._current_candle else 0
-            cash_for_check = (
-                self._allocator.available(venue) if self._allocator
-                else self._cash
-            )
+            cash_for_check = self._cm.available(venue)
             check = self._pme.check_order(
                 checked, cash_for_check, self.positions, price,
                 equity=self.account.equity,
             )
             if not check:
                 tag = check.component.upper() or "RISK"
-                self._log_messages.append(
-                    f"[{self.timestamp}] {tag} REJECTED: {check.reason}"
-                )
+                self._fr.log(f"[{self.timestamp}] {tag} REJECTED: {check.reason}")
                 return oid
 
-        self._market_orders_queue.append(checked)
+        self._oq.add_market(checked)
         return oid
 
-    def _check_order_cap(self) -> bool:
-        """Return False if order cap reached."""
-        if len(self._pending_orders) >= 100:
-            self._log_messages.append(f"[{self.timestamp}] WARNING: 100 pending order cap reached — order dropped")
+    # D-2.1.b caller-site migration: order placement + cancellation
+    # now flow through `self._oq.add_pending` / `self._oq.cancel*`
+    # rather than mutating the underlying list directly.
+
+    def _add_pending_or_warn(self, order: Order) -> bool:
+        """Push an order onto the resting queue, logging when capped."""
+        if not self._oq.add_pending(order):
+            self._fr.log(f"[{self.timestamp}] WARNING: 100 pending order cap reached — order dropped")
             return False
         return True
 
     def limit_order(self, market: str, side: Side, size: float, price: float,
                     reduce_only: bool = False, tag: str = "",
                     venue: str = "default") -> str:
-        if not self._check_order_cap():
-            return ""
         oid = self._next_order_id()
         order = Order(
             market=market, side=side, order_type=OrderType.LIMIT,
             size=size, price=price, order_id=oid, ts=self.timestamp, venue=venue,
         )
-        self._pending_orders.append(order)
+        if not self._add_pending_or_warn(order):
+            return ""
         return oid
 
     def stop_order(self, market: str, side: Side, size: float,
                    trigger_price: float, tag: str = "",
                    venue: str = "default") -> str:
-        if not self._check_order_cap():
-            return ""
         oid = self._next_order_id()
         order = Order(
             market=market, side=side, order_type=OrderType.STOP_LOSS,
             size=size, price=trigger_price, order_id=oid, ts=self.timestamp, venue=venue,
         )
-        self._pending_orders.append(order)
+        if not self._add_pending_or_warn(order):
+            return ""
         return oid
 
     def take_profit_order(self, market: str, side: Side, size: float,
                           trigger_price: float, tag: str = "",
                           venue: str = "default") -> str:
-        if not self._check_order_cap():
-            return ""
         oid = self._next_order_id()
         order = Order(
             market=market, side=side, order_type=OrderType.TAKE_PROFIT,
             size=size, price=trigger_price, order_id=oid, ts=self.timestamp, venue=venue,
         )
-        self._pending_orders.append(order)
+        if not self._add_pending_or_warn(order):
+            return ""
         return oid
 
     def cancel(self, order_id: str) -> bool:
-        for i, o in enumerate(self._pending_orders):
-            if o.order_id == order_id:
-                self._pending_orders.pop(i)
-                return True
-        return False
+        return self._oq.cancel(order_id)
 
     def cancel_all(self, market: Optional[str] = None) -> int:
-        if market is None:
-            count = len(self._pending_orders)
-            self._pending_orders.clear()
-            return count
-        before = len(self._pending_orders)
-        self._pending_orders = [o for o in self._pending_orders if o.market != market]
-        return before - len(self._pending_orders)
+        return self._oq.cancel_all(market)
 
     def log(self, message: str) -> None:
-        self._log_messages.append(f"[{self.timestamp}] {message}")
+        self._fr.log(f"[{self.timestamp}] {message}")
 
     # --- Engine-called methods ---
 
     def set_candle(self, candle: Candle) -> None:
         """Called by engine before strategy runs."""
         self._current_candle = candle
-        # Update unrealized PnL for open positions using each position's market price
-        for (venue, market), pos in self._positions.items():
+        # Mark every open position to its own market's most recent close.
+        # PositionManager.update_pnl_for_market handles the primary
+        # market in one shot; cross-market positions still need the
+        # explicit history lookup against MarketDataFeed.
+        self._pm.update_pnl_for_market(candle.market, candle.close)
+        for (_venue, market), pos in self._pm.items():
             if market == candle.market:
-                pos.update_pnl(candle.close)
-            else:
-                # Use the latest candle from that market's history
-                hist = self._market_histories.get(market)
-                if hist:
-                    pos.update_pnl(hist[-1].close)
+                continue
+            hist = self._mdf.history_for(market)
+            if hist:
+                pos.update_pnl(hist[-1].close)
 
     def set_market_histories(self, histories: Dict[str, List[Candle]]) -> None:
         """Set multi-market candle data for cross-market access."""
@@ -630,28 +620,26 @@ class BacktestContext(ExecutionContext):
 
         Returns list of LiquidationEvents. Force-closes liquidated positions.
         """
-        if not self._margin_engine or not self._positions:
+        if not self._margin_engine or not self._pm:
             return []
 
-        # Build current prices for all markets with positions
+        # Build current prices for all markets with positions.
         prices: Dict[str, float] = {candle.market: candle.close}
-        for mkt, hist in self._market_histories.items():
+        for mkt, hist in self._mdf.market_histories.items():
             if hist:
                 prices[mkt] = hist[-1].close
 
         events = self._margin_engine.check_liquidations(
-            self._positions, prices, candle.ts
+            self._pm.positions, prices, candle.ts,
         )
 
-        # Force-close liquidated positions
         for event in events:
             key = (event.venue, event.market)
-            pos = self._positions.get(key)
+            pos = self._pm.get(key)
             if pos is None:
                 continue
 
-            # Record the closed position with liquidation loss
-            self._closed_positions.append({
+            self._pm.record_close({
                 "market": event.market,
                 "venue": event.venue,
                 "side": pos.side.value,
@@ -665,18 +653,18 @@ class BacktestContext(ExecutionContext):
                 "liquidated": True,
             })
 
-            # Apply the loss to venue cash (event.loss already includes penalty)
-            self._credit_cash(event.loss, event.venue)
-            self._total_fees += event.penalty
-            del self._positions[key]
+            # event.loss already includes the penalty.
+            self._cm.credit(event.loss, event.venue)
+            self._cm.add_fee(event.penalty)
+            self._pm.delete(key)
 
-            # Cancel any pending orders for this position
-            self._pending_orders = [
-                o for o in self._pending_orders
+            # Cancel any pending orders against this position.
+            self._oq.pending = [
+                o for o in self._oq.pending
                 if not (o.market == event.market and o.venue == event.venue)
             ]
 
-            self._log_messages.append(
+            self._fr.log(
                 f"[{event.ts}] LIQUIDATED: {event.side} {event.size:.4f} {event.market} "
                 f"on {event.venue} @ {event.liq_price:.2f} "
                 f"(entry={event.entry_price:.2f}, loss=${event.loss:.2f}, penalty=${event.penalty:.2f})"
@@ -693,10 +681,8 @@ class BacktestContext(ExecutionContext):
         """
         if market == primary_candle.market:
             return primary_candle
-        history = self._market_histories.get(market)
-        if history:
-            return history[-1]
-        return None
+        history = self._mdf.history_for(market)
+        return history[-1] if history else None
 
     def process_pending_orders(self, candle: Candle) -> List[Fill]:
         """Process stop/limit orders against current candles BEFORE strategy runs.
@@ -707,7 +693,7 @@ class BacktestContext(ExecutionContext):
         fills = []
         remaining = []
 
-        for order in self._pending_orders:
+        for order in self._oq.pending:
             order_candle = self._resolve_candle(order.market, candle)
             if order_candle is None:
                 remaining.append(order)
@@ -757,7 +743,7 @@ class BacktestContext(ExecutionContext):
             else:
                 remaining.append(order)
 
-        self._pending_orders = remaining
+        self._oq.pending = remaining
         return fills
 
     def _resolve_fill_model(self, venue: str) -> FillModel:
@@ -775,10 +761,10 @@ class BacktestContext(ExecutionContext):
         fall back to the default fill model.
         """
         fills = []
-        for order in self._market_orders_queue:
+        for order in self._oq.drain_market():
             order_candle = self._resolve_candle(order.market, candle)
             if order_candle is None:
-                self._log_messages.append(
+                self._fr.log(
                     f"[{self.timestamp}] WARNING: No candle data for {order.market} — "
                     f"order dropped. Download this market's data first."
                 )
@@ -798,33 +784,35 @@ class BacktestContext(ExecutionContext):
                 )
                 self._apply_fill(fill)
                 fills.append(fill)
-            # Drain GTC resting orders from pipeline
-            if hasattr(fm, 'drain_resting_orders'):
+            # Drain GTC resting orders from pipeline.
+            if hasattr(fm, "drain_resting_orders"):
                 for resting in fm.drain_resting_orders():
-                    if self._check_order_cap():
-                        self._pending_orders.append(resting)
-        self._market_orders_queue.clear()
+                    self._add_pending_or_warn(resting)
         return fills
 
     def apply_funding(self, funding_rate: FundingRate) -> float:
-        """Apply funding payment to all positions in this market. Returns total paid."""
+        """Apply funding payment to all positions in this market. Returns total paid.
+
+        D-2.1.b caller-site migration (post-step-7): explicit
+        `self._cm.debit(...)` and `self._cm.add_funding(...)` instead of
+        the legacy `self._debit_cash` helper + `self._total_funding +=`
+        compound assignment. Position iteration goes through
+        `self._pm.items()` so the read path is also explicit.
+        """
         market = funding_rate.market
         total_payment = 0.0
-        for (v, m), pos in self._positions.items():
+        for (venue, m), pos in self._pm.items():
             if m != market:
                 continue
-            # Use funding record's oracle_price; fall back to current candle close
+            # Use funding record's oracle_price; fall back to current candle close.
             price = funding_rate.oracle_price
             if price <= 0 and self._current_candle:
                 price = self._current_candle.close
             notional = pos.size * price
-            if pos.side == Side.LONG:
-                payment = notional * funding_rate.rate
-            else:
-                payment = -notional * funding_rate.rate
-            self._debit_cash(payment, v)
+            payment = notional * funding_rate.rate if pos.side == Side.LONG else -notional * funding_rate.rate
+            self._cm.debit(payment, venue)
             pos.funding_paid += payment
-            self._total_funding += payment
+            self._cm.add_funding(payment)
             total_payment += payment
         return total_payment
 
@@ -836,8 +824,8 @@ class BacktestContext(ExecutionContext):
         Uses per-venue fill model dispatch when venue_fill_models are configured.
         """
         fills = []
-        for (venue, market) in list(self._positions.keys()):
-            pos = self._positions[(venue, market)]
+        for (venue, market) in list(self._pm.keys()):
+            pos = self._pm.get((venue, market))
             opposite = Side.SHORT if pos.side == Side.LONG else Side.LONG
             close_candle = self._resolve_candle(market, candle) or candle
             order = Order(
@@ -864,224 +852,225 @@ class BacktestContext(ExecutionContext):
 
     # --- Internal ---
 
-    def _debit_cash(self, amount: float, venue: str = "default") -> None:
-        """Deduct cash — routes through allocator if present."""
-        if self._allocator:
-            if not self._allocator.debit(venue, amount):
-                self._log_messages.append(
-                    f"[{self.timestamp}] WARNING: Venue {venue} debit of {amount:.2f} failed — insufficient balance")
-            self._cash = self._allocator.total_cash
-        else:
-            self._cash -= amount
+    def _realize_jupiter_borrow_cost(
+        self,
+        market: str,
+        size: float,
+        fill_price: float,
+        fill_ts: int,
+        cum_entry: float,
+    ) -> float:
+        """Compute + book Jupiter borrow cost on a (partial or full)
+        close. Returns the realized cost in USD; 0 when no rate data
+        or no entry snapshot."""
+        if cum_entry <= 0:
+            return 0.0
+        cum_now = self._bl.cumulative_at(
+            market, self._current_candle.ts if self._current_candle else 0
+        )
+        if cum_now is None:
+            return 0.0
+        size_usd = abs(size * fill_price)
+        cost = (cum_now - cum_entry) * size_usd
+        self._bl.add_paid(cost)
+        self._bl.record_payment({
+            "market": market,
+            "ts": fill_ts,
+            "cost": cost,
+            "cum_entry": cum_entry,
+            "cum_exit": cum_now,
+        })
+        # Borrow cost is a direct cash deduction, not routed through
+        # the allocator (Jupiter Perps lives outside the venue allocator).
+        self._cm.cash -= cost
+        return cost
 
-    def _credit_cash(self, amount: float, venue: str = "default") -> None:
-        """Add cash — routes through allocator if present."""
-        if self._allocator:
-            self._allocator.credit(venue, amount)
-            self._allocator.track_pnl(venue, amount)
-            self._cash = self._allocator.total_cash
-        else:
-            self._cash += amount
+    def _new_position(
+        self,
+        market: str,
+        venue: str,
+        side: Side,
+        size: float,
+        entry_price: float,
+        entry_ts: int,
+    ) -> "_Position":
+        """Construct a `_Position` and snapshot the Jupiter borrow
+        cumulative at entry when applicable. Used by both opening and
+        flip paths in `_apply_fill`."""
+        new_pos = _Position(
+            market=market, side=side, size=size,
+            entry_price=entry_price, entry_ts=entry_ts, venue=venue,
+        )
+        if venue == "jupiter":
+            cum = self._bl.cumulative_at(
+                market, self._current_candle.ts if self._current_candle else 0
+            )
+            if cum is not None:
+                new_pos.borrow_cumulative_at_entry = cum
+        return new_pos
 
     def _apply_fill(self, fill: Fill) -> None:
-        """Update positions and cash based on a fill."""
-        self._fills.append(fill)
-        self._debit_cash(fill.fee, fill.venue)
-        self._total_fees += fill.fee
+        """Update positions and cash based on a fill.
+
+        D-2.1.b caller-site migration: every state mutation here goes
+        through one of the seven managers (no more `self._positions[k]`,
+        `self._cash -= x`, `self._total_fees += f` etc.).
+        """
+        self._fr.record(fill)
+        self._cm.debit(fill.fee, fill.venue)
+        self._cm.add_fee(fill.fee)
 
         if fill.tx_cost > 0:
-            self._total_tx_costs += fill.tx_cost
-            if self._allocator:
-                self._allocator.debit(fill.venue or "default", fill.tx_cost)
-            else:
-                self._cash -= fill.tx_cost
+            self._cm.total_tx_costs += fill.tx_cost
+            self._cm.debit(fill.tx_cost, fill.venue or "default")
 
         market = fill.market
         venue = fill.venue
         key = (venue, market)
-        pos = self._positions.get(key)
+        pos = self._pm.get(key)
 
         if pos is None:
-            # Opening a new position
-            new_pos = _Position(
-                market=market,
-                side=fill.side,
-                size=fill.size,
-                entry_price=fill.price,
-                entry_ts=fill.ts,
-                venue=venue,
-            )
-            # Snapshot cumulative borrow rate for Jupiter Perps positions
-            if venue == "jupiter":
-                cum = self.get_borrow_cumulative_at(
-                    market, self._current_candle.ts if self._current_candle else 0)
-                if cum is not None:
-                    new_pos.borrow_cumulative_at_entry = cum
-            self._positions[key] = new_pos
-        elif pos.side == fill.side:
-            # Adding to position (DCA)
+            # Opening a new position.
+            self._pm.set(key, self._new_position(
+                market, venue, fill.side, fill.size, fill.price, fill.ts,
+            ))
+            return
+
+        if pos.side == fill.side:
+            # DCA — average entry into the existing same-side position.
             total_cost = pos.entry_price * pos.size + fill.price * fill.size
             pos.size += fill.size
             pos.entry_price = total_cost / pos.size if pos.size > 0.0001 else fill.price
-        else:
-            # Reducing or closing position
-            if fill.size >= pos.size:
-                # Full close
-                if pos.side == Side.LONG:
-                    pnl = round((fill.price - pos.entry_price) * pos.size, 8)
-                else:
-                    pnl = round((pos.entry_price - fill.price) * pos.size, 8)
+            return
 
-                # Realize Jupiter borrow cost on close
-                borrow_cost = 0.0
-                if venue == "jupiter" and pos.borrow_cumulative_at_entry > 0:
-                    cum_now = self.get_borrow_cumulative_at(
-                        market, self._current_candle.ts if self._current_candle else 0)
-                    if cum_now is not None:
-                        size_usd = abs(pos.size * fill.price)
-                        borrow_cost = (cum_now - pos.borrow_cumulative_at_entry) * size_usd
-                        self._total_borrow_paid += borrow_cost
-                        self._borrow_payments.append({
-                            "market": market,
-                            "ts": fill.ts,
-                            "cost": borrow_cost,
-                            "cum_entry": pos.borrow_cumulative_at_entry,
-                            "cum_exit": cum_now,
-                        })
-                        self._cash -= borrow_cost
-
-                self._credit_cash(pnl, venue)
-                self._closed_positions.append({
-                    "market": market,
-                    "venue": venue,
-                    "side": pos.side.value,
-                    "size": pos.size,
-                    "entry_price": pos.entry_price,
-                    "exit_price": fill.price,
-                    "entry_ts": pos.entry_ts,
-                    "exit_ts": fill.ts,
-                    "pnl": pnl,
-                    "funding_paid": pos.funding_paid,
-                    "borrow_paid": borrow_cost,
-                })
-                remainder = fill.size - pos.size
-                del self._positions[key]
-                if remainder > 0.0001:  # ignore dust positions from float rounding
-                    # Flip: open opposite position with remainder
-                    new_pos = _Position(
-                        market=market,
-                        side=fill.side,
-                        size=remainder,
-                        entry_price=fill.price,
-                        entry_ts=fill.ts,
-                        venue=venue,
-                    )
-                    # Snapshot cumulative borrow for the new flipped position
-                    if venue == "jupiter":
-                        cum = self.get_borrow_cumulative_at(
-                            market, self._current_candle.ts if self._current_candle else 0)
-                        if cum is not None:
-                            new_pos.borrow_cumulative_at_entry = cum
-                    self._positions[key] = new_pos
+        # Opposite side — reducing or closing.
+        if fill.size >= pos.size:
+            # Full close (and possibly flip the remainder).
+            if pos.side == Side.LONG:
+                pnl = round((fill.price - pos.entry_price) * pos.size, 8)
             else:
-                # Partial close
-                if pos.side == Side.LONG:
-                    pnl = round((fill.price - pos.entry_price) * fill.size, 8)
-                else:
-                    pnl = round((pos.entry_price - fill.price) * fill.size, 8)
+                pnl = round((pos.entry_price - fill.price) * pos.size, 8)
 
-                # Proportional Jupiter borrow cost on partial close
-                borrow_cost = 0.0
-                if venue == "jupiter" and pos.borrow_cumulative_at_entry > 0:
-                    cum_now = self.get_borrow_cumulative_at(
-                        market, self._current_candle.ts if self._current_candle else 0)
-                    if cum_now is not None:
-                        size_usd = abs(fill.size * fill.price)
-                        borrow_cost = (cum_now - pos.borrow_cumulative_at_entry) * size_usd
-                        self._total_borrow_paid += borrow_cost
-                        self._borrow_payments.append({
-                            "market": market,
-                            "ts": fill.ts,
-                            "cost": borrow_cost,
-                            "cum_entry": pos.borrow_cumulative_at_entry,
-                            "cum_exit": cum_now,
-                        })
-                        self._cash -= borrow_cost
+            borrow_cost = 0.0
+            if venue == "jupiter":
+                borrow_cost = self._realize_jupiter_borrow_cost(
+                    market, pos.size, fill.price, fill.ts,
+                    pos.borrow_cumulative_at_entry,
+                )
 
-                self._credit_cash(pnl, venue)
-                self._closed_positions.append({
-                    "market": market,
-                    "venue": venue,
-                    "side": pos.side.value,
-                    "size": fill.size,
-                    "entry_price": pos.entry_price,
-                    "exit_price": fill.price,
-                    "entry_ts": pos.entry_ts,
-                    "exit_ts": fill.ts,
-                    "pnl": pnl,
-                    "funding_paid": 0.0,
-                    "borrow_paid": borrow_cost,
-                    "partial": True,
-                })
-                pos.size -= fill.size
+            self._cm.credit(pnl, venue)
+            self._pm.record_close({
+                "market": market,
+                "venue": venue,
+                "side": pos.side.value,
+                "size": pos.size,
+                "entry_price": pos.entry_price,
+                "exit_price": fill.price,
+                "entry_ts": pos.entry_ts,
+                "exit_ts": fill.ts,
+                "pnl": pnl,
+                "funding_paid": pos.funding_paid,
+                "borrow_paid": borrow_cost,
+            })
+            remainder = fill.size - pos.size
+            self._pm.delete(key)
+            if remainder > 0.0001:
+                # Flip — open the remainder on the opposite side.
+                self._pm.set(key, self._new_position(
+                    market, venue, fill.side, remainder, fill.price, fill.ts,
+                ))
+            return
+
+        # Partial close — reduce the existing position in place.
+        if pos.side == Side.LONG:
+            pnl = round((fill.price - pos.entry_price) * fill.size, 8)
+        else:
+            pnl = round((pos.entry_price - fill.price) * fill.size, 8)
+
+        borrow_cost = 0.0
+        if venue == "jupiter":
+            borrow_cost = self._realize_jupiter_borrow_cost(
+                market, fill.size, fill.price, fill.ts,
+                pos.borrow_cumulative_at_entry,
+            )
+
+        self._cm.credit(pnl, venue)
+        self._pm.record_close({
+            "market": market,
+            "venue": venue,
+            "side": pos.side.value,
+            "size": fill.size,
+            "entry_price": pos.entry_price,
+            "exit_price": fill.price,
+            "entry_ts": pos.entry_ts,
+            "exit_ts": fill.ts,
+            "pnl": pnl,
+            "funding_paid": 0.0,
+            "borrow_paid": borrow_cost,
+            "partial": True,
+        })
+        pos.size -= fill.size
 
     # --- Results ---
 
     @property
     def all_fills(self) -> List[Fill]:
-        return list(self._fills)
+        return self._fr.all_fills()
 
     @property
     def closed_trades(self) -> List[dict]:
-        return list(self._closed_positions)
+        return self._pm.closed
 
     @property
     def total_fees(self) -> float:
-        return self._total_fees
+        return self._cm.total_fees
 
     @property
     def total_funding(self) -> float:
-        return self._total_funding
+        return self._cm.total_funding
 
     @property
     def total_tx_costs(self) -> float:
-        return self._total_tx_costs
+        return self._cm.total_tx_costs
 
     @property
     def total_borrow_paid(self) -> float:
-        return self._total_borrow_paid
+        return self._bl.total_paid
+
+    @property
+    def borrow_payments(self) -> List[dict]:
+        """Per-trade Jupiter borrow attribution rows. Used by
+        `BacktestEngine.run` to thread the ledger into the result."""
+        return list(self._bl.payments)
 
     @property
     def log_messages(self) -> List[str]:
-        return list(self._log_messages)
+        return self._fr.messages()
 
     # --- Capital allocation (venue balances + transfers) ---
 
     def venue_balance(self, venue: str) -> float:
         """Get available cash on a specific venue."""
-        if self._allocator:
-            return self._allocator.available(venue)
-        return self._cash
+        return self._cm.available(venue)
 
     def venue_balances(self) -> dict:
         """Get all venue balances."""
-        if self._allocator:
-            return self._allocator.balances
-        return {"default": self._cash}
+        return self._cm.balances()
 
     def transfer(self, from_venue: str, to_venue: str, amount: float) -> bool:
         """Transfer capital between venues. Returns True if initiated."""
-        if not self._allocator:
+        alloc = self._cm.allocator
+        if alloc is None:
             return False
-        t = self._allocator.transfer(from_venue, to_venue, amount, self.timestamp)
+        t = alloc.transfer(from_venue, to_venue, amount, self.timestamp)
         if t is None:
-            self._log_messages.append(
+            self._fr.log(
                 f"[{self.timestamp}] WARNING: Transfer failed — insufficient balance "
-                f"on {from_venue} (need ${amount:.0f}, have ${self._allocator.available(from_venue):.0f})"
+                f"on {from_venue} (need ${amount:.0f}, have ${alloc.available(from_venue):.0f})"
             )
             return False
-        self._cash = self._allocator.total_cash
-        self._log_messages.append(
+        self._cm.cash = alloc.total_cash
+        self._fr.log(
             f"[{self.timestamp}] TRANSFER: ${amount:.0f} {from_venue} → {to_venue} "
             f"(arrives in {(t.arrival_ts - t.initiated_ts)//60}min, cost=${t.cost:.2f})"
         )
@@ -1089,18 +1078,17 @@ class BacktestContext(ExecutionContext):
 
     def process_transfers(self, current_ts: int) -> int:
         """Process arrived transfers. Called by engine each bar. Returns count."""
-        if not self._allocator:
+        alloc = self._cm.allocator
+        if alloc is None:
             return 0
-        arrived = self._allocator.process_arrivals(current_ts)
+        arrived = alloc.process_arrivals(current_ts)
         if arrived:
-            self._cash = self._allocator.total_cash
+            self._cm.cash = alloc.total_cash
             for t in arrived:
-                self._log_messages.append(
-                    f"[{current_ts}] ARRIVED: ${t.amount:.0f} → {t.to_venue}"
-                )
+                self._fr.log(f"[{current_ts}] ARRIVED: ${t.amount:.0f} → {t.to_venue}")
         return len(arrived)
 
     @property
     def capital_allocator(self):
         """Access the capital allocator (for metrics at end of backtest)."""
-        return self._allocator
+        return self._cm.allocator
