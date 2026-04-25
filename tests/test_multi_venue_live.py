@@ -1,9 +1,8 @@
 """Tests for MultiVenueLiveContext — mocked venue contexts."""
 import asyncio
-import pytest
 from unittest.mock import MagicMock, AsyncMock, PropertyMock
 
-from flint.models import AccountState, Candle, Fill, Order, OrderType, OrderState, PositionInfo, Side
+from flint.models import AccountState, Candle, Fill, PositionInfo, Side
 from flint.execution.live_base import LiveExecutionContext
 
 
@@ -290,5 +289,5 @@ class TestClosePosition:
         hl = _make_mock_venue("hyperliquid")
         hl.close_position = MagicMock(return_value=None)
         ctx = MultiVenueLiveContext(contexts={"drift": drift, "hyperliquid": hl})
-        result = ctx.close_position("SOL-PERP", venue="drift")
+        ctx.close_position("SOL-PERP", venue="drift")
         drift.close_position.assert_called_once_with("SOL-PERP", "drift")

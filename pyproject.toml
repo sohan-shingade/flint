@@ -69,3 +69,28 @@ exclude = ["tests*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+
+# ─── Ruff — D-5.1 hard-fail focused subset ──────────────────────────────────
+# Phase 5 (Wave 1) flips CI to hard-fail on real-bug rules. Style-only nits
+# (line length, multi-statement lines, ambiguous single-letter variables,
+# import-not-at-top because of PIT_METADATA blocks) stay allowed for now —
+# they can tighten when an editorial sweep happens (D-5.1-extra sibling).
+[tool.ruff.lint]
+select = [
+    "F401",  # unused-import
+    "F811",  # redefined-while-unused
+    "F821",  # undefined-name (genuine bugs)
+    "F841",  # unused-variable
+]
+ignore = [
+    "E402",  # module-level imports not at top of file (PIT_METADATA pattern)
+    "E501",  # line too long
+    "E702",  # multiple-statements-on-one-line-semicolon
+    "E701",  # multiple-statements-on-one-line-colon
+    "E741",  # ambiguous-variable-name
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

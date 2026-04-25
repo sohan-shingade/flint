@@ -1,7 +1,6 @@
 """Backtest CrossVenueFundingArb on historical data."""
 import math
 import time
-from datetime import datetime
 
 from flint.store import FlintStore
 from flint.backtest.engine import BacktestEngine
@@ -36,14 +35,12 @@ def load_data(store, markets, resolution_s=3600, days=90):
 def compute_metrics(result, days):
     """Compute strategy metrics from backtest result."""
     equity_curve = result.equity_curve if hasattr(result, 'equity_curve') else []
-    trades = result.trades if hasattr(result, 'trades') else []
 
     total_return = result.total_return_pct if hasattr(result, 'total_return_pct') else 0
     max_dd = result.max_drawdown_pct if hasattr(result, 'max_drawdown_pct') else 0
     sharpe = result.sharpe_ratio if hasattr(result, 'sharpe_ratio') else 0
     n_trades = result.total_trades if hasattr(result, 'total_trades') else 0
     win_rate = result.win_rate if hasattr(result, 'win_rate') else 0
-    final_equity = result.final_equity if hasattr(result, 'final_equity') else 0
 
     # Compute daily returns for our own Sharpe calculation
     if equity_curve and len(equity_curve) >= 2:
@@ -125,7 +122,7 @@ def run_backtest(
     total_return = (result.total_pnl / capital) * 100
 
     print(f"\n{'='*50}")
-    print(f"RESULTS")
+    print("RESULTS")
     print(f"{'='*50}")
     print(f"  Final equity:    ${final_eq:,.2f}")
     print(f"  Total PnL:       ${result.total_pnl:,.2f}")

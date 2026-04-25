@@ -8,11 +8,21 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 import duckdb
 
 from .models import BorrowSnapshot, Candle, FundingRate, OraclePrice
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .models import (
+        DexVolume,
+        Liquidation,
+        OpenInterest,
+        OrderbookSnapshot,
+        SyncMetadata,
+        WhaleTransfer,
+    )
 
 _logger = logging.getLogger("flint.store")
 

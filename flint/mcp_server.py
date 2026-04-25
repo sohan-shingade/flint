@@ -18,7 +18,6 @@ import json
 import os
 import time
 import logging
-from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 

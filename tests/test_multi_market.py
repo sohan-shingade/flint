@@ -1,11 +1,9 @@
 """Tests for multi-market backtesting."""
 from __future__ import annotations
-from typing import List, Optional, Dict
 
 from flint.backtest.engine import BacktestEngine
-from flint.execution.context import ExecutionContext
 from flint.execution.fill_models import SlippageFill
-from flint.models import Candle, Signal, Side
+from flint.models import Candle, Signal
 from flint.strategy.base import Strategy
 
 

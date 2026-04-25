@@ -1,7 +1,5 @@
 """Tests for PythWebSocketFeed — mocked, no real connections."""
 import asyncio
-import time
-import pytest
 
 from flint.providers.pyth_ws import PythWebSocketFeed
 

@@ -1,7 +1,6 @@
 """Tests for paper trading — PaperBroker, LiveContext, PaperTradingEngine, API."""
 from __future__ import annotations
 
-from typing import List, Optional
 
 from flint.execution.fee_models import ZeroFeeModel
 from flint.execution.live_context import LiveContext

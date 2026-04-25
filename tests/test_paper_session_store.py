@@ -1,5 +1,4 @@
 """Tests for paper trading session persistence."""
-import json
 import os
 import tempfile
 import pytest

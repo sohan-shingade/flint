@@ -2,20 +2,18 @@
 stop-loss/take-profit, limit orders, funding, multi-position, v1 compat."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import List
 
-import pytest
 
 from flint.backtest.engine import BacktestEngine
 from flint.execution.backtest_context import BacktestContext
-from flint.execution.context import ExecutionContext
 from flint.execution.fee_models import FlatFeeModel, DriftFeeModel, ZeroFeeModel
 from flint.execution.fill_models import (
     ClosePriceFill, NextBarOpenFill, SlippageFill,
 )
 from flint.models import (
-    AccountState, Candle, Fill, FundingRate, Order, OrderType,
-    PositionInfo, Side, Signal,
+    Candle, Fill, FundingRate, Order, OrderType,
+    Side, Signal,
 )
 from flint.strategy import Strategy, MACrossoverStrategy
 

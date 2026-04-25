@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from ..models import Candle, Signal, Side
@@ -216,22 +216,18 @@ class CrossVenueFundingArb(Strategy):
         hold_hours = (candle.ts - state.entry_ts) / 3600
 
         should_exit = False
-        reason = ""
 
         # 1. Spread inverted — we're now PAYING instead of collecting
         if current_spread < 0:
             should_exit = True
-            reason = "spread inverted"
 
         # 2. Spread collapsed below exit threshold
         elif current_bps < self._exit_spread_bps:
             should_exit = True
-            reason = "spread converged"
 
         # 3. Max hold time exceeded
         elif hold_hours >= self._max_hold_hours:
             should_exit = True
-            reason = "max hold"
 
         if should_exit:
             leg_notional = self._pos_size_usd

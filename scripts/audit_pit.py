@@ -33,7 +33,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 
 # Fields each provider should declare, and what values are ACCEPTABLE.

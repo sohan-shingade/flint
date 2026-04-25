@@ -1,7 +1,6 @@
 """Tests for OrcaTickFetcher — mocked RPC."""
 import asyncio
 import math
-import pytest
 from flint.providers.orca_ticks import OrcaTickFetcher
 from flint.mev.clmm import CLMMPool, TickRange
 

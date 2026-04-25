@@ -1,11 +1,9 @@
 """Tests for the GeckoTerminal provider."""
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock
 
 import httpx
-import pytest
 
 from flint.providers.gecko import GeckoProvider, _resolution_to_timeframe
 

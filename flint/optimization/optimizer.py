@@ -9,7 +9,7 @@ import optuna
 
 from ..backtest.engine import BacktestEngine
 from ..execution.fill_models import FillModel
-from ..models import Candle, FundingRate
+from ..models import Candle
 from ..strategy.base import Strategy
 
 logger = logging.getLogger("flint.optimization")

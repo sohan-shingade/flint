@@ -1,5 +1,4 @@
 """Tests for multi-venue paper trading."""
-import pytest
 from flint.execution.paper_broker import PaperBroker
 from flint.execution.live_context import LiveContext
 

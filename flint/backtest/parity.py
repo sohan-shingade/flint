@@ -6,7 +6,7 @@ Runs both engines on identical candle data and compares fills, PnL, equity curve
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 from ..models import Candle, FundingRate, Fill, Signal, Side

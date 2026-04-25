@@ -1,6 +1,5 @@
 """Tests for OrderTracker — state machine, rate limiting, timeouts."""
 import time
-import pytest
 
 from flint.models import Order, OrderType, OrderState, Side, Fill
 from flint.execution.order_tracker import OrderTracker, TrackedOrder

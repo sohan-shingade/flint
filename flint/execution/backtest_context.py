@@ -5,7 +5,6 @@ Manages positions, pending orders, fills, and equity tracking.
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Dict, List, Optional
 
 from ..models import (
@@ -15,7 +14,6 @@ from ..models import (
     Fill,
     FundingRate,
     Order,
-    OrderStatus,
     OrderType,
     PositionInfo,
     Side,

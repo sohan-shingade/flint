@@ -1,13 +1,10 @@
 """Tests for BacktestConfig — Phase 2 T2.3."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
 
 import pytest
 
 from flint.backtest.config import (
-    AllocatorConfig,
     BacktestConfig,
     FillConfig,
     MarginConfig,

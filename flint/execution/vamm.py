@@ -1,9 +1,8 @@
 """VammCurve — constant-product AMM model for Drift fill price estimation."""
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict
 
 DEFAULT_SQRT_K: Dict[str, float] = {
     "SOL-PERP": 5_000_000, "BTC-PERP": 50_000_000, "ETH-PERP": 20_000_000,

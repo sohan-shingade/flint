@@ -9,7 +9,6 @@ from typing import Callable, Dict, List, Optional
 from ..store import FlintStore
 from .tasks import (
     CollectorConfig,
-    MARKET_INDEX,
     collect_oracle_prices,
     collect_orderbook,
     collect_candles_backfill,

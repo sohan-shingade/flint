@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 
-import pytest
 
 from flint.models import Side, Signal
 from flint.strategy.funding_dislocation_arb import FundingDislocationArbStrategy

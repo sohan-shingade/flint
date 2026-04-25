@@ -11,7 +11,6 @@ Usage:
 """
 from __future__ import annotations
 
-import sys
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -210,7 +209,7 @@ def init(
             count = store.upsert_candles(candles)
             console.print(f"  [green]✓[/green] Stored {count:,} candles for {market}")
         else:
-            console.print(f"  [yellow]![/yellow] Could not fetch data. Run manually:")
+            console.print("  [yellow]![/yellow] Could not fetch data. Run manually:")
             console.print(f"    flint data download --market {market} --days 365")
 
     # 5. Run sample backtest (unless --skip-demo)
@@ -261,7 +260,7 @@ def backtest(
     fee_rate: float = typer.Option(0.0005, "--fee", help="Fee rate (e.g., 0.0005 for 5bps)"),
 ):
     """Run a backtest on a strategy file."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timezone
     from flint.store import FlintStore
     from flint.backtest.engine import BacktestEngine
     from flint.providers.drift_s3 import DriftS3Provider
@@ -417,7 +416,6 @@ def optimize(
     from datetime import datetime, timezone
     from flint.store import FlintStore
     from flint.optimization.optimizer import StrategyOptimizer
-    from flint.strategy.loader import load_user_strategy
 
     # Parse dates
     now = int(time.time())
@@ -989,7 +987,6 @@ def _build_registry(providers_cfg: dict):
 @provider_app.command("status")
 def provider_status():
     """Show status of all data providers."""
-    from flint.config import load_config
 
     providers_cfg = _load_providers_yaml()
     registry = _build_registry(providers_cfg)

@@ -10,7 +10,7 @@ from __future__ import annotations
 # Defaults are conservative — callers should verify against the
 # specific source API when using this data in parity/PIT-sensitive
 # contexts. Review date: 2026-04-24.
-PIT_METADATA = {
+PIT_METADATA = {  # noqa: E402
     "candle_ts": "bar-close",
     "funding_ts": "accrual-time",
     "orderbook_ts": "exchange-time",

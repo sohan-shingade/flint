@@ -6,7 +6,6 @@ from typing import Optional
 from fastapi import APIRouter, Request
 
 from ...journal.storage import JournalStorage
-from ...store import FlintStore
 
 router = APIRouter()
 

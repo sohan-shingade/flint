@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal, system
 from .routes.live import router as live_router
 from .routes.backtest import configure_concurrency
-from ..config import FlintConfig, load_config
+from ..config import load_config
 from ..store import FlintStore
 from ..collector.service import CollectorService
 from ..paper.engine import PaperTradingEngine

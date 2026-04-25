@@ -11,7 +11,7 @@ separately by the engine each bar and can force-flatten the book.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np

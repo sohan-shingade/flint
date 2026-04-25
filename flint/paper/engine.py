@@ -6,15 +6,12 @@ the live collector and executes orders through PaperBroker.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 import uuid
 from typing import Dict, List, Optional
 
 from ..backtest.engine import BacktestEngine
-from ..execution.fee_models import FlatFeeModel
-from ..execution.fill_models import ClosePriceFill
 from ..execution.live_context import LiveContext
 from ..execution.paper_broker import PaperBroker
 from ..models import Candle, Signal, Side

@@ -20,7 +20,6 @@ What Phase 2 sibling PR will add:
 from __future__ import annotations
 
 import inspect
-from typing import get_type_hints
 
 import pytest
 
@@ -81,7 +80,7 @@ def _import_all_contexts():
     except ImportError:
         pass
     try:
-        import flint.execution.multi_venue_live  # MultiVenueLiveContext
+        import flint.execution.multi_venue_live  # MultiVenueLiveContext  # noqa: F401
     except ImportError:
         pass
 
@@ -114,8 +113,6 @@ class TestConcreteContextsConform:
         from flint.execution.backtest_context import BacktestContext
 
         abstracts = _abstract_methods(ExecutionContext)
-        missing = [m for m in abstracts if getattr(BacktestContext, m, None)
-                   is getattr(ExecutionContext, m, None)]
         # Either the attribute is not the abstract stub, OR it's overridden.
         unimplemented = [
             m for m in abstracts

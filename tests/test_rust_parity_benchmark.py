@@ -7,15 +7,13 @@ Runs the same strategy on the same data using both engines and compares:
 Requires: pip install maturin && cd rust && maturin develop
 If flint_core is not installed, benchmarks run Python-only.
 """
-import math
 import time
 
 import pytest
 
 from flint.backtest.engine import BacktestEngine
-from flint.execution.fill_models import ClosePriceFill, SlippageFill, FillPipeline
-from flint.execution.fee_models import FlatFeeModel
-from flint.models import Candle, FundingRate
+from flint.execution.fill_models import ClosePriceFill, FillPipeline
+from flint.models import Candle
 from flint.strategy import MACrossoverStrategy, RSIStrategy
 
 
@@ -41,7 +39,7 @@ def _generate_candles(n: int, base_price: float = 100.0) -> list:
 
 def _try_import_rust():
     try:
-        import flint_core
+        import flint_core  # noqa: F401
         return True
     except ImportError:
         return False
@@ -89,7 +87,6 @@ class TestRustParity:
 
         candles = _generate_candles(2000)
         strategy_py = MACrossoverStrategy(fast_period=10, slow_period=30)
-        strategy_rs = MACrossoverStrategy(fast_period=10, slow_period=30)
 
         # Python run
         engine_py = BacktestEngine(strategy_py, 10_000.0, 0.0005, fill_model=ClosePriceFill())

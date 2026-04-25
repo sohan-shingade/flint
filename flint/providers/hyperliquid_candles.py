@@ -9,7 +9,7 @@ from __future__ import annotations
 # Hyperliquid /info/candleSnapshot returns objects with t = open time and
 # T = close time (ms). This provider uses close time (T/1000) as canonical
 # ts → bar-close convention, consistent with Drift.
-PIT_METADATA = {
+PIT_METADATA = {  # noqa: E402
     "candle_ts": "bar-close",
     "funding_ts": "exchange-time",
     "orderbook_ts": "exchange-time",

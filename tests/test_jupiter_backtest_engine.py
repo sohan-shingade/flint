@@ -4,12 +4,10 @@ Borrow cost is realized on position close, NOT per-bar.
 It uses cumulative_rate from BorrowSnapshot to compute the cost
 as: (cum_at_close - cum_at_entry) * position_notional_usd.
 """
-import pytest
 
 from flint.backtest.engine import BacktestEngine
-from flint.execution.backtest_context import BacktestContext
 from flint.execution.fill_models import ClosePriceFill
-from flint.execution.fee_models import FlatFeeModel, ZeroFeeModel
+from flint.execution.fee_models import ZeroFeeModel
 from flint.models import BorrowSnapshot, Candle, Side
 from flint.strategy import Strategy
 

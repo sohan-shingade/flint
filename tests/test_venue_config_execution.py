@@ -1,6 +1,5 @@
 """Tests for VenueConfig execution fields."""
-import pytest
-from flint.execution.venue_config import get_venue_config, VENUE_DEFAULTS
+from flint.execution.venue_config import get_venue_config
 
 
 class TestVenueConfigExecution:

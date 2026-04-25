@@ -15,7 +15,7 @@ from __future__ import annotations
 # Defaults are conservative — callers should verify against the
 # specific source API when using this data in parity/PIT-sensitive
 # contexts. Review date: 2026-04-24.
-PIT_METADATA = {
+PIT_METADATA = {  # noqa: E402
     "candle_ts": "bar-close",
     "funding_ts": "accrual-time",
     "orderbook_ts": "exchange-time",
@@ -25,7 +25,7 @@ PIT_METADATA = {
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, List, Optional
 
 import httpx
@@ -395,7 +395,6 @@ class DuneVolumeBackfill:
         Returns list of Candle objects with venue="jupiter".
         OHLC prices are from Jupiter's own trade data (may differ from oracle).
         """
-        from ..models import Candle
 
         if not self.is_available():
             logger.warning("DuneVolumeBackfill: no API key configured")
@@ -695,7 +694,7 @@ class HeliusJupiterVolume:
         self._api_key = api_key
         self._client = client or httpx.Client(timeout=30)
         self._owns_client = client is None
-        self._base = f"https://api-mainnet.helius-rpc.com/v0"
+        self._base = "https://api-mainnet.helius-rpc.com/v0"
 
     def is_available(self) -> bool:
         return bool(self._api_key)
@@ -706,7 +705,6 @@ class HeliusJupiterVolume:
         Returns list of Candle objects with venue="jupiter" and volume in USD.
         OHLC prices are set to 0 (volume-only data).
         """
-        from ..models import Candle
 
         if not self.is_available():
             logger.warning("HeliusJupiterVolume: no API key configured")

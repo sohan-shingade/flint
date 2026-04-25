@@ -1,5 +1,4 @@
 """Tests for FundingArbStrategy."""
-import pytest
 from unittest.mock import MagicMock, PropertyMock
 
 from flint.models import AccountState, Candle, PositionInfo, Side, Signal

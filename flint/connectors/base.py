@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import abc
-from typing import AsyncIterator, Dict, List
+from typing import Dict, List
 
-from ..models import Fill, MarketInfo, Order, OrderbookSnapshot, Side
+from ..models import MarketInfo, Order, OrderbookSnapshot
 
 
 class BaseConnector(abc.ABC):

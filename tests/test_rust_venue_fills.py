@@ -6,7 +6,6 @@ Python vs Rust fill outputs for identical inputs.
 """
 from __future__ import annotations
 
-from typing import Optional
 
 import pytest
 
@@ -28,7 +27,7 @@ from flint.execution.fill_jupiter import JupiterFillModel
 from flint.execution.fill_models import FillPipeline
 from flint.execution.fill_registry import create_fill_model
 from flint.execution.synthetic_depth import VENUE_PROFILES
-from flint.models import Candle, Order, OrderType, Side, Fill
+from flint.models import Candle, Order, OrderType, Side
 
 
 # ---------------------------------------------------------------------------

@@ -80,7 +80,6 @@ def test_correlation_matrix_inverse_correlated():
     """Market A goes up while B mirrors in log-return space — corr = -1."""
     # Build prices such that B's log returns are the exact negation of A's.
     # If A goes from 100 -> 110 (ratio 1.1), B goes from 100 -> 100/1.1.
-    import math as _math
 
     prices_a = [100.0]
     prices_b = [100.0]

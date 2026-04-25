@@ -1,5 +1,4 @@
 """Tests for the walk-forward API endpoint."""
-import pytest
 from fastapi.testclient import TestClient
 from flint.api.main import app
 

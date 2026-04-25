@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..models import Candle, Fill, Order, OrderbookSnapshot, OrderType, Side
+from ..models import Candle, Fill, Order, OrderbookSnapshot, Side
 from .fill_models import FillModel
 from .synthetic_depth import VENUE_PROFILES, generate_synthetic_book
 

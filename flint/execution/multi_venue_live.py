@@ -9,11 +9,11 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from ..models import (
-    AccountState, Candle, Fill, Order, OrderLeg, LegGroup, LegGroupResult,
-    OrderState, OrderType, PositionInfo, Side,
+    AccountState, Candle, Order, OrderLeg, LegGroup, LegGroupResult,
+    PositionInfo, Side,
 )
 from .context import ExecutionContext
 from .live_base import LiveExecutionContext

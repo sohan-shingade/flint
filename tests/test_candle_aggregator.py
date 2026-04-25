@@ -1,6 +1,4 @@
 """Tests for CandleAggregator — trade-to-candle conversion."""
-import pytest
-from flint.models import Candle
 from flint.providers.candle_aggregator import CandleAggregator
 
 

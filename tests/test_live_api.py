@@ -1,5 +1,4 @@
 """Tests for live API endpoints."""
-import pytest
 from flint.store import FlintStore
 
 

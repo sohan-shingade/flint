@@ -4,7 +4,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from flint.data.quality import check_candle_quality, DataQualityReport
+from flint.data.quality import check_candle_quality
 from flint.models import Candle
 from flint.store import FlintStore
 

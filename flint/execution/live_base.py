@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..models import (
     AccountState, Candle, Fill, Order, OrderState, OrderType,
-    PositionInfo, Side,
+    PositionInfo,
 )
 from .context import ExecutionContext
 from .order_tracker import OrderTracker

@@ -10,13 +10,10 @@ every test to run on both backends automatically.
 from __future__ import annotations
 
 import time
-from typing import Dict, List, Optional
+from typing import List
 
-import pytest
 
 from flint.backtest.engine import BacktestEngine
-from flint.execution.backtest_context import BacktestContext
-from flint.execution.fee_models import FlatFeeModel, ZeroFeeModel
 from flint.execution.fill_models import (
     ClosePriceFill,
     FillPipeline,
@@ -24,7 +21,6 @@ from flint.execution.fill_models import (
     SlippageFill,
 )
 from flint.models import (
-    BacktestResult,
     Candle,
     FundingRate,
     Signal,
@@ -440,7 +436,7 @@ class TestEdgeCases:
                 return Signal.HOLD
 
         engine = BacktestEngine(SpamOrders(), fill_model=ClosePriceFill())
-        result = engine.run(candles)
+        engine.run(candles)
         # Should have capped at 100 pending orders
 
 

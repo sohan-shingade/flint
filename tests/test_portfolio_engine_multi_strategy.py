@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from flint.models import Candle, Signal
+from flint.models import Candle
 from flint.portfolio.engine import PortfolioEngine
 from flint.strategy.ma_crossover import MACrossoverStrategy
 from flint.strategy.rsi import RSIStrategy

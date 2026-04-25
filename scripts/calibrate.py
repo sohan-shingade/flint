@@ -22,9 +22,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import sys
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -255,7 +253,7 @@ def _render(venue: str, market: str, n: int, power: CalibrationReport,
     lines.append("## Recommended venue entry (`flint.yaml`)")
     lines.append("")
     lines.append("```yaml")
-    lines.append(f"venues:")
+    lines.append("venues:")
     lines.append(f"  {venue}:")
     lines.append(f"    impact_coefficient: {recommended:.4f}  # from calibration")
     lines.append("```")

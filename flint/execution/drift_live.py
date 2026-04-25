@@ -12,11 +12,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from ..models import (
-    Fill, Order, OrderState, OrderType, PositionInfo, Side,
+    Order, OrderState, OrderType, PositionInfo, Side,
 )
 from ..precision import from_drift_base, from_drift_price, to_drift_base, to_drift_price
 from .live_base import LiveExecutionContext

@@ -13,7 +13,7 @@ from __future__ import annotations
 # Drift API returns candles with ts = bar START (UTC epoch seconds); this
 # provider normalizes to bar CLOSE by adding resolution_s, so downstream
 # consumers treat ts as close-time. Funding/orderbook not applicable here.
-PIT_METADATA = {
+PIT_METADATA = {  # noqa: E402
     "candle_ts": "bar-close",
     "funding_ts": "exchange-time",  # unused by this provider
     "orderbook_ts": "exchange-time",  # unused by this provider

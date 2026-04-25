@@ -1,5 +1,4 @@
 """Live trading data API endpoints."""
-from typing import Optional
 from fastapi import APIRouter, Request
 
 router = APIRouter(prefix="/api/v1/live", tags=["live"])

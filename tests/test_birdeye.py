@@ -1,10 +1,9 @@
 """Tests for the Birdeye provider."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
 import httpx
-import pytest
 
 from flint.providers.birdeye import (
     BirdeyeProvider,

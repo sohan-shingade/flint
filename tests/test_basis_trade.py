@@ -1,6 +1,5 @@
 """Tests for BasisTradeStrategy."""
-import pytest
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from flint.models import Candle, Side, Signal
 from flint.strategy.basis_trade import BasisTradeStrategy

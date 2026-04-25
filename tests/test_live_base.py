@@ -1,17 +1,13 @@
 """Tests for LiveExecutionContext base class — uses a mock venue implementation."""
 import asyncio
-import time
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from flint.models import (
-    AccountState, Candle, Fill, Order, OrderType, OrderState,
+    Candle, Fill, OrderType, OrderState,
     PositionInfo, Side,
 )
 from flint.execution.live_base import LiveExecutionContext
-from flint.execution.order_tracker import OrderTracker
 from flint.risk.guards import RiskManager
-from flint.store import FlintStore
 
 
 def run(coro):

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Phase 1 T1.3.a — PIT declaration. Custom data carries whatever convention
 # the user declares in their source; we treat ts as bar-close by convention
 # and leave validation up to the user.
-PIT_METADATA = {
+PIT_METADATA = {  # noqa: E402
     "candle_ts": "bar-close",
     "funding_ts": "accrual-time",
     "orderbook_ts": "exchange-time",

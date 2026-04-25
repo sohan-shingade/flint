@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Query, Request
 
@@ -1530,7 +1530,7 @@ def _fetch_venue_open_interest(
         return 0
 
     # For CCXT-mapped symbols, ensure proper format
-    if not "/" in ccxt_symbol:
+    if "/" not in ccxt_symbol:
         ccxt_symbol = f"{ccxt_symbol}/USDT:USDT"
 
     try:

@@ -6,14 +6,13 @@ Same fill/fee model interface as backtest for consistency.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Dict, List, Optional
 
 from ..models import (
-    Candle, Fill, Order, OrderStatus, OrderType, Side,
+    Candle, Fill, Order, OrderType,
 )
 from .fee_models import FeeModel, FlatFeeModel, DriftFeeModel
-from .fill_models import FillModel, ClosePriceFill, SlippageFill
+from .fill_models import FillModel, SlippageFill
 
 logger = logging.getLogger("flint.paper")
 

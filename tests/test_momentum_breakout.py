@@ -1,5 +1,4 @@
 """Tests for MomentumBreakoutStrategy."""
-import pytest
 from unittest.mock import MagicMock
 
 from flint.models import Candle, Signal

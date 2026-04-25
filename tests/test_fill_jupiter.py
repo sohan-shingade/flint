@@ -1,7 +1,6 @@
 """Tests for JupiterFillModel — keeper-delay-aware, pool-based fill simulation."""
 from __future__ import annotations
 
-import pytest
 
 from flint.execution.fill_jupiter import JupiterFillModel
 from flint.execution.fill_models import FillModel

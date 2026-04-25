@@ -7,9 +7,9 @@ been extracted.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from ..models import ArbRoute, Candle, LiquidationOpportunity, PoolState
+from ..models import ArbRoute, LiquidationOpportunity, PoolState
 from .arb import ArbDetector
 from .liquidation import LiquidationScanner
 

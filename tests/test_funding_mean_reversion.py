@@ -1,8 +1,7 @@
 """Tests for FundingMeanReversionStrategy."""
-import pytest
 from unittest.mock import MagicMock, PropertyMock
 
-from flint.models import AccountState, Candle, Side, Signal
+from flint.models import Candle, Side, Signal
 from flint.strategy.funding_mean_reversion import FundingMeanReversionStrategy
 
 

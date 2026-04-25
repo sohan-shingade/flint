@@ -1,6 +1,5 @@
 """Tests for extended risk guards."""
 import time
-import pytest
 from flint.models import AccountState, Order, OrderType, PositionInfo, Side
 from flint.risk.guards import MaxOrdersPerMinute, PerMarketPositionLimit
 

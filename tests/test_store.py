@@ -46,7 +46,8 @@ def test_query_no_results(store: FlintStore):
 
 def test_paper_session_tables_exist():
     """Paper trading tables should be created on store init."""
-    import tempfile, os
+    import tempfile
+    import os
     db = os.path.join(tempfile.gettempdir(), "test_paper_tables.duckdb")
     try:
         store = FlintStore(db)

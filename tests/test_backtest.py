@@ -3,7 +3,7 @@ import pytest
 
 from flint.backtest.engine import BacktestEngine, _max_drawdown, _sharpe_ratio
 from flint.execution.fill_models import ClosePriceFill, SlippageFill
-from flint.models import Candle, Signal
+from flint.models import Signal
 from flint.strategy.ma_crossover import MACrossoverStrategy
 
 

@@ -5,7 +5,6 @@ venue funding, error handling, and edge cases.
 """
 from __future__ import annotations
 
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -259,7 +258,7 @@ class TestDriftCandleProvider:
         mock_client = MagicMock()
         mock_client.get.return_value = mock_resp
         provider = DriftCandleProvider(client=mock_client)
-        result = provider.fetch_candles("SOL-PERP", 3600, 1700000000, 1700086400)
+        provider.fetch_candles("SOL-PERP", 3600, 1700000000, 1700086400)
         assert mock_client.get.call_count <= 3
 
     @patch("httpx.Client")

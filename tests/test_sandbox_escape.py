@@ -8,12 +8,11 @@ Slow tests (infinite loop, memory bomb) use shorter limits so CI stays fast.
 """
 from __future__ import annotations
 
-import os
 import sys
 
 import pytest
 
-from flint.strategy.loader import StrategyLoadError, load_user_strategy, validate_strategy_code
+from flint.strategy.loader import StrategyLoadError, load_user_strategy
 from flint.strategy.sandbox import (
     SandboxConfig,
     StrategyExecutionError,

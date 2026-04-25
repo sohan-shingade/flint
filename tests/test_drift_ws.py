@@ -1,9 +1,6 @@
 """Tests for DriftWebSocketFeed — mocked, no real connections."""
 import asyncio
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from flint.models import Candle
 from flint.providers.drift_ws import DriftWebSocketFeed
 
 

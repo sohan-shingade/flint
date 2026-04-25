@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from typing import List
 
-import pytest
 
 from flint.backtest.engine import BacktestEngine
 from flint.execution.fill_models import ClosePriceFill, SlippageFill

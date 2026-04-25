@@ -1,7 +1,6 @@
 """Tests for LatencyStage — venue-specific execution delays with seeded jitter."""
 from __future__ import annotations
 
-import pytest
 
 from flint.execution.latency import LatencyStage
 from flint.models import Order, OrderType, Side

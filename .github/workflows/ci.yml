@@ -156,11 +156,15 @@ jobs:
         run: pip install ruff
 
       - name: Ruff check
-        # Soft failure: ruff runs but does not block yet. Tightens to hard
-        # failure once the codebase is cleaned up under D-5.1-ruff-fixes.
-        run: ruff check flint/ tests/ scripts/ || echo "ruff check reported issues (non-blocking)"
+        # D-5.1 (Wave 1): hard-fail on the curated F-class ruleset (real bugs:
+        # unused imports, redefined names, undefined names, unused vars).
+        # Style-only nits (E402, E501, etc.) stay ignored via pyproject.toml
+        # until an editorial sweep happens.
+        run: ruff check flint/ tests/ scripts/
 
       - name: Ruff format check
+        # Format drift stays advisory until a one-shot reformat lands —
+        # tightening it now would touch every file in the repo.
         run: ruff format --check flint/ tests/ scripts/ || echo "ruff format drift (non-blocking)"
 
       - name: Import sanity

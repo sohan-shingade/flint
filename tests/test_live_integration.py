@@ -1,12 +1,10 @@
 """Integration test: full order lifecycle through LiveExecutionContext -> Store."""
 import asyncio
 import time
-import pytest
 
-from flint.models import Fill, Order, OrderState, OrderType, PositionInfo, Side
+from flint.models import Fill, OrderState, Side
 from flint.store import FlintStore
 from flint.execution.live_base import LiveExecutionContext
-from flint.execution.order_tracker import OrderTracker
 
 
 class MockVenueForIntegration(LiveExecutionContext):

@@ -1,6 +1,5 @@
 """Tests for tick_snapshots store methods."""
 import json
-import pytest
 from flint.store import FlintStore
 
 class TestTickSnapshots:

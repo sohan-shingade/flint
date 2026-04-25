@@ -1,5 +1,4 @@
 """Tests for paper trading risk guard."""
-import pytest
 from unittest.mock import MagicMock
 from flint.paper.risk_guard import RiskGuard, RiskConfig
 

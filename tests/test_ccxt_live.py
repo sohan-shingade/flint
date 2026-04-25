@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-from flint.models import Order, OrderType, OrderState, Side, PositionInfo
+from flint.models import Order, OrderType, OrderState, Side
 from flint.execution.ccxt_live import (
     LiveCCXTContext, _to_ccxt_symbol, _to_flint_symbol,
 )

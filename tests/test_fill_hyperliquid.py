@@ -18,7 +18,6 @@ import pytest
 from flint.execution.fill_hyperliquid import HyperliquidFillModel
 from flint.models import (
     Candle,
-    Fill,
     Order,
     OrderbookLevel,
     OrderbookSnapshot,

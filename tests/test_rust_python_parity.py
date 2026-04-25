@@ -17,7 +17,6 @@ Tolerances (subject to revision when Phase 3 tightens parity):
 """
 from __future__ import annotations
 
-import math
 from typing import List
 
 import pytest

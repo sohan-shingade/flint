@@ -44,7 +44,7 @@ from ...strategy import (
     BasisTradeStrategy,
     MevArbMonitor,
 )
-from ...strategy.loader import load_user_strategy, StrategyLoadError
+from ...strategy.loader import load_user_strategy
 
 logger = logging.getLogger("flint.backtest")
 
@@ -459,7 +459,7 @@ def run_backtest(req: BacktestRequest, request: Request):
                 # Fall back to S3 if API returned nothing
                 if not fetched:
                     _set_progress(run_id, phase="download", pct=30,
-                                  detail=f"API returned no data — trying Drift S3 archive...")
+                                  detail="API returned no data — trying Drift S3 archive...")
                     try:
                         s3_provider = DriftS3Provider()
                         def _on_s3_progress(done, total, date_str):
@@ -831,7 +831,7 @@ def list_regimes():
 @router.post("/run-regimes")
 def run_regime_backtest(request: Request, body: dict):
     """Run a separate backtest per regime. Returns an ID to poll for results."""
-    from ...regimes import get_regime, REGIMES as ALL_REGIMES
+    from ...regimes import get_regime
 
     regime_ids = body.get("regime_ids", [])
     if not regime_ids:

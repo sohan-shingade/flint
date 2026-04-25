@@ -8,9 +8,7 @@ from the same source of truth as the markdown files.
 Run: python scripts/build_docs.py
 Auto-runs during: npm run build (via package.json prebuild hook)
 """
-import html
 import re
-import textwrap
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import List
 
-import pytest
 
 from flint.providers.registry import DataProvider, ProviderRegistry
 

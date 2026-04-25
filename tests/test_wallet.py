@@ -1,6 +1,5 @@
 """Tests for WalletAdapter — mocked, no real Solana signing."""
 import pytest
-from unittest.mock import patch, MagicMock
 
 
 def _generate_valid_key() -> str:

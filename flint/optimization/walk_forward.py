@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Type
 
 from ..backtest.engine import BacktestEngine
 from ..models import Candle

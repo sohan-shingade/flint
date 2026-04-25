@@ -1,7 +1,6 @@
 """Tests for PortfolioRiskEngine — Phase 6 T6.2."""
 from __future__ import annotations
 
-import pytest
 
 from flint.risk.portfolio import (
     OrderLite,

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import gzip
-import io
 from unittest.mock import MagicMock
 
 import httpx
