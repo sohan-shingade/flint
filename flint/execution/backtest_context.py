@@ -19,6 +19,7 @@ from ..models import (
     Side,
     TimeInForce,
 )
+from .cash_manager import CashManager
 from .context import ExecutionContext
 from .fee_models import FeeModel, FlatFeeModel
 from .fill_models import FillModel, FillPipeline
@@ -78,28 +79,28 @@ class BacktestContext(ExecutionContext):
         venue_fill_models: Optional[Dict[str, FillModel]] = None,
     ):
         self._initial_capital = initial_capital
-        self._cash = initial_capital
         self._fill_model = fill_model or FillPipeline()
         self._fee_model = fee_model or FlatFeeModel()
         self._position_size_pct = position_size_pct
         self._risk_manager = risk_manager
         self._margin_engine = margin_engine  # Optional: enables margin/liquidation tracking
-        self._allocator = capital_allocator  # Optional: enables per-venue capital tracking
         self._venue_fill_models: Dict[str, FillModel] = venue_fill_models or {}  # per-venue dispatch
-        if self._allocator:
-            self._cash = self._allocator.total_cash  # sync initial
+
+        # D-2.1.b Step 2: cash + running-counters owned by CashManager.
+        # `self._cash`, `self._total_fees`, `self._total_tx_costs`,
+        # `self._total_funding`, `self._allocator` all remain as
+        # property aliases below so compound assignments (-=/+=) at
+        # existing call sites keep routing through the manager.
+        self._cm = CashManager(initial_capital, allocator=capital_allocator)
 
         # D-2.1.b Step 1: position state owned by PositionManager.
         # `self._positions` and `self._closed_positions` remain as
         # property aliases below so existing call sites keep working
-        # while we migrate Steps 2–7.
+        # while we migrate Steps 3–7.
         self._pm = PositionManager()
         self._pending_orders: List[Order] = []
         self._market_orders_queue: List[Order] = []  # orders placed this bar
         self._fills: List[Fill] = []
-        self._total_fees = 0.0
-        self._total_tx_costs = 0.0
-        self._total_funding = 0.0
         self._log_messages: List[str] = []
 
         self._current_candle: Optional[Candle] = None
@@ -129,7 +130,7 @@ class BacktestContext(ExecutionContext):
     # D-2.1.b Step 1: existing call sites use `self._positions[...]` /
     # `del self._positions[...]` / `self._closed_positions.append(...)`.
     # These properties return the underlying mutable dict/list so those
-    # mutations still work. Steps 2–7 migrate the call sites to
+    # mutations still work. Steps 3–7 migrate the call sites to
     # `self._pm.set/delete/record_close`.
 
     @property
@@ -139,6 +140,48 @@ class BacktestContext(ExecutionContext):
     @property
     def _closed_positions(self) -> List[dict]:
         return self._pm._closed  # noqa: SLF001 — internal aliasing during step 1
+
+    # --- Cash state (delegates to CashManager) ---
+    # D-2.1.b Step 2: existing call sites use `self._cash -= x`,
+    # `self._total_fees += f`, etc. These properties read/write the
+    # manager's fields directly so compound assignments continue to
+    # work without touching every call site.
+
+    @property
+    def _cash(self) -> float:
+        return self._cm.cash
+
+    @_cash.setter
+    def _cash(self, value: float) -> None:
+        self._cm.cash = value
+
+    @property
+    def _allocator(self):
+        return self._cm.allocator
+
+    @property
+    def _total_fees(self) -> float:
+        return self._cm.total_fees
+
+    @_total_fees.setter
+    def _total_fees(self, value: float) -> None:
+        self._cm.total_fees = value
+
+    @property
+    def _total_tx_costs(self) -> float:
+        return self._cm.total_tx_costs
+
+    @_total_tx_costs.setter
+    def _total_tx_costs(self, value: float) -> None:
+        self._cm.total_tx_costs = value
+
+    @property
+    def _total_funding(self) -> float:
+        return self._cm.total_funding
+
+    @_total_funding.setter
+    def _total_funding(self, value: float) -> None:
+        self._cm.total_funding = value
 
     # --- ExecutionContext properties ---
 
