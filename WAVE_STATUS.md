@@ -62,7 +62,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 
 | ID | State | Effort | Prereq | Notes |
 |---|---|---|---|---|
-| D-6.4-replay | 🟡 | 2-3w | D-2.2-internal ✓ | Slices 1+2+3+4 shipped: event log writer/reader + `BookState` fold/replay + snapshot compaction + BacktestContext writer hooks. End-to-end parity verified: replay over the live-emitted log reproduces final state byte-for-byte. 59 tests across the four replay test files. Time-travel UI (slice 5) deferred |
+| D-6.4-replay | 🟡 | 2-3w | D-2.2-internal ✓ | Slices 1+2+3+4+5(api) shipped: event log writer/reader + `BookState` fold/replay + snapshot compaction + BacktestContext writer hooks + read-side REST API (`/api/v1/replay/{id}/{events,state,summary}`). 69 tests across all replay files. Time-travel UI (frontend page binding) deferred |
 
 ---
 

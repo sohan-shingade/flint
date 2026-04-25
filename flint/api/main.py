@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal, system
+from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal, system, replay
 from .routes.live import router as live_router
 from .routes.backtest import configure_concurrency
 from ..config import load_config
@@ -149,6 +149,8 @@ app.include_router(collector.router, prefix="/api/v1/collector", tags=["collecto
 app.include_router(paper.router, prefix="/api/v1/paper", tags=["paper"])
 app.include_router(optimization.router, prefix="/api/v1/optimize", tags=["optimize"])
 app.include_router(journal.router, prefix="/api/v1/journal", tags=["journal"])
+# D-6.4-replay slice 5: read surface for the portfolio event log + replay primitive.
+app.include_router(replay.router, prefix="/api/v1/replay", tags=["replay"])
 app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
 app.include_router(live_router)
 
