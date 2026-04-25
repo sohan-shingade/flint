@@ -57,6 +57,7 @@ pub fn fill_close_price(order: &OrderData, candle: &CandleBar) -> FillResult {
         latency_ms: 0.0,
         impact_bps: 0.0,
         tx_cost: 0.0,
+        is_maker: false,
     }
 }
 
@@ -75,6 +76,7 @@ pub fn fill_next_bar_open(order: &OrderData, candle: &CandleBar) -> FillResult {
         latency_ms: 0.0,
         impact_bps: 0.0,
         tx_cost: 0.0,
+        is_maker: false,
     }
 }
 
@@ -98,6 +100,7 @@ pub fn fill_slippage(order: &OrderData, candle: &CandleBar, slippage_bps: f64) -
         latency_ms: 0.0,
         impact_bps: 0.0,
         tx_cost: 0.0,
+        is_maker: false,
     }
 }
 
@@ -127,6 +130,7 @@ pub fn fill_orderbook(
                 latency_ms: 0.0,
                 impact_bps: 0.0,
                 tx_cost: 0.0,
+                is_maker: false,
             };
         }
     }

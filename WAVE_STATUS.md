@@ -41,7 +41,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 | D-3.5-orchestrator | ⏭️ | 1w | D-2.1.b | `PortfolioMarginEngine` in BacktestContext |
 | D-2.1.c | ⏭️ | 1w | D-2.1.b + testnet secrets | Merge LiveContext + LiveExecutionContext |
 | D-3.1-rust | ⏭️ | 3d | D-3.4-rust | Rust `OrderbookFiller` |
-| D-3.3-maker-detection | ⏭️ | 2d | D-3.4-rust | Maker/taker role tracking |
+| D-3.3-maker-detection | 🟢 | 2d | D-3.4-rust ✓ | Shipped: `FillResult.is_maker` flag, resting-limit path tags maker=true, `compute_fee_with_role` replaces `compute_fee`, `RustEngine(fee_model="drift"/"hyperliquid"/"maker_taker")` exposed — 6 maker-rebate tests green |
 
 ## Wave 3 — weeks 6–9
 
@@ -127,3 +127,4 @@ PR-ready: `https://github.com/sohan-shingade/flint/pull/new/restructure`.
 - **D-4.2-backoff-full (🟢)** — `ui/src/hooks/useBackoffPoll.ts` ships generic polling primitive with exponential schedule (1s → 2s → 5s → 10s → 30s on consecutive errors), AbortController cleanup on unmount, and surfaced `errorCount`/`lastError`/`nextRetryIn`/`loading`. Migrated `useLiveMonitor`, `usePaperPortfolio`, `useSessionStatus` to use it (eliminates ad-hoc setInterval loops). `useBacktest`/`useOptimize` keep their custom poll loops because they're job-completion driven (one-shot to terminal status, not steady-state polling) — `useBackoffPoll`'s mental model is wrong for them. 5 new unit tests; 127/127 vitest green.
 - **D-3.4-rust (🟢)** — `rust/src/engine/tx_costs.rs` ports the three `TxCostModel` venue variants (Solana / Hyperliquid / Cex) from Python. PyO3 exposes them as `flint_core.TxCostModel` with `for_venue`, `solana`, `hyperliquid`, `cex` static constructors and an `estimate(market, size, price, urgency) → dict` method. Rust capability flag `supports_tx_costs` flipped to `true`. 14 cargo tests; 13 Python↔Rust parity tests pinned to 1e-9 tolerance covering default/urgent/custom-fee/edge-case (zero size, $1 B notional). Micro-benchmark: ~2.24× speedup on the tight 200k-iteration loop (FFI overhead dominates the single-call benchmark; the bigger win is avoiding the cross-boundary hop when the Rust engine loop calls it per fill).
 - **Wave 1 complete (6/6).** All first cuts shipped. Step 2–7 of D-2.1.b (CashManager / FillRecorder / Risk split) remain scoped as Wave 2+ follow-up.
+- **Wave 2 in progress.** D-3.3-maker-detection (🟢) shipped early — Rust `FillResult` now carries `is_maker` and the pending-limit fill path tags it `true`; the fee model routes through `compute_fee_with_role`. PyO3 `RustEngine` constructor accepts `fee_model="drift"/"hyperliquid"/"maker_taker"` so callers can observe the rebate end-to-end (Drift -2 bps maker rebate, HL 1 bp maker). 6 new behavioral tests; 163/163 Rust-side regression green.

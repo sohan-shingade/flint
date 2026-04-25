@@ -88,6 +88,7 @@ impl DriftFillPipeline {
             latency_ms: 0.0,
             impact_bps: 0.0,
             tx_cost: 0.0,
+            is_maker: false,
         }
     }
 }
@@ -154,6 +155,7 @@ impl HyperliquidFillPipeline {
             latency_ms: 0.0,
             impact_bps: 0.0,
             tx_cost: 0.0,
+            is_maker: false,
         }
     }
 }
@@ -212,6 +214,7 @@ impl JupiterFillPipeline {
             latency_ms: delay * 1000.0,
             impact_bps: 0.0,
             tx_cost: 0.0,
+            is_maker: false,
         }
     }
 
@@ -308,6 +311,7 @@ impl CexFillPipeline {
             latency_ms: 0.0,
             impact_bps: 0.0,
             tx_cost: 0.0,
+            is_maker: false,
         })
     }
 }
@@ -375,6 +379,7 @@ impl VenueFiller {
             latency_ms: 0.0,
             impact_bps,
             tx_cost: 0.0,
+            is_maker: false,
         }
     }
 }

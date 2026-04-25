@@ -61,17 +61,33 @@ struct RustEngine {
 #[pymethods]
 impl RustEngine {
     #[new]
-    #[pyo3(signature = (initial_capital=10000.0, fee_bps=5.0, fill_model="pipeline", slippage_bps=5.0, seed=0))]
+    #[pyo3(signature = (initial_capital=10000.0, fee_bps=5.0, fill_model="pipeline", slippage_bps=5.0, seed=0, fee_model="flat", maker_bps=None, taker_bps=None))]
     fn new(
         initial_capital: f64,
         fee_bps: f64,
         fill_model: &str,
         slippage_bps: f64,
         seed: u64,
+        fee_model: &str,
+        maker_bps: Option<f64>,
+        taker_bps: Option<f64>,
     ) -> Self {
+        // D-3.3: select the fee-model variant by name. "flat" keeps the
+        // pre-existing behavior (ignores maker/taker). "drift" and
+        // "hyperliquid" pick the venue-specific maker-rebate schedule.
+        // "maker_taker" lets callers pass explicit bps values.
+        let fee = match fee_model {
+            "drift" => FeeModel::Drift,
+            "hyperliquid" => FeeModel::Hyperliquid,
+            "maker_taker" => FeeModel::MakerTaker {
+                maker_bps: maker_bps.unwrap_or(0.0),
+                taker_bps: taker_bps.unwrap_or(fee_bps),
+            },
+            _ => FeeModel::Flat { fee_bps },
+        };
         let config = RunConfig {
             initial_capital,
-            fee_model: FeeModel::Flat { fee_bps },
+            fee_model: fee,
             fill_model_type: parse_fill_model(fill_model),
             slippage_bps,
             max_runtime_s: 300.0,
@@ -341,9 +357,10 @@ fn capabilities(py: Python<'_>) -> PyResult<PyObject> {
                                         "pipeline"])?;
     d.set_item("fill_models", fill_models)?;
 
-    // Fee models — today only flat fees are in Rust. MakerTakerFee /
-    // DriftFee / HyperliquidFee land in T3.3.
-    let fee_models = PyList::new(py, ["flat"])?;
+    // Fee models exposed to Python. D-3.3 adds maker_taker / drift /
+    // hyperliquid on top of the baseline flat model so callers can
+    // test maker rebates end-to-end through the Rust engine.
+    let fee_models = PyList::new(py, ["flat", "maker_taker", "drift", "hyperliquid"])?;
     d.set_item("fee_models", fee_models)?;
 
     // Feature flags — the Python-side can_use_rust gate mirrors these.
@@ -354,7 +371,7 @@ fn capabilities(py: Python<'_>) -> PyResult<PyObject> {
     d.set_item("supports_cross_market", false)?;    // Phase 2 follow-up
     d.set_item("supports_multi_venue_margin", false)?;  // T3.5
     d.set_item("supports_borrow_snapshots", false)?;
-    d.set_item("supports_maker_taker_fees", false)?;    // T3.3
+    d.set_item("supports_maker_taker_fees", true)?;     // D-3.3 (Wave 2)
 
     // Engine identity + version — helps UI surface which engine ran.
     d.set_item("engine", "rust")?;

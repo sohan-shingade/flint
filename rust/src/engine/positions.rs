@@ -212,6 +212,7 @@ impl PositionManager {
                 latency_ms: 0.0,
                 impact_bps: 0.0,
                 tx_cost: 0.0,
+                is_maker: false,
             };
             fill.fee = fee_model.compute_fee(&fill);
             self.apply_fill(&fill);

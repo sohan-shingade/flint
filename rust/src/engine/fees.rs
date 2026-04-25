@@ -77,6 +77,7 @@ mod tests {
             latency_ms: 0.0,
             impact_bps: 0.0,
             tx_cost: 0.0,
+            is_maker: false,
         }
     }
 

@@ -38,11 +38,19 @@ pub fn process_pending_orders(
                         latency_ms: 0.0,
                         impact_bps: 0.0,
                         tx_cost: 0.0,
+                        is_maker: false,
                     });
                 }
             }
             OrderType::Limit => {
                 if let Some(price) = fills::check_limit_fill(&order, candle) {
+                    // D-3.3: resting limit order filled by incoming
+                    // market activity = maker. The entry path for a
+                    // freshly-submitted limit order that crosses the
+                    // book on submission doesn't route through here
+                    // (those are executed synchronously via the
+                    // venue_fills path), so every fill caught here is
+                    // a passive one.
                     fill = Some(FillResult {
                         order_id: order.order_id.clone(),
                         market_id: order.market_id,
@@ -56,6 +64,7 @@ pub fn process_pending_orders(
                         latency_ms: 0.0,
                         impact_bps: 0.0,
                         tx_cost: 0.0,
+                        is_maker: true,
                     });
                 }
             }
@@ -63,7 +72,11 @@ pub fn process_pending_orders(
         }
 
         if let Some(mut f) = fill {
-            f.fee = fee_model.compute_fee(&f);
+            // D-3.3: use the maker-aware fee path so the fee model can
+            // apply rebates (e.g. Drift -2 bps, Hyperliquid 1 bp) to
+            // passive fills. Taker fills flow through the same call
+            // with is_maker=false.
+            f.fee = fee_model.compute_fee_with_role(&f, f.is_maker);
             fills_out.push(f);
         } else {
             remaining.push(order);
@@ -119,12 +132,14 @@ pub fn process_market_orders(
                         latency_ms: 0.0,
                         impact_bps,
                         tx_cost: 0.0,
+                        is_maker: false,
                     }
                 }
             }
         };
 
-        fill.fee = fee_model.compute_fee(&fill);
+        // D-3.3: market orders are always taker (is_maker=false).
+        fill.fee = fee_model.compute_fee_with_role(&fill, fill.is_maker);
         fills_out.push(fill);
     }
 
