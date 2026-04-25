@@ -29,7 +29,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 | D-2.1.b | 🔴 | 2w | TBD | 2026-04-24 | Extract `PositionManager` first (step 1 of 7); biggest unlock |
 | D-3.4-rust | 🔴 | 1w | TBD | 2026-04-24 | Rust port; needs cargo + PyO3 work |
 | D-5.1-ruff | 🟢 | 1d | claude | 2026-04-24 | Auto-fix sweep done · ruff configured to F-class only · CI hard-fails on `ruff check` |
-| D-4.7-full | 🔴 | 3d | TBD | 2026-04-24 | Extract `flint/services/*` so MCP runs without HTTP |
+| D-4.7-full | 🟢 | 3d | claude | 2026-04-24 | Services layer (strategies/backtest/journal/data/paper) shipped · MCP backtest+journal in-process · 12 standalone tests |
 | D-1.4-ui | 🔴 | 3d | TBD | 2026-04-24 | Multipart CSV upload + UI panel for reconciliation |
 | D-4.2-backoff-full | 🔴 | 3d | TBD | 2026-04-24 | Generic `useBackoffPoll<T>` hook + migrate 5 hooks |
 
@@ -121,4 +121,5 @@ PR-ready: `https://github.com/sohan-shingade/flint/pull/new/restructure`.
 ## Active work this session (Wave 1 begun)
 
 - **D-5.1-ruff (🟢)** — `pyproject.toml` adds `[tool.ruff.lint]` selecting F401/F811/F821/F841 only; ignored E402 (PIT_METADATA pattern), E501, E702/E701, E741. 315 errors auto-fixed by ruff; 26 remaining were real bugs (unused vars, missing TYPE_CHECKING imports). All resolved. CI lint job flipped from `|| echo` soft-fail to hard-fail.
-- **Next:** D-4.7-full (services layer extraction), then D-2.1.b step 1 (PositionManager).
+- **D-4.7-full (🟢)** — `flint/services/{__init__,strategies,backtest,journal,data,paper}.py` ships. `run_backtest_sync(req, store)` returns the same tearsheet dict shape as the HTTP route. MCP `run_backtest`, `list_journal_runs`, `compare_runs` now call services in-process; `get_paper_sessions` falls back to a store-only view when no daemon is running. Routes in `journal.py` and `paper.py` thinned to adapters. `tests/test_mcp_standalone.py`: 12 tests, all green. 105/105 regression tests on affected paths green.
+- **Next:** D-2.1.b step 1 (extract `PositionManager` from BacktestContext god class).

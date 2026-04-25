@@ -133,58 +133,62 @@ def run_backtest(
         code: Custom strategy Python code (overrides strategy name if provided)
     """
     from datetime import datetime, timezone
+    from flint.services.backtest import BacktestRunRequest, run_backtest_sync
 
     store = _get_store()
 
     start_ts = int(datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
     end_ts = int(datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
-    candles = store.query_candles(market, resolution_s, start_ts, end_ts)
-
-    if not candles:
+    # Auto-fetch data if missing — service raises ValueError otherwise.
+    if not store.query_candles(market, resolution_s, start_ts, end_ts):
         try:
             from flint.providers.drift_candles import DriftCandleProvider
             provider = DriftCandleProvider()
-            candles = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
+            fetched = provider.fetch_candles(market, resolution_s, start_ts, end_ts)
             provider.close()
-            if candles:
-                store.upsert_candles(candles)
+            if fetched:
+                store.upsert_candles(fetched)
         except Exception as e:
             return json.dumps({"error": f"Failed to download data for {market}: {e}"})
 
-    if not candles:
-        return json.dumps({"error": f"No data available for {market} from {start_date} to {end_date}"})
-
     params = {"fast_period": fast_period, "slow_period": slow_period}
+    use_code = bool(code and code.strip())
 
-    if code and code.strip():
-        from flint.strategy.loader import load_user_strategy
-        strat = load_user_strategy(code, params)
-    else:
-        from flint.api.routes.backtest import _build_strategy
-        strat = _build_strategy(strategy, params)
-        if strat is None:
-            return json.dumps({"error": f"Unknown strategy: {strategy}. Use list_strategies() to see all 20."})
+    try:
+        result_dict = run_backtest_sync(
+            BacktestRunRequest(
+                market=market,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                resolution_s=resolution_s,
+                strategy=strategy,
+                code=code if use_code else None,
+                params=params,
+                initial_capital=initial_capital,
+                fee_rate=fee_rate,
+            ),
+            store,
+        )
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
 
-    from flint.backtest.engine import BacktestEngine
-    engine = BacktestEngine(strat, initial_capital, fee_rate)
-    result = engine.run(candles)
-
+    metrics = result_dict.get("metrics", {})
     return json.dumps({
         "market": market,
-        "strategy": strategy if not (code and code.strip()) else "custom",
+        "strategy": "custom" if use_code else strategy,
         "period": f"{start_date} to {end_date}",
-        "candles": len(candles),
-        "total_pnl": round(result.total_pnl, 2),
-        "total_return_pct": round(result.total_pnl / initial_capital * 100, 2),
-        "sharpe_ratio": round(result.sharpe_ratio, 3),
-        "max_drawdown_pct": round(result.max_drawdown * 100, 2),
-        "total_trades": result.total_trades,
-        "winning_trades": result.winning_trades,
-        "losing_trades": result.losing_trades,
-        "win_rate_pct": round(result.win_rate * 100, 1),
-        "total_fees": round(result.total_fees, 2),
-        "params": params if not (code and code.strip()) else {},
+        "total_pnl": round(metrics.get("total_pnl", 0), 2),
+        "total_return_pct": round(metrics.get("total_return_pct", 0), 2),
+        "sharpe_ratio": round(metrics.get("sharpe_ratio", 0), 3),
+        "max_drawdown_pct": round(metrics.get("max_drawdown", 0) * 100, 2),
+        "total_trades": metrics.get("total_trades", 0),
+        "winning_trades": result_dict.get("winning_trades", 0),
+        "losing_trades": result_dict.get("losing_trades", 0),
+        "win_rate_pct": round(metrics.get("win_rate", 0) * 100, 1),
+        "total_fees": round(result_dict.get("total_fees", 0), 2),
+        "engine_used": result_dict.get("engine_used"),
+        "params": {} if use_code else params,
     })
 
 
@@ -260,24 +264,30 @@ def stop_paper_trading(session_id: str) -> str:
 def get_paper_sessions() -> str:
     """List all paper trading sessions with their current status, equity, and trade count."""
     import requests
+    sessions: list = []
     try:
         r = requests.get(f"{_api_base()}/api/v1/paper/sessions", timeout=15)
-        data = r.json()
-        sessions = data.get("sessions", [])
-        summary = []
-        for s in sessions:
-            summary.append({
-                "session_id": s["session_id"],
-                "strategy": s.get("strategy", "?"),
-                "market": s.get("market", "?"),
-                "status": s.get("status", "?"),
-                "equity": round(s.get("equity", 0), 2),
-                "pnl": round(s.get("realized_pnl", 0) + s.get("unrealized_pnl", 0), 2),
-                "trades": s.get("total_trades", 0),
-            })
-        return json.dumps({"sessions": summary, "count": len(summary)})
-    except Exception as e:
-        return json.dumps({"error": f"Failed to list sessions: {e}. Is the Flint server running?"})
+        sessions = r.json().get("sessions", [])
+    except Exception:
+        # No live server — fall back to persisted store view (no in-memory PnL)
+        from flint.services import paper as paper_service
+        try:
+            sessions = paper_service.list_sessions_from_store(_get_store())
+        except Exception as e:
+            return json.dumps({"error": f"Failed to list sessions: {e}"})
+
+    summary = []
+    for s in sessions:
+        summary.append({
+            "session_id": s["session_id"],
+            "strategy": s.get("strategy", s.get("strategy_name", "?")),
+            "market": s.get("market", "?"),
+            "status": s.get("status", "?"),
+            "equity": round(s.get("equity", 0), 2),
+            "pnl": round(s.get("realized_pnl", 0) + s.get("unrealized_pnl", 0), 2),
+            "trades": s.get("total_trades", 0),
+        })
+    return json.dumps({"sessions": summary, "count": len(summary)})
 
 
 @mcp.tool()
@@ -307,11 +317,9 @@ def list_journal_runs(limit: int = 20) -> str:
     Args:
         limit: Maximum number of runs to return (default 20, most recent first)
     """
-    import requests
+    from flint.services import journal as journal_service
     try:
-        r = requests.get(f"{_api_base()}/api/v1/journal/runs?limit={limit}", timeout=15)
-        data = r.json()
-        runs = data if isinstance(data, list) else data.get("runs", [])
+        runs = journal_service.list_runs(_get_store(), limit)
         summary = []
         for run in runs[:limit]:
             summary.append({
@@ -327,7 +335,7 @@ def list_journal_runs(limit: int = 20) -> str:
             })
         return json.dumps({"runs": summary, "count": len(summary)})
     except Exception as e:
-        return json.dumps({"error": f"Failed to list journal: {e}. Is the Flint server running?"})
+        return json.dumps({"error": f"Failed to list journal: {e}"})
 
 
 @mcp.tool()
@@ -337,10 +345,11 @@ def compare_runs(run_ids: str) -> str:
     Args:
         run_ids: Comma-separated run IDs from list_journal_runs (e.g. "abc123,def456")
     """
-    import requests
+    from flint.services import journal as journal_service
     try:
-        r = requests.get(f"{_api_base()}/api/v1/journal/compare?ids={run_ids}", timeout=15)
-        return r.text
+        ids = [i.strip() for i in run_ids.split(",") if i.strip()]
+        comparisons = journal_service.compare_runs(_get_store(), ids)
+        return json.dumps({"comparisons": comparisons})
     except Exception as e:
         return json.dumps({"error": f"Failed to compare runs: {e}"})
 
