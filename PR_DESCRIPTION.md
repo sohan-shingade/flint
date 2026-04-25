@@ -1,8 +1,12 @@
 # Restructure: Trust → Structure → Depth → Polish → CI → Portfolio
 
-Closes the entire 6-phase restructure plan plus 7 of 11 deferred items
-plus 5 of 5 D-6.4-replay slices. 36 commits, +6500 / -2200 LOC,
-2055 → 2055+ tests, ruff hard-fail clean, vite build clean.
+Closes the entire 6-phase restructure plan, the bulk of the deferred
+backlog, and all 5 D-6.4-replay slices end-to-end. 41 commits this
+session, +8000 / -2400 LOC, 1861 → 2070 tests, ruff hard-fail clean,
+vite build clean, 30/30 cargo tests, 91/91 across the full replay
+surface (event log + replay primitive + snapshots + engine writer
+hooks + REST + MCP + auto-compaction + E2E parity + Rust ledger
+parity).
 
 Bumps version 1.3.1 → 1.4.0.
 
@@ -104,20 +108,38 @@ foundation slice).
   on every order submit/cancel, fill, funding, liquidation, borrow
 - REST: `GET /api/v1/replay/{id}/{events,state,summary}`
 - MCP: `replay_summary`, `replay_state`, `list_replay_events`
-- UI: new `/replay` page with session loader, ts scrubber, state cards,
-  positions table
+- UI: `/replay` page with session loader, real timeline slider
+  (range bounded to first/last event ts), step controls
+  (← PREV / NEXT → / ⏮ START / END ⏭), state cards, positions
+  table, color-coded event-tail panel (50 most recent folded events)
+- Auto-compaction: BacktestContext's `snapshot_every` ctor kwarg
+  (default 10_000) drives `_emit` to fold + persist a fresh
+  BookState every N events. Default disabled (no overhead unless
+  caller wires a SnapshotStore).
+- Rust ledger ports: `flint_core.FundingLedger` + `flint_core.BorrowLedger`
+  with PyO3 bindings (`add`/`latest`/`recent`/`by_venue`,
+  `record`/`record_payment`/`add_paid`/`cumulative_at`). 7 cargo +
+  7 Python↔Rust parity tests pinned to 1e-9.
 
-**Load-bearing parity test**: replay over the live-emitted log
-reproduces `BacktestContext.account.cash` byte-for-byte.
+**Load-bearing parity tests**:
+- `tests/test_event_log_engine_hooks.py::TestEndToEndReplayParity` —
+  replay over the live-emitted log reproduces `BacktestContext.account.cash`
+  byte-for-byte.
+- `tests/test_replay_e2e_backtest.py` — same parity over a real
+  `MACrossoverStrategy` run with auto-compaction enabled.
+- `tests/test_auto_compaction.py::TestSnapshotPreservesReplayCorrectness` —
+  snapshot fast-forward replay never produces a divergent state.
 
 ## Test sweep
 
 ```
-2055 passed · 7 skipped · 0 failed
+2070 passed · 7 skipped · 0 failed
 ```
 
 (Skipped suites are missing optional deps — `ccxt`, `eth_account`,
 `solders` — none are code regressions.)
+
+UI: `133 vitest · vite build clean`. Rust: `30 cargo tests`.
 
 ## Files reorganized
 
@@ -134,8 +156,9 @@ New UI pages + hooks:
 - `ui/src/hooks/{useWebSocket,useReplay}.ts`
 
 New Rust modules (PyO3-exposed):
-- `rust/src/engine/{tx_costs,orderbook_fill}.rs`
-- `flint_core.TxCostModel` + `flint_core.OrderbookFiller` classes
+- `rust/src/engine/{tx_costs,orderbook_fill,funding_ledger,borrow_ledger}.rs`
+- PyO3 classes: `flint_core.TxCostModel`, `flint_core.OrderbookFiller`,
+  `flint_core.FundingLedger`, `flint_core.BorrowLedger`
 - `supports_tx_costs`, `supports_orderbook_walk`,
   `supports_maker_taker_fees` capability flags flipped to `true`
 
