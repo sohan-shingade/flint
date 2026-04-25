@@ -48,7 +48,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 | ID | State | Effort | Prereq | Notes |
 |---|---|---|---|---|
 | D-6.5-api | ⏭️ | 3w | D-2.1.c + secrets | `/api/v1/live/start` two-step confirmation |
-| D-4.3-websocket | 🟡 | 1w | D-4.2-backoff-full ✓ | Foundation shipped: per-session `/ws/paper/{id}` + `/ws/live/{id}` endpoints; `ConnectionManager` with monotonic per-channel seq + 500-deep ring buffer for replay-on-reconnect (`?since=<seq>` query param) + `ping(channel)` heartbeat; `useWebSocket<T>` hook with 1→2→5→10→30s reconnect backoff + 30s heartbeat-stale detection. 10 backend tests; 127/127 vitest still green; vite build clean. Hook migration of `usePaperPortfolio`/`useSessionStatus`/`useLiveMonitor` + engine-side broadcast calls deferred to follow-on slices |
+| D-4.3-websocket | 🟡 | 1w | D-4.2-backoff-full ✓ | Foundation + paper engine broadcast shipped. Endpoints `/ws/paper/{id}` + `/ws/live/{id}`; `ConnectionManager` with monotonic seq + 500-deep replay buffer + heartbeat; `useWebSocket<T>` hook with backoff + 30s stale detection. PaperTradingEngine has `ws_manager` attr; broadcasts per-bar tick payload `{type: tick, ts, equity, cash, unrealized_pnl, total_trades}` to `paper:{id}`; lifespan wires the manager. 13 new tests (10 WS + 3 paper-engine integration); 47/47 paper regression green. Hook migration + live engine broadcasts + UI panel binding deferred |
 | D-6.6-proof | ⏭️ | 1w | D-1.4-ui + D-6.5-api | Funding dislocation arb proof notebook |
 
 ## Wave 4 — weeks 10–14

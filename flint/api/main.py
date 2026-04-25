@@ -63,6 +63,9 @@ async def lifespan(app: FastAPI):
         paper_engine.set_event_loop(asyncio.get_running_loop())
         paper_engine.resume_sessions()
         app.state.paper_engine = paper_engine
+        # ws_manager is constructed below; wire it onto the engine
+        # after both exist so per-bar broadcasts can reach clients.
+        # D-4.3-websocket slice 2.
 
         # Mark stale live sessions as interrupted (they can't auto-resume
         # because live trading requires venue credentials and connections)
@@ -85,6 +88,10 @@ async def lifespan(app: FastAPI):
 
         ws_manager = ConnectionManager()
         app.state.ws_manager = ws_manager
+        # D-4.3-websocket slice 2: thread the manager into the paper
+        # engine so per-bar equity ticks reach `paper:{session_id}`
+        # subscribers.
+        paper_engine.ws_manager = ws_manager
 
         logger.info("Flint API started (collector=%s)", config.collector_enabled)
     except Exception as exc:

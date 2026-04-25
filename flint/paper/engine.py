@@ -118,6 +118,10 @@ class PaperTradingEngine:
         self.sessions: Dict[str, PaperSession] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None  # set by lifespan
+        # D-4.3-websocket slice 2: optional ConnectionManager — when
+        # set, per-bar equity ticks broadcast to `paper:{session_id}`.
+        # None when the API isn't running (e.g. unit tests).
+        self.ws_manager = None
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store reference to the main event loop for scheduling tasks from sync threads."""
@@ -565,6 +569,21 @@ class PaperTradingEngine:
                     }
                     session.equity_history.append(eq_snap)
                     equity_buffer.append(eq_snap)
+
+                    # D-4.3-websocket slice 2: broadcast tick to
+                    # `paper:{session_id}` subscribers. The manager
+                    # noop's when no clients are connected, so this is
+                    # cheap; failures are swallowed (log spam from a
+                    # dead socket should never tank the engine).
+                    if self.ws_manager is not None:
+                        try:
+                            await self.ws_manager.broadcast(
+                                f"paper:{session.session_id}",
+                                {"type": "tick", **eq_snap,
+                                 "total_trades": len(session.broker.closed_trades)},
+                            )
+                        except Exception as e:
+                            logger.debug("WS broadcast skipped: %s", e)
 
                     # Persist positions for crash recovery
                     if ss:
