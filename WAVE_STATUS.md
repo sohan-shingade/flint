@@ -62,7 +62,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 
 | ID | State | Effort | Prereq | Notes |
 |---|---|---|---|---|
-| D-6.4-replay | 🟡 | 2-3w | D-2.2-internal ✓ | Slices 1-5 shipped (backend + MCP). Event log writer/reader + `BookState` fold/replay + snapshot compaction + BacktestContext writer hooks + REST API (`/api/v1/replay/{id}/{events,state,summary}`) + MCP tools (`replay_summary`, `replay_state`, `list_replay_events`). 76 tests across all replay files. Time-travel **UI page** deferred |
+| D-6.4-replay | 🟢 | 2-3w | D-2.2-internal ✓ | All 5 slices shipped end-to-end: event log writer/reader + `BookState` fold/replay + snapshot compaction + BacktestContext writer hooks + REST API + MCP tools + UI page (`Replay.tsx` with session loader, ts scrubber, state cards, positions table). 76 backend + 133 vitest tests. Reachable in production via `/replay` |
 
 ---
 

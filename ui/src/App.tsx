@@ -12,6 +12,7 @@ import Setup from './pages/Setup'
 import LiveMonitor from './pages/LiveMonitor'
 import FillAnalysis from './pages/FillAnalysis'
 import FundingHeatmap from './pages/FundingHeatmap'
+import Replay from './pages/Replay'
 
 const navItems = [
   { to: '/', label: 'HOME', key: '1' },
@@ -23,6 +24,7 @@ const navItems = [
   { to: '/live', label: 'LIVE', key: '7' },
   { to: '/fills', label: 'FILLS', key: '8' },
   { to: '/funding', label: 'FUNDING', key: '9' },
+  { to: '/replay', label: 'REPLAY', key: '0' },
 ]
 
 export default function App() {
@@ -133,6 +135,7 @@ export default function App() {
           <Route path="/live" element={<LiveMonitor />} />
           <Route path="/fills" element={<FillAnalysis />} />
           <Route path="/funding" element={<FundingHeatmap />} />
+          <Route path="/replay" element={<Replay />} />
           <Route path="/setup" element={<Setup />} />
         </Routes>
       </main>
