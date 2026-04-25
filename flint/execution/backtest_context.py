@@ -83,6 +83,8 @@ class BacktestContext(ExecutionContext):
         capital_allocator=None,
         venue_fill_models: Optional[Dict[str, FillModel]] = None,
         portfolio_risk=None,
+        event_log_writer=None,
+        event_session_id: Optional[str] = None,
     ):
         self._initial_capital = initial_capital
         self._fill_model = fill_model or FillPipeline()
@@ -92,6 +94,15 @@ class BacktestContext(ExecutionContext):
         self._margin_engine = margin_engine  # Optional: enables margin/liquidation tracking
         self._portfolio_risk = portfolio_risk  # Optional: book-level pre-trade checks
         self._venue_fill_models: Dict[str, FillModel] = venue_fill_models or {}  # per-venue dispatch
+
+        # D-6.4-replay slice 4: optional event log writer. When both
+        # `event_log_writer` and `event_session_id` are supplied, every
+        # state-mutating event (order submit/cancel, fill, funding,
+        # liquidation, borrow) is appended to the log so replay can
+        # reproduce the final state at any target_ts. None on either
+        # side disables logging entirely (no overhead in legacy paths).
+        self._event_log = event_log_writer
+        self._event_session_id = event_session_id
 
         # D-3.5-orchestrator: single facade composing the three pre-trade
         # check engines. None when none of margin/allocator/portfolio_risk
@@ -154,6 +165,19 @@ class BacktestContext(ExecutionContext):
     def _next_order_id(self) -> str:
         self._order_counter += 1
         return f"bt-{self._order_counter}"
+
+    def _emit(self, kind: str, payload: dict, ts: Optional[int] = None) -> None:
+        """D-6.4-replay slice 4: append one event to the log when
+        logging is enabled. No-op when the writer or session_id are
+        unset, so legacy backtests pay zero overhead."""
+        if self._event_log is None or self._event_session_id is None:
+            return
+        self._event_log.append(
+            self._event_session_id,
+            ts=ts if ts is not None else self.timestamp,
+            kind=kind,
+            payload=payload,
+        )
 
     # --- Position state (delegates to PositionManager) ---
     # D-2.1.b Step 1: existing call sites use `self._positions[...]` /
@@ -393,6 +417,11 @@ class BacktestContext(ExecutionContext):
                 return oid
 
         self._oq.add_market(checked)
+        self._emit("order.submit", {
+            "order_id": oid, "market": market, "venue": venue,
+            "side": side.value, "size": size, "type": "market",
+            "reduce_only": reduce_only,
+        })
         return oid
 
     # D-2.1.b caller-site migration: order placement + cancellation
@@ -416,6 +445,10 @@ class BacktestContext(ExecutionContext):
         )
         if not self._add_pending_or_warn(order):
             return ""
+        self._emit("order.submit", {
+            "order_id": oid, "market": market, "venue": venue,
+            "side": side.value, "size": size, "price": price, "type": "limit",
+        })
         return oid
 
     def stop_order(self, market: str, side: Side, size: float,
@@ -428,6 +461,11 @@ class BacktestContext(ExecutionContext):
         )
         if not self._add_pending_or_warn(order):
             return ""
+        self._emit("order.submit", {
+            "order_id": oid, "market": market, "venue": venue,
+            "side": side.value, "size": size, "trigger_price": trigger_price,
+            "type": "stop_loss",
+        })
         return oid
 
     def take_profit_order(self, market: str, side: Side, size: float,
@@ -440,13 +478,24 @@ class BacktestContext(ExecutionContext):
         )
         if not self._add_pending_or_warn(order):
             return ""
+        self._emit("order.submit", {
+            "order_id": oid, "market": market, "venue": venue,
+            "side": side.value, "size": size, "trigger_price": trigger_price,
+            "type": "take_profit",
+        })
         return oid
 
     def cancel(self, order_id: str) -> bool:
-        return self._oq.cancel(order_id)
+        ok = self._oq.cancel(order_id)
+        if ok:
+            self._emit("order.cancel", {"order_id": order_id})
+        return ok
 
     def cancel_all(self, market: Optional[str] = None) -> int:
-        return self._oq.cancel_all(market)
+        n = self._oq.cancel_all(market)
+        if n > 0:
+            self._emit("order.cancel", {"count": n, "market": market})
+        return n
 
     def log(self, message: str) -> None:
         self._fr.log(f"[{self.timestamp}] {message}")
@@ -669,6 +718,13 @@ class BacktestContext(ExecutionContext):
                 f"on {event.venue} @ {event.liq_price:.2f} "
                 f"(entry={event.entry_price:.2f}, loss=${event.loss:.2f}, penalty=${event.penalty:.2f})"
             )
+            self._emit("liquidation", {
+                "market": event.market, "venue": event.venue,
+                "side": event.side, "size": event.size,
+                "entry_price": event.entry_price,
+                "liq_price": event.liq_price,
+                "loss": event.loss, "penalty": event.penalty,
+            }, ts=event.ts)
 
         return events
 
@@ -813,6 +869,10 @@ class BacktestContext(ExecutionContext):
             self._cm.debit(payment, venue)
             pos.funding_paid += payment
             self._cm.add_funding(payment)
+            self._emit("funding", {
+                "market": market, "venue": venue,
+                "rate": funding_rate.rate, "payment": payment,
+            }, ts=funding_rate.ts)
             total_payment += payment
         return total_payment
 
@@ -883,6 +943,10 @@ class BacktestContext(ExecutionContext):
         # Borrow cost is a direct cash deduction, not routed through
         # the allocator (Jupiter Perps lives outside the venue allocator).
         self._cm.cash -= cost
+        self._emit("borrow", {
+            "market": market, "cost": cost,
+            "cum_entry": cum_entry, "cum_exit": cum_now,
+        }, ts=fill_ts)
         return cost
 
     def _new_position(
@@ -923,6 +987,19 @@ class BacktestContext(ExecutionContext):
         if fill.tx_cost > 0:
             self._cm.total_tx_costs += fill.tx_cost
             self._cm.debit(fill.tx_cost, fill.venue or "default")
+
+        # D-6.4-replay slice 4: emit fill before mutating positions so
+        # replay's fold sees opens/closes in the same order as live.
+        self._emit("fill", {
+            "order_id": fill.order_id,
+            "market": fill.market,
+            "venue": fill.venue or "default",
+            "side": fill.side.value,
+            "size": fill.size,
+            "price": fill.price,
+            "fee": fill.fee,
+            "tx_cost": fill.tx_cost,
+        }, ts=fill.ts)
 
         market = fill.market
         venue = fill.venue
