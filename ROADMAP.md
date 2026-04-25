@@ -8,29 +8,34 @@ Trust first, depth second, breadth last.
 
 ---
 
-## Status (2026-04-23)
+## Status (2026-04-25)
 
 | Phase | Summary | Spec | State |
 |---|---|---|---|
-| 1 | Trust & correctness — parity, reconciliation, PIT audit, seeds, proof notebooks, custom data ingest | [phase-1](docs/specs/phase-1-trust-correctness.md) | blocks all |
-| 2 | Structural cleanup — ExecutionContext consolidation, store abstraction, config unification, sandbox isolation, repo cleanup | [phase-2](docs/specs/phase-2-structural-cleanup.md) | parallel |
-| 3 | Depth on wedge — execution upgrade v0.3 | [phase-3](docs/specs/phase-3-depth-on-wedge.md) | gated by 1.1-1.3 |
-| 4 | Product polish — README, UI, WebSocket, capabilities | [phase-4](docs/specs/phase-4-product-polish.md) | parallel |
-| 5 | CI & testing — matrix, Rust CI, parity gate, sandbox escape tests | [phase-5](docs/specs/phase-5-ci-testing.md) | parallel |
-| 6 | Portfolio & cross-venue live | [phase-6](docs/specs/phase-6-portfolio-cross-venue.md) | gated by 3.1-3.5 |
+| 1 | Trust & correctness — parity, reconciliation, PIT audit, seeds, proof notebooks, custom data ingest | [phase-1](docs/specs/phase-1-trust-correctness.md) | shipped |
+| 2 | Structural cleanup — ExecutionContext consolidation, store abstraction, config unification, sandbox isolation, repo cleanup | [phase-2](docs/specs/phase-2-structural-cleanup.md) | shipped (D-2.1.b 7-manager extraction + caller migration done) |
+| 3 | Depth on wedge — execution upgrade v0.3 | [phase-3](docs/specs/phase-3-depth-on-wedge.md) | shipped (incl. Rust TxCostModel + OrderbookFiller, maker/taker fees) |
+| 4 | Product polish — README, UI, WebSocket, capabilities | [phase-4](docs/specs/phase-4-product-polish.md) | shipped (D-4.3-websocket: 5 slices) |
+| 5 | CI & testing — matrix, Rust CI, parity gate, sandbox escape tests | [phase-5](docs/specs/phase-5-ci-testing.md) | shipped (ruff hard-fail on F-class) |
+| 6 | Portfolio & cross-venue live | [phase-6](docs/specs/phase-6-portfolio-cross-venue.md) | foundations shipped (D-3.5 orchestrator, D-6.1-unified shared-capital engine, D-6.4-replay 4/5 slices) |
 
 Trust artifacts status: [`TRUST_ARTIFACTS.md`](TRUST_ARTIFACTS.md)
 
-Deferred sibling-PR work: [`DEFERRED.md`](DEFERRED.md)
+Wave-by-wave deferred work + state: [`WAVE_STATUS.md`](WAVE_STATUS.md)
+
+Deferred sibling-PR backlog: [`DEFERRED.md`](DEFERRED.md)
 
 ---
 
 ## Recently done
 
-- Phase 7 correctness (strategy catalog ↔ builder parity, MC Sharpe annualization by trade frequency, journal stores `total_return_pct`, volume-zero warning on Python path)
+- **Wave 1 (6/6)**: ruff hard-fail CI · `flint/services/*` extraction · `PositionManager` step 1 · paper reconciliation upload + UI panel · `useBackoffPoll<T>` + 3-hook migration · Rust `TxCostModel` (PyO3, 2.24× speedup, 1e-9 parity)
+- **Wave 2**: D-2.1.b full close (7 managers extracted + every call site migrated) · D-3.1-rust Rust `OrderbookFiller` (3.52× speedup) · D-3.3 maker/taker tagging on the Rust fill path · D-3.5-orchestrator `PortfolioMarginEngine` facade
+- **Wave 3 portfolio + UX**: `SharedCapitalPortfolioEngine` with `exit_order_id` PnL attribution · D-4.3-websocket end-to-end (per-session `/ws/paper|live/{id}` endpoints, ConnectionManager replay buffer, `useWebSocket<T>` hook with backoff + heartbeat, both UI pages bound)
+- **Wave 5 replay**: D-6.4-replay slices 1+2+3+4 — event log, fold/replay primitive, snapshot compaction with fast-forward, BacktestContext writer hooks
+- Phase 7 correctness (strategy catalog ↔ builder parity, MC Sharpe annualization, journal stores `total_return_pct`, volume-zero warnings)
 - Dual-venue candle path (Drift + Hyperliquid), Pyth as price source of truth
 - Hyperliquid funding history back to 2023-06-08 at native 1h cadence
-- Execution Upgrade v0.3 spec committed (`docs/specs/execution-upgrade-v0.3.md`) — implementation lives in [phase-3](docs/specs/phase-3-depth-on-wedge.md)
 - MIT license, version alignment, `.venv` purged from git
 
 ---
