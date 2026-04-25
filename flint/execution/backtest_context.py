@@ -23,6 +23,7 @@ from .cash_manager import CashManager
 from .context import ExecutionContext
 from .fee_models import FeeModel, FlatFeeModel
 from .fill_models import FillModel, FillPipeline
+from .fill_recorder import FillRecorder
 from .position_manager import PositionManager
 
 logger = logging.getLogger("flint.backtest")
@@ -96,12 +97,16 @@ class BacktestContext(ExecutionContext):
         # D-2.1.b Step 1: position state owned by PositionManager.
         # `self._positions` and `self._closed_positions` remain as
         # property aliases below so existing call sites keep working
-        # while we migrate Steps 3–7.
+        # while we migrate Steps 4–7.
         self._pm = PositionManager()
         self._pending_orders: List[Order] = []
         self._market_orders_queue: List[Order] = []  # orders placed this bar
-        self._fills: List[Fill] = []
-        self._log_messages: List[str] = []
+
+        # D-2.1.b Step 3: recorded fills + diagnostic log messages
+        # owned by FillRecorder. Existing call sites use
+        # `self._fills.append(...)` and `self._log_messages.append(...)`,
+        # which still work through the property aliases below.
+        self._fr = FillRecorder()
 
         self._current_candle: Optional[Candle] = None
         self._order_counter = 0
@@ -182,6 +187,19 @@ class BacktestContext(ExecutionContext):
     @_total_funding.setter
     def _total_funding(self, value: float) -> None:
         self._cm.total_funding = value
+
+    # --- Fill / log state (delegates to FillRecorder) ---
+    # D-2.1.b Step 3: existing call sites do `self._fills.append(...)`
+    # and `self._log_messages.append(...)`. These properties return the
+    # underlying mutable lists so those mutations still work.
+
+    @property
+    def _fills(self) -> List[Fill]:
+        return self._fr.fills
+
+    @property
+    def _log_messages(self) -> List[str]:
+        return self._fr.logs
 
     # --- ExecutionContext properties ---
 
