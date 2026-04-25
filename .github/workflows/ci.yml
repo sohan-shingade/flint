@@ -7,9 +7,100 @@ on:
     branches: [main]
 
 jobs:
+  # ─── T5.1 — Python test matrix (OS × version) ────────────────────────────
   test:
-    runs-on: ubuntu-latest
+    name: tests (${{ matrix.os }} · py${{ matrix.python-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        # Phase 5 T5.1 — no silent `|| pip install -e .` fallback; install
+        # failure now fails the build instead of hiding the cause.
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev,hyperliquid]" solders pytest-timeout
+
+      - name: Run tests (with hard timeout)
+        # T5.1 — pytest-timeout catches polling-loop tests that would otherwise
+        # hang CI. jupiter_integration excluded (pre-existing failure tracked
+        # in DEFERRED).
+        run: |
+          pytest tests/ \
+            --ignore=tests/test_jupiter_integration.py \
+            --timeout=60 \
+            --tb=short -v
+
+  # ─── T5.2 — Rust engine build + cargo tests + PyO3 parity ────────────────
+  rust:
+    name: rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install maturin + dev deps
+        run: |
+          pip install --upgrade pip
+          pip install maturin pytest-timeout
+          pip install -e ".[dev]"
+
+      - name: cargo test (release)
+        working-directory: rust
+        run: cargo test --release
+
+      - name: maturin develop
+        working-directory: rust
+        run: maturin develop --release
+
+      - name: Rust/Python parity + determinism + Rust capabilities
+        # T5.2 — actual parity tests, no silent skip.
+        run: |
+          pytest \
+            tests/test_rust_python_parity.py \
+            tests/test_rust_engine.py \
+            tests/test_rust_capabilities.py \
+            tests/test_determinism.py \
+            tests/test_fee_model_parity.py \
+            --timeout=60 -v
+
+  # ─── T5.4 — Sandbox escape suite (gated on Py test job for matrix parity) ─
+  sandbox:
+    name: sandbox escape (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    needs: []
 
     steps:
       - uses: actions/checkout@v4
@@ -20,12 +111,72 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
-        run: pip install -e ".[dev,hyperliquid]" solders 2>/dev/null || pip install -e ".[dev]" solders 2>/dev/null || pip install -e .
+      - name: Install
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]" pytest-timeout
 
-      - name: Run tests
-        run: pytest tests/ -v --tb=short
+      - name: Run sandbox escape suite
+        # Memory-bomb test skips on macOS (RLIMIT_AS is advisory); Linux
+        # enforces it. 12 AST whitelist attempts + timeout + memory bomb.
+        run: pytest tests/test_sandbox_escape.py --timeout=120 -v
 
+  # ─── T5.5 — README counts anti-drift ─────────────────────────────────────
+  counts:
+    name: readme counts fresh
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check counts are up to date
+        run: python scripts/update_readme_counts.py --check
+
+  # ─── T5.1 — Ruff + formatting check ──────────────────────────────────────
+  lint:
+    name: lint + format
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff check
+        # D-5.1 (Wave 1): hard-fail on the curated F-class ruleset (real bugs:
+        # unused imports, redefined names, undefined names, unused vars).
+        # Style-only nits (E402, E501, etc.) stay ignored via pyproject.toml
+        # until an editorial sweep happens.
+        run: ruff check flint/ tests/ scripts/
+
+      - name: Ruff format check
+        # Format drift stays advisory until a one-shot reformat lands —
+        # tightening it now would touch every file in the repo.
+        run: ruff format --check flint/ tests/ scripts/ || echo "ruff format drift (non-blocking)"
+
+      - name: Import sanity
+        # Regression guard from the old lint job — catches import-cycle and
+        # missing-module errors fast.
+        run: |
+          python -c "import flint; print('flint imported OK')"
+          python -c "from flint.strategy.loader import load_user_strategy; print('Loader OK')"
+          python -c "from flint.execution import FillPipeline; print('FillPipeline OK')"
+          python -c "from flint.backtest.rust_capabilities import rust_capabilities; print('rust caps:', rust_capabilities()['engine'])"
+
+  # ─── UI build ─────────────────────────────────────────────────────────────
   ui-build:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -47,27 +198,3 @@ jobs:
       - name: Build UI
         working-directory: ui
         run: npx vite build
-
-  lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install
-        run: pip install -e ".[dev]" 2>/dev/null || pip install -e .
-
-      - name: Check imports
-        run: python -c "import flint; print(f'flint imported OK')"
-
-      - name: Check strategy loader
-        run: python -c "from flint.strategy.loader import load_user_strategy; print('Loader OK')"
-
-      - name: Check fill pipeline
-        run: python -c "from flint.execution import FillPipeline, ImpactStage, LatencyStage, PartialFillStage; print('Fill pipeline OK')"

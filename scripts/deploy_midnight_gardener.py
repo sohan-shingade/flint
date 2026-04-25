@@ -39,7 +39,7 @@ resp = httpx.post(f"{API_BASE}/paper/start", json={
 
 if resp.status_code == 200:
     data = resp.json()
-    print(f"Deployed successfully!")
+    print("Deployed successfully!")
     print(f"  Session ID: {data.get('session_id')}")
     print(f"  Status:     {data.get('status')}")
     print(f"\nMonitor at: {API_BASE}/paper/status/{data.get('session_id')}")

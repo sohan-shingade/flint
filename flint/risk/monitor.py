@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Optional
 
 logger = logging.getLogger("flint.risk.monitor")
 

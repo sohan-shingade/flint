@@ -1,11 +1,10 @@
 """Tests for ImpactStage — orderbook walk, sqrt model, bps fallback."""
 from __future__ import annotations
 
-import math
 
 import pytest
 
-from flint.execution.impact import ImpactStage, ImpactResult
+from flint.execution.impact import ImpactStage
 from flint.models import (
     Candle, Order, OrderType, OrderbookLevel, OrderbookSnapshot, Side,
 )

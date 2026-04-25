@@ -1,5 +1,4 @@
 """Tests for vAMM integration with ImpactStage and FillPipeline."""
-import pytest
 from flint.models import Candle, Order, OrderType, Side
 from flint.execution.impact import ImpactStage
 from flint.execution.vamm import VammCurve

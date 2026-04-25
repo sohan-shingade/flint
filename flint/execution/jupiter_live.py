@@ -6,7 +6,7 @@ read from the local FlintStore.
 """
 import logging
 import time
-from typing import List, Optional
+from typing import List
 
 import httpx
 

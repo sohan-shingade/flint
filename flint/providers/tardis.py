@@ -10,6 +10,19 @@ Rows are deduplicated and aligned to 5-minute buckets to match the
 granularity stored in the Flint DuckDB ``orderbook_snapshots`` table.
 """
 
+# Phase 1 T1.3.a + D-1.3-providers — point-in-time declaration.
+# Defaults are conservative — callers should verify against the
+# specific source API when using this data in parity/PIT-sensitive
+# contexts. Review date: 2026-04-24.
+PIT_METADATA = {  # noqa: E402
+    "candle_ts": "bar-close",
+    "funding_ts": "accrual-time",
+    "orderbook_ts": "exchange-time",
+    "oi_ts": "exchange-time",
+    "reviewed": "2026-04-24",
+}
+
+
 import csv
 import gzip
 import io

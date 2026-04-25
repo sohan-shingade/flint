@@ -1,5 +1,4 @@
 """Tests for CEX fill models (Binance, OKX, Bybit)."""
-import pytest
 
 from flint.execution.fill_cex import BinanceFillModel, OkxFillModel, BybitFillModel
 from flint.models import Candle, Order, OrderbookLevel, OrderbookSnapshot, OrderType, Side

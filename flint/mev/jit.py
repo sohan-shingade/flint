@@ -7,9 +7,9 @@ maker rebate while providing better execution for the taker.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import List
 
-from ..models import OrderbookLevel, OrderbookSnapshot, Side
+from ..models import OrderbookSnapshot, Side
 
 
 @dataclass(frozen=True)

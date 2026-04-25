@@ -4,9 +4,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
-from flint.providers.helius import HeliusProvider, DRIFT_PROGRAM, _BASE
+from flint.providers.helius import HeliusProvider
 
 
 # ---------------------------------------------------------------------------

@@ -1,42 +1,35 @@
-"""Journal API — persistent backtest history."""
-from __future__ import annotations
+"""Journal API — persistent backtest history.
 
-from typing import Optional
+D-4.7-full: thin adapter over `flint.services.journal`. Routes here
+just translate HTTP↔dict; the service does the work.
+"""
+from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
-from ...journal.storage import JournalStorage
-from ...store import FlintStore
+from ...services import journal as journal_service
 
 router = APIRouter()
 
 
-def _get_journal(request: Request) -> Optional[JournalStorage]:
-    store = getattr(request.app.state, "store", None)
-    if store is None:
-        return None
-    # Cache journal instance on app state to avoid CREATE TABLE on every request
-    journal = getattr(request.app.state, "_journal", None)
-    if journal is None:
-        journal = JournalStorage(store)
-        request.app.state._journal = journal
-    return journal
+def _store(request: Request):
+    return getattr(request.app.state, "store", None)
 
 
 @router.get("/runs")
 def list_runs(request: Request, limit: int = 50):
-    journal = _get_journal(request)
-    if journal is None:
+    store = _store(request)
+    if store is None:
         return {"runs": []}
-    return {"runs": journal.list_runs(limit)}
+    return {"runs": journal_service.list_runs(store, limit)}
 
 
 @router.get("/runs/{run_id}")
 def get_run(run_id: str, request: Request):
-    journal = _get_journal(request)
-    if journal is None:
+    store = _store(request)
+    if store is None:
         return {"error": "No store"}
-    run = journal.get_run(run_id)
+    run = journal_service.get_run(store, run_id)
     if run is None:
         return {"error": "Run not found"}
     return run
@@ -44,17 +37,17 @@ def get_run(run_id: str, request: Request):
 
 @router.delete("/runs/{run_id}")
 def delete_run(run_id: str, request: Request):
-    journal = _get_journal(request)
-    if journal is None:
+    store = _store(request)
+    if store is None:
         return {"error": "No store"}
-    journal.delete_run(run_id)
+    journal_service.delete_run(store, run_id)
     return {"deleted": True}
 
 
 @router.get("/compare")
 def compare_runs(ids: str, request: Request):
-    journal = _get_journal(request)
-    if journal is None:
+    store = _store(request)
+    if store is None:
         return {"comparisons": []}
     run_ids = [i.strip() for i in ids.split(",") if i.strip()]
-    return {"comparisons": journal.compare_runs(run_ids)}
+    return {"comparisons": journal_service.compare_runs(store, run_ids)}

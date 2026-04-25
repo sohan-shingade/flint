@@ -22,7 +22,7 @@ export default function CollectorStatus() {
           setEntries(d.status || [])
           setRunning(d.running || false)
         })
-        .catch(() => {})
+        .catch((e) => { console.warn("[components/CollectorStatus.tsx] fetch failed:", e) })
     }
     poll()
     const id = setInterval(poll, 5000)

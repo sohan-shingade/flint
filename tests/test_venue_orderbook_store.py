@@ -1,7 +1,6 @@
 import os
 import tempfile
 
-from flint.models import OrderbookLevel, OrderbookSnapshot
 from flint.store import FlintStore
 
 

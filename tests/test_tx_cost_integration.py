@@ -1,5 +1,4 @@
 """Tests for tx_cost integration."""
-import pytest
 from flint.models import Fill, BacktestResult, Side, Signal
 
 class TestFillTxCost:

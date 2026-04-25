@@ -64,7 +64,7 @@ export default function FillAnalysis() {
         const raw = d.markets || []
         setMarkets(raw.map((m: any) => typeof m === 'string' ? m : m.market))
       })
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/FillAnalysis.tsx] fetch failed:", e) })
   }, [])
 
   // Fetch fills whenever filters change

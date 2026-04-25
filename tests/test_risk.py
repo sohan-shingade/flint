@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 from flint.backtest.engine import BacktestEngine
-from flint.execution.fee_models import ZeroFeeModel
 from flint.models import (
-    AccountState, Candle, Order, OrderType, PositionInfo, Side, Signal,
+    AccountState, Candle, Order, OrderType, PositionInfo, Side,
 )
 from flint.risk.guards import (
     DailyLossLimit,

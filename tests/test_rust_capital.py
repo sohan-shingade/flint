@@ -1,9 +1,8 @@
 """Per-venue capital allocation and transfer parity tests."""
 from __future__ import annotations
 
-import pytest
 
-from flint.execution.capital import Transfer, TransferConfig, VenueAllocator
+from flint.execution.capital import TransferConfig, VenueAllocator
 
 
 class TestVenueAllocator:

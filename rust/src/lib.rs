@@ -8,7 +8,11 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
+use engine::borrow_ledger::{BorrowLedger as RustBorrowLedger, BorrowPayment as RustBorrowPayment};
 use engine::fees::FeeModel;
+use engine::funding_ledger::FundingLedger as RustFundingLedger;
+use engine::orderbook_fill::{BookLevel, BookSnapshot, OrderbookFiller as RustOrderbookFiller};
+use engine::tx_costs::{TxCostModel as RustTxCostModel, Urgency};
 use runner::{BacktestRunner, RunConfig};
 use types::*;
 
@@ -54,21 +58,39 @@ fn parse_fill_model(s: &str) -> FillModelType {
 struct RustEngine {
     runner: BacktestRunner,
     registry: NameRegistry,
+    seed: u64,
 }
 
 #[pymethods]
 impl RustEngine {
     #[new]
-    #[pyo3(signature = (initial_capital=10000.0, fee_bps=5.0, fill_model="pipeline", slippage_bps=5.0))]
+    #[pyo3(signature = (initial_capital=10000.0, fee_bps=5.0, fill_model="pipeline", slippage_bps=5.0, seed=0, fee_model="flat", maker_bps=None, taker_bps=None))]
     fn new(
         initial_capital: f64,
         fee_bps: f64,
         fill_model: &str,
         slippage_bps: f64,
+        seed: u64,
+        fee_model: &str,
+        maker_bps: Option<f64>,
+        taker_bps: Option<f64>,
     ) -> Self {
+        // D-3.3: select the fee-model variant by name. "flat" keeps the
+        // pre-existing behavior (ignores maker/taker). "drift" and
+        // "hyperliquid" pick the venue-specific maker-rebate schedule.
+        // "maker_taker" lets callers pass explicit bps values.
+        let fee = match fee_model {
+            "drift" => FeeModel::Drift,
+            "hyperliquid" => FeeModel::Hyperliquid,
+            "maker_taker" => FeeModel::MakerTaker {
+                maker_bps: maker_bps.unwrap_or(0.0),
+                taker_bps: taker_bps.unwrap_or(fee_bps),
+            },
+            _ => FeeModel::Flat { fee_bps },
+        };
         let config = RunConfig {
             initial_capital,
-            fee_model: FeeModel::Flat { fee_bps },
+            fee_model: fee,
             fill_model_type: parse_fill_model(fill_model),
             slippage_bps,
             max_runtime_s: 300.0,
@@ -76,6 +98,7 @@ impl RustEngine {
         Self {
             runner: BacktestRunner::new(config),
             registry: NameRegistry::new(),
+            seed,
         }
     }
 
@@ -110,7 +133,11 @@ impl RustEngine {
         for vid in seen_venues {
             let name = self.registry.venue_name(vid).to_string();
             use crate::engine::venue_fills::VenueFiller;
-            let filler = VenueFiller::for_venue(&name, 42);
+            // Seed is threaded from Python via RustEngine::new; each venue filler
+            // gets a deterministic seed offset by venue_id so per-venue RNGs
+            // are independent but reproducible. Phase 1 T1.1.c.
+            let venue_seed = self.seed.wrapping_add(vid.0 as u64);
+            let filler = VenueFiller::for_venue(&name, venue_seed);
             self.runner.register_venue_filler(vid, filler);
         }
         Ok(())
@@ -319,9 +346,299 @@ impl RustEngine {
     fn equity(&self) -> f64 { self.runner.equity() }
 }
 
+/// Capability flags exposed to Python.
+///
+/// Phase 3 T3.2. Drives the `can_use_rust` dispatch in BacktestEngine and
+/// the `--rust-required` gate. Keep this in sync with what runner.rs /
+/// engine/* actually implements; lying here = silent wrong numbers.
+#[pyfunction]
+fn capabilities(py: Python<'_>) -> PyResult<PyObject> {
+    let d = PyDict::new(py);
+
+    // Fill models actually supported by runner.rs dispatch
+    let fill_models = PyList::new(py, ["close", "next_bar_open", "slippage",
+                                        "pipeline"])?;
+    d.set_item("fill_models", fill_models)?;
+
+    // Fee models exposed to Python. D-3.3 adds maker_taker / drift /
+    // hyperliquid on top of the baseline flat model so callers can
+    // test maker rebates end-to-end through the Rust engine.
+    let fee_models = PyList::new(py, ["flat", "maker_taker", "drift", "hyperliquid"])?;
+    d.set_item("fee_models", fee_models)?;
+
+    // Feature flags — the Python-side can_use_rust gate mirrors these.
+    d.set_item("supports_partial_fills", false)?;   // T3.4
+    d.set_item("supports_latency_stage", false)?;   // T3.4
+    d.set_item("supports_tx_costs", true)?;         // D-3.4-rust
+    d.set_item("supports_orderbook_walk", true)?;   // D-3.1-rust (Wave 2)
+    d.set_item("supports_cross_market", false)?;    // Phase 2 follow-up
+    d.set_item("supports_multi_venue_margin", false)?;  // T3.5
+    d.set_item("supports_borrow_snapshots", false)?;
+    d.set_item("supports_maker_taker_fees", true)?;     // D-3.3 (Wave 2)
+
+    // Engine identity + version — helps UI surface which engine ran.
+    d.set_item("engine", "rust")?;
+    d.set_item("engine_version", env!("CARGO_PKG_VERSION"))?;
+    Ok(d.into())
+}
+
+// ----- TxCostModel PyO3 bindings (D-3.4-rust) -----
+//
+// The Python side exposes three concrete classes under
+// `flint.execution.tx_costs`. Rather than mirror the full class
+// hierarchy in PyO3 (three #[pyclass]es all returning the same dict),
+// this wrapper exposes a single factory + `.estimate()` method that
+// dispatches on venue. `test_rust_tx_cost_parity.py` verifies the
+// outputs match the Python models component-by-component.
+
+/// PyO3 wrapper around `engine::tx_costs::TxCostModel`.
+#[pyclass(name = "TxCostModel")]
+struct PyTxCostModel {
+    inner: RustTxCostModel,
+}
+
+#[pymethods]
+impl PyTxCostModel {
+    /// Construct from a venue name. Falls back to the CEX model for
+    /// unknown venues — matches the Python `get_tx_cost_model()`
+    /// factory 1:1.
+    #[staticmethod]
+    fn for_venue(venue: &str) -> Self {
+        PyTxCostModel { inner: RustTxCostModel::for_venue(venue) }
+    }
+
+    /// Drift / Solana defaults (5 bps taker, 5_000 lamports priority,
+    /// 10_000 lamports Jito tip, $150 SOL).
+    #[staticmethod]
+    #[pyo3(signature = (priority_fee_lamports=5_000, jito_tip_lamports=10_000, sol_price_usd=150.0, exchange_fee_bps=5.0, historical_p50=None, historical_p90=None))]
+    fn solana(
+        priority_fee_lamports: u64,
+        jito_tip_lamports: u64,
+        sol_price_usd: f64,
+        exchange_fee_bps: f64,
+        historical_p50: Option<u64>,
+        historical_p90: Option<u64>,
+    ) -> Self {
+        PyTxCostModel {
+            inner: RustTxCostModel::Solana {
+                priority_fee_lamports,
+                jito_tip_lamports,
+                sol_price_usd,
+                exchange_fee_bps,
+                historical_p50,
+                historical_p90,
+            },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (l1_cost_usd=0.001, exchange_fee_bps=3.5))]
+    fn hyperliquid(l1_cost_usd: f64, exchange_fee_bps: f64) -> Self {
+        PyTxCostModel {
+            inner: RustTxCostModel::Hyperliquid { l1_cost_usd, exchange_fee_bps },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (exchange_fee_bps=5.0))]
+    fn cex(exchange_fee_bps: f64) -> Self {
+        PyTxCostModel {
+            inner: RustTxCostModel::Cex { exchange_fee_bps },
+        }
+    }
+
+    /// Estimate cost for a trade. Returns a dict with the same keys
+    /// as Python `CostEstimate.to_dict()`: exchange_fee, network_fee,
+    /// bundle_tip, impact_est, total.
+    #[pyo3(signature = (market, size, price, urgency="normal"))]
+    fn estimate(
+        &self,
+        py: Python<'_>,
+        market: &str,
+        size: f64,
+        price: f64,
+        urgency: &str,
+    ) -> PyResult<PyObject> {
+        let est = self.inner.estimate(market, size, price, Urgency::from_str(urgency));
+        let d = PyDict::new(py);
+        d.set_item("exchange_fee", est.exchange_fee)?;
+        d.set_item("network_fee", est.network_fee)?;
+        d.set_item("bundle_tip", est.bundle_tip)?;
+        d.set_item("impact_est", est.impact_est)?;
+        d.set_item("total", est.total())?;
+        Ok(d.into())
+    }
+}
+
+// ----- OrderbookFiller PyO3 bindings (D-3.1-rust) -----
+//
+// The Python `OrderbookFillModel._walk_book` is the hottest path on
+// the orderbook-aware fill pipeline (one call per fill, with a vector
+// walk over book levels). Exposing it as a PyO3 class lets the Python
+// fill pipeline delegate into Rust for the numeric work while keeping
+// the snapshot-state machinery on the Python side for now.
+
+#[pyclass(name = "OrderbookFiller")]
+struct PyOrderbookFiller {
+    inner: RustOrderbookFiller,
+}
+
+#[pymethods]
+impl PyOrderbookFiller {
+    #[new]
+    #[pyo3(signature = (reject_on_insufficient_depth=true))]
+    fn new(reject_on_insufficient_depth: bool) -> Self {
+        Self { inner: RustOrderbookFiller::new(reject_on_insufficient_depth) }
+    }
+
+    /// Walk a book snapshot for a market order.
+    ///
+    /// Args:
+    ///   side: "long" or "short"
+    ///   size: order size (positive)
+    ///   bids / asks: list of (price, size) tuples. Callers are
+    ///     responsible for sorting (bids descending, asks ascending);
+    ///     the Python `OrderbookSnapshot` dataclass already enforces
+    ///     that invariant upstream.
+    ///
+    /// Returns a dict with `price`, `size`, `impact_bps`, `is_partial`,
+    /// or None if the book is empty / depth insufficient / nothing
+    /// filled (caller falls back to SlippageFill).
+    #[pyo3(signature = (side, size, bids, asks))]
+    fn walk_market(
+        &self,
+        py: Python<'_>,
+        side: &str,
+        size: f64,
+        bids: Vec<(f64, f64)>,
+        asks: Vec<(f64, f64)>,
+    ) -> PyResult<Option<PyObject>> {
+        let book = BookSnapshot {
+            bids: bids.into_iter().map(|(price, size)| BookLevel { price, size }).collect(),
+            asks: asks.into_iter().map(|(price, size)| BookLevel { price, size }).collect(),
+        };
+        let s = match side {
+            "short" => Side::Short,
+            _ => Side::Long,
+        };
+        let walk = match self.inner.walk_market(s, size, &book) {
+            Some(w) => w,
+            None => return Ok(None),
+        };
+        let d = PyDict::new(py);
+        d.set_item("price", walk.price)?;
+        d.set_item("size", walk.size)?;
+        d.set_item("impact_bps", walk.impact_bps)?;
+        d.set_item("is_partial", walk.is_partial)?;
+        Ok(Some(d.into()))
+    }
+}
+
+// ----- FundingLedger PyO3 bindings -----
+
+#[pyclass(name = "FundingLedger")]
+struct PyFundingLedger {
+    inner: RustFundingLedger,
+}
+
+#[pymethods]
+impl PyFundingLedger {
+    #[new]
+    fn new() -> Self {
+        Self { inner: RustFundingLedger::new() }
+    }
+
+    fn add(&mut self, market: &str, venue: &str, ts: i64, rate: f64) {
+        self.inner.add(market, venue, ts, rate);
+    }
+
+    fn latest(&self, market: &str) -> Option<f64> {
+        self.inner.latest(market)
+    }
+
+    #[pyo3(signature = (market, lookback=24))]
+    fn recent(&self, market: &str, lookback: usize) -> Vec<(i64, f64)> {
+        self.inner.recent(market, lookback)
+    }
+
+    #[pyo3(signature = (market, lookback=24))]
+    fn by_venue(
+        &self,
+        py: Python<'_>,
+        market: &str,
+        lookback: usize,
+    ) -> PyResult<PyObject> {
+        let d = PyDict::new(py);
+        for (venue, points) in self.inner.by_venue(market, lookback) {
+            d.set_item(venue, points)?;
+        }
+        Ok(d.into())
+    }
+}
+
+// ----- BorrowLedger PyO3 bindings -----
+
+#[pyclass(name = "BorrowLedger")]
+struct PyBorrowLedger {
+    inner: RustBorrowLedger,
+}
+
+#[pymethods]
+impl PyBorrowLedger {
+    #[new]
+    fn new() -> Self {
+        Self { inner: RustBorrowLedger::new() }
+    }
+
+    fn record(&mut self, market: &str, ts: i64, rate_hourly: f64, cumulative_rate: f64) {
+        self.inner.record(market, ts, rate_hourly, cumulative_rate);
+    }
+
+    fn record_payment(
+        &mut self,
+        market: &str, ts: i64, cost: f64,
+        cum_entry: f64, cum_exit: f64,
+    ) {
+        self.inner.record_payment(RustBorrowPayment {
+            market: market.to_string(), ts, cost, cum_entry, cum_exit,
+        });
+    }
+
+    fn add_paid(&mut self, amount: f64) {
+        self.inner.add_paid(amount);
+    }
+
+    #[getter]
+    fn total_paid(&self) -> f64 {
+        self.inner.total_paid
+    }
+
+    fn latest(&self, market: &str) -> Option<f64> {
+        self.inner.latest(market)
+    }
+
+    #[pyo3(signature = (market, lookback=24))]
+    fn recent(&self, market: &str, lookback: usize) -> Vec<(i64, f64)> {
+        self.inner.recent(market, lookback)
+    }
+
+    fn cumulative_at(&self, market: &str, ts: i64) -> Option<f64> {
+        self.inner.cumulative_at(market, ts)
+    }
+
+    fn payments_count(&self) -> usize {
+        self.inner.payments().len()
+    }
+}
+
 /// Python module definition.
 #[pymodule]
 fn flint_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustEngine>()?;
+    m.add_class::<PyTxCostModel>()?;
+    m.add_class::<PyOrderbookFiller>()?;
+    m.add_class::<PyFundingLedger>()?;
+    m.add_class::<PyBorrowLedger>()?;
+    m.add_function(wrap_pyfunction!(capabilities, m)?)?;
     Ok(())
 }

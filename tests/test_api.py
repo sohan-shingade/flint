@@ -1,5 +1,4 @@
 """Tests for the FastAPI backend."""
-import pytest
 
 from fastapi.testclient import TestClient
 
@@ -149,7 +148,8 @@ def test_data_freshness_returns_data_after_download():
     """Freshness endpoint should return metadata after sync_metadata is populated."""
     from flint.store import FlintStore
     from flint.models import SyncMetadata
-    import tempfile, os
+    import tempfile
+    import os
 
     db_path = os.path.join(tempfile.gettempdir(), "test_freshness.duckdb")
     try:

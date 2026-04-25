@@ -12,17 +12,14 @@ from typing import Dict, List, Optional
 import httpx
 
 from ...models import (
-    Fill,
     FundingRate,
     MarketInfo,
     Order,
-    OrderbookLevel,
     OrderbookSnapshot,
-    Side,
 )
 from ...providers.drift_api import DriftDataProvider
 from ..base import BaseConnector
-from .types import DriftPerpMarket, DriftUserPosition
+from .types import DriftPerpMarket
 
 # Drift constants
 _PRICE_PRECISION = 1e6

@@ -13,11 +13,10 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from typing import Dict, List, Optional, Tuple
 
 from ..models import (
-    Fill, Order, OrderState, OrderType, PositionInfo, Side,
+    Order, OrderState, OrderType, PositionInfo, Side,
 )
 from .live_base import LiveExecutionContext
 

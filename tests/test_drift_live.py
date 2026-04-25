@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
+from unittest.mock import patch, MagicMock
 
-from flint.models import Side, OrderType, OrderState, PositionInfo
+from flint.models import Side, OrderType, OrderState
 
 
 def run(coro):

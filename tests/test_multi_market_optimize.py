@@ -1,5 +1,4 @@
 """Tests for multi-market optimization."""
-import pytest
 from fastapi.testclient import TestClient
 from flint.api.main import app
 

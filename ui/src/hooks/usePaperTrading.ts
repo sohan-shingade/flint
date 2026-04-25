@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
+
+import { useBackoffPoll } from './useBackoffPoll'
 
 const API = '/api/v1/paper'
 
@@ -42,55 +44,34 @@ interface SessionStatus {
 }
 
 export function usePaperPortfolio(pollInterval = 2000) {
-  const [portfolio, setPortfolio] = useState<Portfolio | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { data, error, errorCount, nextRetryIn } = useBackoffPoll<Portfolio>(
+    async (signal) => {
+      const res = await fetch(`${API}/portfolio`, { signal })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
+    },
+    { intervalMs: pollInterval },
+  )
 
-  useEffect(() => {
-    let active = true
-    const poll = async () => {
-      try {
-        const res = await fetch(`${API}/portfolio`)
-        if (res.ok && active) {
-          setPortfolio(await res.json())
-          setError(null)
-        }
-      } catch (e) {
-        if (active) {
-          const msg = String(e)
-          if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-            setError('Cannot connect to server \u2014 is flint serve running?')
-          } else {
-            setError(msg)
-          }
-        }
-      }
-    }
-    poll()
-    const id = setInterval(poll, pollInterval)
-    return () => { active = false; clearInterval(id) }
-  }, [pollInterval])
+  const friendlyError =
+    error && /Failed to fetch|NetworkError/i.test(error)
+      ? 'Cannot connect to server \u2014 is flint serve running?'
+      : error
 
-  return { portfolio, error }
+  return { portfolio: data, error: friendlyError, errorCount, nextRetryIn }
 }
 
 export function useSessionStatus(sessionId: string | null, pollInterval = 2000) {
-  const [status, setStatus] = useState<SessionStatus | null>(null)
+  const { data } = useBackoffPoll<SessionStatus>(
+    async (signal) => {
+      const res = await fetch(`${API}/status/${sessionId}`, { signal })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
+    },
+    { enabled: !!sessionId, intervalMs: pollInterval },
+  )
 
-  useEffect(() => {
-    if (!sessionId) return
-    let active = true
-    const poll = async () => {
-      try {
-        const res = await fetch(`${API}/status/${sessionId}`)
-        if (res.ok && active) setStatus(await res.json())
-      } catch {}
-    }
-    poll()
-    const id = setInterval(poll, pollInterval)
-    return () => { active = false; clearInterval(id) }
-  }, [sessionId, pollInterval])
-
-  return status
+  return data
 }
 
 export function useSessionTrades(sessionId: string | null) {
@@ -101,7 +82,7 @@ export function useSessionTrades(sessionId: string | null) {
     fetch(`${API}/trades/${sessionId}`)
       .then(r => r.json())
       .then(d => setTrades(d.trades || []))
-      .catch(() => {})
+      .catch((e) => { console.warn("[hooks/usePaperTrading.ts] fetch failed:", e) })
   }, [sessionId])
 
   return trades

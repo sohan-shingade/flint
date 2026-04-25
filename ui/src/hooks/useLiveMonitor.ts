@@ -1,45 +1,52 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
+
+import { useBackoffPoll } from './useBackoffPoll'
 
 interface EquityPoint { ts: number; equity: number; cash: number; unrealized_pnl: number }
 interface LiveFill { fill_id: string; market: string; side: string; price: number; size: number; fee: number; ts: number; venue: string }
 interface LiveSession { session_id: string; strategy: string; market: string; venue: string; status: string; started_at: number; stopped_at: number | null }
 
+interface MonitorPayload {
+  equity: EquityPoint[]
+  fills: LiveFill[]
+}
+
+/**
+ * Live session monitor — poll equity + fills together so the panel sees
+ * a consistent snapshot. D-4.2-backoff-full migrates this off setInterval
+ * onto useBackoffPoll so a flaky network doesn't hammer a dead server.
+ */
 export function useLiveMonitor(sessionId: string, pollInterval = 2000) {
-  const [equity, setEquity] = useState<EquityPoint[]>([])
-  const [fills, setFills] = useState<LiveFill[]>([])
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (!sessionId) return
-    let active = true
-    const poll = async () => {
-      try {
-        const [eqRes, fillRes] = await Promise.all([
-          fetch(`/api/v1/live/equity?session_id=${sessionId}`),
-          fetch(`/api/v1/live/fills?session_id=${sessionId}`),
-        ])
-        if (!active) return
-        const eqData = await eqRes.json()
-        const fillData = await fillRes.json()
-        if (eqData.equity) setEquity(eqData.equity)
-        if (fillData.fills) setFills(fillData.fills)
-      } catch (e) {
-        if (active) {
-          const msg = String(e)
-          if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-            setError('Cannot connect to server \u2014 is flint serve running?')
-          } else {
-            setError(msg)
-          }
-        }
+  const { data, error, errorCount, nextRetryIn } = useBackoffPoll<MonitorPayload>(
+    async (signal) => {
+      const [eqRes, fillRes] = await Promise.all([
+        fetch(`/api/v1/live/equity?session_id=${sessionId}`, { signal }),
+        fetch(`/api/v1/live/fills?session_id=${sessionId}`, { signal }),
+      ])
+      if (!eqRes.ok) throw new Error(`equity HTTP ${eqRes.status}`)
+      if (!fillRes.ok) throw new Error(`fills HTTP ${fillRes.status}`)
+      const eqData = await eqRes.json()
+      const fillData = await fillRes.json()
+      return {
+        equity: eqData.equity ?? [],
+        fills: fillData.fills ?? [],
       }
-    }
-    poll()
-    const id = setInterval(poll, pollInterval)
-    return () => { active = false; clearInterval(id) }
-  }, [sessionId, pollInterval])
+    },
+    { enabled: !!sessionId, intervalMs: pollInterval },
+  )
 
-  return { equity, fills, error }
+  const friendlyError =
+    error && /Failed to fetch|NetworkError/i.test(error)
+      ? 'Cannot connect to server — is flint serve running?'
+      : error
+
+  return {
+    equity: data?.equity ?? [],
+    fills: data?.fills ?? [],
+    error: friendlyError ?? '',
+    errorCount,
+    nextRetryIn,
+  }
 }
 
 export function useLiveSessions() {
@@ -47,7 +54,7 @@ export function useLiveSessions() {
   useEffect(() => {
     fetch('/api/v1/live/sessions').then(r => r.json()).then(d => {
       if (d.sessions) setSessions(d.sessions)
-    }).catch(() => {})
+    }).catch((e) => { console.warn("[hooks/useLiveMonitor.ts] fetch failed:", e) })
   }, [])
   return sessions
 }

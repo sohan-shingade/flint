@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   usePaperPortfolio,
@@ -7,7 +7,20 @@ import {
   stopSession,
   killSession,
 } from '../hooks/usePaperTrading'
+import { useWebSocket } from '../hooks/useWebSocket'
 import EquityCurve from '../components/EquityCurve'
+
+/** D-4.3-websocket: payload shape PaperTradingEngine broadcasts. */
+interface PaperWsTick {
+  type: 'tick' | 'trade' | 'ping'
+  ts?: number
+  equity?: number
+  cash?: number
+  unrealized_pnl?: number
+  total_trades?: number
+  pnl?: number
+  market?: string
+}
 
 /* ── helpers ─────────────────────────────────────────────── */
 
@@ -113,6 +126,46 @@ function SessionDetail({ sessionId, onStop, onKill }: {
   const [confirming, setConfirming] = useState<'stop' | 'kill' | null>(null)
   const [parityResult, setParityResult] = useState<any>(null)
   const [parityLoading, setParityLoading] = useState(false)
+  const [reconcileResult, setReconcileResult] = useState<any>(null)
+  const [reconcileLoading, setReconcileLoading] = useState(false)
+  const [reconcileError, setReconcileError] = useState<string | null>(null)
+  const reconcileInputRef = useRef<HTMLInputElement | null>(null)
+
+  // D-4.3-websocket: subscribe to per-session WS tick + trade stream.
+  // Augments (doesn't replace) the polling hooks above — equity from
+  // the WS path is fresher than the 2s poll, and the live indicator
+  // dot reflects actual socket health, not just "we got a 200 once".
+  const ws = useWebSocket<PaperWsTick>(`/ws/paper/${sessionId}`, {
+    enabled: !!sessionId,
+  })
+  const wsTick = ws.data && ws.data.type === 'tick' ? ws.data : null
+
+  async function handleReconcileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0]
+    if (!f) return
+    setReconcileLoading(true)
+    setReconcileError(null)
+    setReconcileResult(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', f)
+      const r = await fetch(`/api/v1/paper/${sessionId}/reconciliation`, {
+        method: 'POST', body: fd,
+      })
+      const data = await r.json()
+      if (!r.ok) {
+        setReconcileError(data?.detail || `HTTP ${r.status}`)
+      } else {
+        setReconcileResult(data)
+      }
+    } catch (err: any) {
+      setReconcileError(err?.message || 'Upload failed')
+    } finally {
+      setReconcileLoading(false)
+      // Allow uploading the same file twice in a row.
+      if (reconcileInputRef.current) reconcileInputRef.current.value = ''
+    }
+  }
 
   async function handleParityTest() {
     if (!status?.market || !status?.strategy) return
@@ -147,7 +200,7 @@ function SessionDetail({ sessionId, onStop, onKill }: {
     fetch(`/api/v1/paper/${sessionId}/equity-history`)
       .then(r => r.json())
       .then(d => setEqHistory(d.equity_curve || []))
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/PaperTrading.tsx] fetch failed:", e) })
   }, [sessionId])
 
   // Fetch candle data for buy-and-hold baseline
@@ -171,7 +224,7 @@ function SessionDetail({ sessionId, onStop, onKill }: {
         ])
         setBuyHoldData(bh)
       })
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/PaperTrading.tsx] fetch failed:", e) })
   }, [status?.market, eqHistory])
 
   if (!status) {
@@ -183,7 +236,11 @@ function SessionDetail({ sessionId, onStop, onKill }: {
   }
 
   const realizedPnl = status.realized_pnl ?? 0
-  const unrealizedPnl = status.unrealized_pnl ?? 0
+  // D-4.3-websocket: live unrealized PnL pulled from the WS tick when
+  // available — it's fresher than the 2s poll. Fall back to the polled
+  // status when no tick has arrived yet (or on socket failure).
+  const unrealizedPnl = wsTick?.unrealized_pnl ?? status.unrealized_pnl ?? 0
+  const liveEquity = wsTick?.equity ?? status.equity
   const rpnlPositive = realizedPnl >= 0
   const upnlPositive = unrealizedPnl >= 0
 
@@ -191,10 +248,10 @@ function SessionDetail({ sessionId, onStop, onKill }: {
   const equityCurve = eqHistory.length > 0 ? eqHistory : (status.equity_curve || [])
 
   const metrics: { label: string; value: string; accent: boolean | undefined }[] = [
-    { label: 'EQUITY', value: fmtUsd(status.equity), accent: undefined },
+    { label: 'EQUITY', value: fmtUsd(liveEquity), accent: undefined },
     { label: 'REALIZED.PNL', value: (rpnlPositive ? '+' : '') + fmtUsd(realizedPnl), accent: rpnlPositive },
     { label: 'UNREALIZED.PNL', value: (upnlPositive ? '+' : '') + fmtUsd(unrealizedPnl), accent: upnlPositive },
-    { label: 'TOTAL.TRADES', value: String(status.total_trades ?? 0), accent: undefined },
+    { label: 'TOTAL.TRADES', value: String(wsTick?.total_trades ?? status.total_trades ?? 0), accent: undefined },
     { label: 'TOTAL.FEES', value: fmtUsd(status.total_fees), accent: undefined },
     { label: 'STATUS', value: statusLabel(status.status ?? status.phase), accent: undefined },
   ]
@@ -236,6 +293,15 @@ function SessionDetail({ sessionId, onStop, onKill }: {
             <span className="text-[10px] text-ghost tracking-[0.2em]">// {status.market}</span>
             <span className={`text-[10px] tracking-[0.15em] ${statusTextColor(status.status ?? status.phase)}`}>
               {statusLabel(status.status ?? status.phase)}
+            </span>
+            {/* D-4.3-websocket: live indicator reflects actual socket health */}
+            <span
+              className={`text-[10px] tracking-[0.15em] ${
+                ws.status === 'open' ? 'text-gain' : ws.status === 'connecting' ? 'text-amber' : 'text-ghost/40'
+              }`}
+              title={`WebSocket ${ws.status}${ws.errorCount > 0 ? ` (${ws.errorCount} errors)` : ''}`}
+            >
+              {ws.status === 'open' ? 'WS LIVE' : ws.status === 'connecting' ? 'WS CONNECTING' : 'WS OFFLINE'}
             </span>
           </div>
           {/* deployment info */}
@@ -292,6 +358,22 @@ function SessionDetail({ sessionId, onStop, onKill }: {
           >
             {parityLoading ? 'TESTING...' : 'PARITY TEST'}
           </button>
+          {/* D-1.4-ui — venue fill log upload + reconciliation */}
+          <input
+            ref={reconcileInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            onChange={handleReconcileUpload}
+            className="hidden"
+          />
+          <button
+            onClick={() => reconcileInputRef.current?.click()}
+            disabled={reconcileLoading}
+            title="Upload a venue fill CSV (ts_epoch_s,market,venue,side,size,price[,fee,order_id]) to compare with engine fills."
+            className="px-4 py-1.5 text-[10px] tracking-[0.15em] border border-terminal/40 text-terminal hover:bg-terminal/10 disabled:border-border disabled:text-ghost/30 transition-colors"
+          >
+            {reconcileLoading ? 'RECONCILING...' : 'RECONCILE FILLS'}
+          </button>
         </div>
       </div>
 
@@ -345,6 +427,74 @@ function SessionDetail({ sessionId, onStop, onKill }: {
       {parityResult?.error && (
         <div className="border border-loss/30 bg-loss/5 px-3 py-2 text-loss text-[10px]">
           <span className="text-loss/60 mr-1">[PARITY]</span>{parityResult.error}
+        </div>
+      )}
+
+      {/* reconciliation results */}
+      {reconcileResult && (
+        <div className="border border-terminal/30 bg-surface/60 p-4" style={{ animation: 'fadeUp 0.3s ease' }}>
+          <div className="flex items-baseline gap-3 mb-3">
+            <span className="font-[var(--font-display)] text-base text-white/90 italic">Fill Reconciliation</span>
+            <span className="text-[10px] tracking-[0.15em] text-ghost/60">
+              {reconcileResult.match_count}/{reconcileResult.engine_count} engine fills matched
+            </span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+              <div className="text-[8px] text-ghost/50 tracking-wider">MATCHED</div>
+              <div className="text-[12px] font-mono text-gain">{reconcileResult.match_count}</div>
+            </div>
+            <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+              <div className="text-[8px] text-ghost/50 tracking-wider">ENGINE-ONLY</div>
+              <div className={`text-[12px] font-mono ${reconcileResult.engine_only_count > 0 ? 'text-loss' : 'text-ghost/60'}`}>
+                {reconcileResult.engine_only_count}
+              </div>
+            </div>
+            <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+              <div className="text-[8px] text-ghost/50 tracking-wider">VENUE-ONLY</div>
+              <div className={`text-[12px] font-mono ${reconcileResult.venue_only_count > 0 ? 'text-amber' : 'text-ghost/60'}`}>
+                {reconcileResult.venue_only_count}
+              </div>
+            </div>
+            <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+              <div className="text-[8px] text-ghost/50 tracking-wider">VENUE FILLS</div>
+              <div className="text-[12px] font-mono text-terminal">{reconcileResult.venue_count}</div>
+            </div>
+          </div>
+          {reconcileResult.match_count > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-2">
+              <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+                <div className="text-[8px] text-ghost/50 tracking-wider">PRICE BPS p50</div>
+                <div className="text-[12px] font-mono text-terminal">{fmt(reconcileResult.price_bps_p50, 1)}</div>
+              </div>
+              <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+                <div className="text-[8px] text-ghost/50 tracking-wider">PRICE BPS p95</div>
+                <div className={`text-[12px] font-mono ${(reconcileResult.price_bps_p95 || 0) > 10 ? 'text-loss' : 'text-gain'}`}>
+                  {fmt(reconcileResult.price_bps_p95, 1)}
+                </div>
+              </div>
+              <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+                <div className="text-[8px] text-ghost/50 tracking-wider">PRICE BPS p99</div>
+                <div className="text-[12px] font-mono text-terminal">{fmt(reconcileResult.price_bps_p99, 1)}</div>
+              </div>
+              <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+                <div className="text-[8px] text-ghost/50 tracking-wider">TS Δ p50 (s)</div>
+                <div className="text-[12px] font-mono text-terminal">{fmt(reconcileResult.ts_delta_p50, 1)}</div>
+              </div>
+              <div className="bg-void/50 px-2 py-1.5 border border-border/50">
+                <div className="text-[8px] text-ghost/50 tracking-wider">TS Δ p95 (s)</div>
+                <div className="text-[12px] font-mono text-terminal">{fmt(reconcileResult.ts_delta_p95, 1)}</div>
+              </div>
+            </div>
+          )}
+          {reconcileResult.note && (
+            <div className="text-[10px] text-ghost/60 mt-3 italic">{reconcileResult.note}</div>
+          )}
+        </div>
+      )}
+      {reconcileError && (
+        <div className="border border-loss/30 bg-loss/5 px-3 py-2 text-loss text-[10px]">
+          <span className="text-loss/60 mr-1">[RECONCILE]</span>{reconcileError}
         </div>
       )}
 
@@ -555,17 +705,17 @@ function DeployPanel() {
       const strats = d.strategies || []
       setStrategies(strats)
       if (strats.length > 0 && !strategy) setStrategy(strats[0].name)
-    }).catch(() => {})
+    }).catch((e) => { console.warn("[pages/PaperTrading.tsx] fetch failed:", e) })
     fetch('/api/v1/data/markets').then(r => r.json()).then(d => {
       const raw = d.markets || []
       const mkts = raw.map((m: any) => typeof m === 'string' ? m : m.market)
       setMarkets(mkts)
       if (mkts.length > 0 && !market) setMarket(mkts[0])
-    }).catch(() => {})
+    }).catch((e) => { console.warn("[pages/PaperTrading.tsx] fetch failed:", e) })
     // Fetch venues from single source of truth
     fetch('/api/v1/system/venues').then(r => r.json()).then(d => {
       setVenues(d.venues || [])
-    }).catch(() => {})
+    }).catch((e) => { console.warn("[pages/PaperTrading.tsx] fetch failed:", e) })
   }, [isOpen])
 
   const selectedStrat = strategies.find(s => s.name === strategy)

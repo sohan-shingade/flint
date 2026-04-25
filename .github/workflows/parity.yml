@@ -1,0 +1,75 @@
+name: Parity Report
+
+# Phase 5 T5.3 — runs the parity pipeline + uploads the markdown artifact.
+# Fails the build when thresholds breach (PnL divergence > 2%, fill MAE > $5,
+# timing match < 80% — encoded in scripts/run_parity_report.py exit code).
+#
+# Triggers:
+#   - workflow_dispatch: manual (useful for quick sanity after a PR lands)
+#   - schedule: weekly (catches data-provider drift even when no code changes)
+on:
+  workflow_dispatch:
+    inputs:
+      strategy:
+        description: "Strategy name (see scripts/run_parity_report.py --list-strategies)"
+        default: "momentum_breakout"
+        type: string
+      market:
+        description: "Market symbol"
+        default: "SOL-PERP"
+        type: string
+      lookback_days:
+        description: "Lookback window in days"
+        default: "30"
+        type: string
+  schedule:
+    # 06:00 UTC every Monday
+    - cron: "0 6 * * 1"
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Flint
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev,hyperliquid]" solders
+
+      - name: Download data
+        # flint init pulls 90 days of sample data — enough for most parity runs.
+        # Scheduled runs always pull fresh; manual dispatch reuses cached data.
+        run: flint init --non-interactive || flint init || true
+
+      - name: Ensure market data
+        run: |
+          flint data download \
+            --market "${{ github.event.inputs.market || 'SOL-PERP' }}" \
+            --days "${{ github.event.inputs.lookback_days || '30' }}" \
+            || echo "download step non-fatal for parity CI"
+
+      - name: Run parity report
+        id: parity
+        run: |
+          python scripts/run_parity_report.py \
+            "${{ github.event.inputs.strategy || 'momentum_breakout' }}" \
+            "${{ github.event.inputs.market || 'SOL-PERP' }}" \
+            "${{ github.event.inputs.lookback_days || '30' }}" \
+            --seed 42
+
+      - name: Upload parity artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-report
+          path: artifacts/parity/
+          retention-days: 30

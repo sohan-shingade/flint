@@ -1,7 +1,7 @@
 """Tests for RpcBorrowBackfill (archival RPC slot-based backfill)."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from flint.providers.jupiter_borrow import RpcBorrowBackfill
 

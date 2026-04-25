@@ -8,11 +8,21 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 import duckdb
 
 from .models import BorrowSnapshot, Candle, FundingRate, OraclePrice
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .models import (
+        DexVolume,
+        Liquidation,
+        OpenInterest,
+        OrderbookSnapshot,
+        SyncMetadata,
+        WhaleTransfer,
+    )
 
 _logger = logging.getLogger("flint.store")
 
@@ -1600,6 +1610,197 @@ class FlintStore:
         with self._lock:
             self._conn.execute("DELETE FROM strategies WHERE name = ?", [name])
             return True
+
+    # -- encapsulation methods (Phase 2 T2.2) ---------------------------------
+    # CLAUDE.md rule: "Never access store._conn or store._lock from API routes —
+    # add a method to FlintStore instead." These close out the route-level leaks
+    # flagged in the 2026-04-23 audit.
+
+    def list_live_sessions(self, limit: int = 20) -> list:
+        """List recent live trading sessions (most recent first)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT session_id, strategy_name, market, venue, status, "
+                "started_at, stopped_at FROM live_sessions "
+                "ORDER BY started_at DESC LIMIT ?",
+                [limit],
+            ).fetchall()
+        return [
+            {"session_id": r[0], "strategy": r[1], "market": r[2],
+             "venue": r[3], "status": r[4], "started_at": r[5],
+             "stopped_at": r[6]}
+            for r in rows
+        ]
+
+    def list_markets_with_data(self) -> list:
+        """List every (market, resolution) pair that has candle data."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT market, resolution_s, COUNT(*) AS candle_count, "
+                "MIN(ts) AS first_ts, MAX(ts) AS last_ts "
+                "FROM candles GROUP BY market, resolution_s ORDER BY market"
+            ).fetchall()
+        return [
+            {"market": r[0], "resolution_s": r[1],
+             "candle_count": r[2], "first_ts": r[3], "last_ts": r[4]}
+            for r in rows
+        ]
+
+    def list_venues_for_market(self, market: str,
+                               exclude_venues: Optional[List[str]] = None) -> List[str]:
+        """Distinct venues that have candle data for a given market."""
+        excluded = tuple(exclude_venues or ["pyth", "default"])
+        placeholders = ",".join("?" for _ in excluded)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT DISTINCT venue FROM candles "
+                f"WHERE market = ? AND venue NOT IN ({placeholders})",
+                [market, *excluded],
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def delete_market_data(self, market: str) -> dict:
+        """Delete candles + funding + oracle + orderbook + OI + liquidations
+        + sync_metadata rows for a market. Returns per-table counts."""
+        tables = [
+            ("candles", "market"),
+            ("venue_funding_rates", "market"),
+            ("oracle_prices", "market"),
+            ("orderbook_snapshots", "market"),
+            ("open_interest", "market"),
+            ("liquidations", "market"),
+        ]
+        deleted: dict = {}
+        with self._lock:
+            for table, col in tables:
+                try:
+                    before = self._conn.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE {col} = ?",
+                        [market],
+                    ).fetchone()[0]
+                    if before > 0:
+                        self._conn.execute(
+                            f"DELETE FROM {table} WHERE {col} = ?",
+                            [market],
+                        )
+                        deleted[table] = before
+                except Exception:
+                    pass
+            try:
+                self._conn.execute(
+                    "DELETE FROM sync_metadata WHERE market = ?", [market]
+                )
+            except Exception:
+                pass
+        return deleted
+
+    def count_funding_rates(self, market: str, start_ts: int, end_ts: int) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM venue_funding_rates "
+                "WHERE market = ? AND ts >= ? AND ts <= ?",
+                [market, start_ts, end_ts],
+            ).fetchone()
+        return int(row[0] if row else 0)
+
+    def count_orderbook_snapshots(self, market: str, start_ts: int, end_ts: int) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM orderbook_snapshots "
+                "WHERE market = ? AND ts >= ? AND ts <= ?",
+                [market, start_ts, end_ts],
+            ).fetchone()
+        return int(row[0] if row else 0)
+
+    def count_open_interest(self, market: str, start_ts: int, end_ts: int) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM open_interest "
+                "WHERE market = ? AND ts >= ? AND ts <= ?",
+                [market, start_ts, end_ts],
+            ).fetchone()
+        return int(row[0] if row else 0)
+
+    def mark_running_live_sessions_interrupted(self, stopped_at: int) -> list:
+        """Startup-recovery helper: any live_session row stuck at 'running'
+        gets flipped to 'interrupted'. Returns the interrupted session rows
+        so the caller can log them."""
+        with self._lock:
+            stale = self._conn.execute(
+                "SELECT session_id, strategy_name, market, venue FROM live_sessions "
+                "WHERE status = 'running'"
+            ).fetchall()
+            if stale:
+                self._conn.execute(
+                    "UPDATE live_sessions SET status = 'interrupted', "
+                    "stopped_at = ? WHERE status = 'running'",
+                    [stopped_at],
+                )
+        return [
+            {"session_id": r[0], "strategy": r[1], "market": r[2], "venue": r[3]}
+            for r in stale
+        ]
+
+    def count_venue_candles(self, market: str, start_ts: int, end_ts: int,
+                            exclude_venues: Optional[List[str]] = None) -> int:
+        """Count candles for a market across non-excluded venues within ts range."""
+        excluded = tuple(exclude_venues or ["pyth", "default"])
+        placeholders = ",".join("?" for _ in excluded)
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT COUNT(*) FROM candles "
+                f"WHERE market = ? AND venue NOT IN ({placeholders}) "
+                f"AND ts >= ? AND ts <= ?",
+                [market, *excluded, start_ts, end_ts],
+            ).fetchone()
+        return int(row[0] if row else 0)
+
+    # ─── D-2.2-internal — lock-wrapping SQL gateways ──────────────────────
+    # Not for API/MCP use (those must use typed methods above). Storage-layer
+    # helpers in flint/journal/ and flint/paper/session_store.py go through
+    # these to avoid touching self._conn / self._lock directly.
+
+    def _sql_exec(self, sql: str, params=None) -> None:
+        """Run a write statement under the store's lock. No return value."""
+        with self._lock:
+            if params is None:
+                self._conn.execute(sql)
+            else:
+                self._conn.execute(sql, params)
+
+    def _sql_read_all(self, sql: str, params=None) -> list:
+        """Run a read query under the lock. Returns all rows as a list of
+        tuples."""
+        with self._lock:
+            cur = (self._conn.execute(sql) if params is None
+                   else self._conn.execute(sql, params))
+            return cur.fetchall()
+
+    def _sql_read_one(self, sql: str, params=None):
+        """Run a read query under the lock. Returns first row or None."""
+        with self._lock:
+            cur = (self._conn.execute(sql) if params is None
+                   else self._conn.execute(sql, params))
+            return cur.fetchone()
+
+    def _sql_read_all_with_cols(self, sql: str, params=None):
+        """Read-all + column names as list[str]. Two-tuple return."""
+        with self._lock:
+            cur = (self._conn.execute(sql) if params is None
+                   else self._conn.execute(sql, params))
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description] if cur.description else []
+            return rows, cols
+
+    def _sql_exec_many(self, stmts: list) -> None:
+        """Run several write statements atomically under the lock. Each
+        stmt is (sql, params|None)."""
+        with self._lock:
+            for sql, params in stmts:
+                if params is None:
+                    self._conn.execute(sql)
+                else:
+                    self._conn.execute(sql, params)
 
     def close(self) -> None:
         with self._lock:

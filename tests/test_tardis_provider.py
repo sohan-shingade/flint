@@ -58,7 +58,6 @@ def test_fetch_returns_empty_when_no_key():
 
 
 def test_fetch_returns_empty_for_unknown_venue():
-    import httpx
 
     class _MockClient:
         def get(self, url, **kwargs):

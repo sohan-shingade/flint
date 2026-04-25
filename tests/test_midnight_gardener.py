@@ -11,10 +11,10 @@ if not os.path.exists(_strategy_path):
     pytest.skip("midnight_gardener.py not found (user strategy, gitignored)", allow_module_level=True)
 
 from midnight_gardener import MidnightGardener
-from flint.models import Candle, Signal, Side, FundingRate
+from flint.models import Candle, FundingRate
 from flint.backtest.engine import BacktestEngine
 from flint.execution.fill_models import ClosePriceFill, FillPipeline, SlippageFill
-from flint.execution.fee_models import FlatFeeModel, ZeroFeeModel
+from flint.execution.fee_models import ZeroFeeModel
 from flint.execution.margin import MarginEngine
 
 

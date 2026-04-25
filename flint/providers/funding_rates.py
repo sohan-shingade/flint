@@ -8,12 +8,26 @@ Venues:
 - Binance Futures: fapi.binance.com (free, public)
 - Hyperliquid: api.hyperliquid.xyz (free, public)
 """
+
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+
+# Phase 1 T1.3.a — point-in-time declaration.
+# Every funding record's ts is the accrual/snapshot time as returned by the
+# source venue (exchange-time). Rates are stamped at the period close; the
+# payment flows to positions that existed AT that timestamp. No poll-time
+# leakage.
+PIT_METADATA = {  # noqa: E402
+    "candle_ts": "bar-close",  # unused; provider is funding-only
+    "funding_ts": "accrual-time",
+    "orderbook_ts": "exchange-time",  # unused
+    "oi_ts": "exchange-time",  # unused
+    "reviewed": "2026-04-23",
+}
 
 import httpx
 
@@ -288,7 +302,7 @@ class HyperliquidFundingProvider:
                     ts = _parse_hl_timestamp_ms(r.get("time", 0)) // 1000
                     if ts == 0:
                         try:
-                            from datetime import datetime, timezone
+                            from datetime import datetime
                             dt = datetime.fromisoformat(r["time"].replace("Z", "+00:00"))
                             ts = int(dt.timestamp())
                         except Exception:
@@ -556,13 +570,11 @@ class DriftFundingProvider:
                 if not records:
                     break
 
-                found_in_range = False
                 for r in records:
                     ts = int(r.get("ts", 0))
 
                     # Records are newest-first; stop if we're past our range
                     if ts < start_ts:
-                        found_in_range = True  # we've passed through the range
                         continue
                     if ts > end_ts:
                         continue
@@ -596,7 +608,6 @@ class DriftFundingProvider:
                         mark_price=mark_price,
                         index_price=index_price,
                     ))
-                    found_in_range = True
 
                 # Check if we've gone past our start timestamp
                 oldest_ts = min(int(r.get("ts", 0)) for r in records)
@@ -859,7 +870,7 @@ class DydxFundingProvider:
                 if not records:
                     break
 
-                from datetime import datetime, timezone
+                from datetime import datetime
                 found_before_start = False
                 for r in records:
                     try:

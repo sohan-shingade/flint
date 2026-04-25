@@ -1,6 +1,5 @@
 """Tests for cross-venue backtest support."""
-import pytest
-from flint.models import Candle, FundingRate, Side, Signal
+from flint.models import Candle, Side, Signal
 from flint.backtest.engine import BacktestEngine, _parse_venue_market
 from flint.strategy.base import Strategy
 

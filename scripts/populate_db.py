@@ -22,12 +22,9 @@ def main() -> None:
     resolution_s = 3600  # 1-hour candles
     market = "SOL-PERP"
 
-    start_ts = int(start.timestamp())
-    end_ts = int(end.timestamp())
-
     print(f"Populating DuckDB with {market} 1h candles")
     print(f"  Range: {start.date()} → {end.date()}")
-    print(f"  Source: Drift S3 (drift-historical-data-v2)")
+    print("  Source: Drift S3 (drift-historical-data-v2)")
     print()
 
     store = FlintStore("./data/flint.duckdb")
@@ -91,7 +88,7 @@ def main() -> None:
     print(f"  New candles added:   {total_candles:,}")
     print(f"  Months skipped:      {skipped}")
     print(f"  Errors:              {errors}")
-    print(f"  DB path: ./data/flint.duckdb")
+    print("  DB path: ./data/flint.duckdb")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from flint.backtest.drift_sim import (
-    DRIFT_MARKETS, DriftFeeModelV2, DriftMarketConfig, MevCostModel,
+    DRIFT_MARKETS, DriftFeeModelV2, MevCostModel,
 )
 from flint.models import Fill, Side
 

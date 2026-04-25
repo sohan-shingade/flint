@@ -1,8 +1,7 @@
 """Tests for EquityMonitor — real-time drawdown monitoring + kill switch."""
 import asyncio
-import pytest
 from unittest.mock import MagicMock, AsyncMock
-from flint.models import AccountState, PositionInfo, Side
+from flint.models import AccountState
 from flint.risk.monitor import EquityMonitor
 
 

@@ -179,7 +179,7 @@ function getPresetDates(preset: RangePreset): { start: string; end: string } | n
 /* ── component ─────────────────────────────────────────── */
 
 export default function BacktestLab() {
-  const { run, reset: resetBacktest, status, results, error, progress } = useBacktest()
+  const { run, reset: resetBacktest, cancel: cancelBacktest, status, results, error, progress } = useBacktest()
   const { run: runOptimize, status: optStatus, results: optResults, error: optError, progress: optProgress } = useOptimize()
   const { run: runWF, status: wfStatus, results: wfResults, error: wfError, progress: wfProgress } = useWalkForward()
   const { runs: journalRuns, refresh: refreshJournal, deleteRun: deleteJournalRun } = useJournal()
@@ -387,7 +387,7 @@ export default function BacktestLab() {
       .then(data => {
         if (data.freshness) setFreshness(data.freshness)
       })
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/BacktestLab.tsx] fetch failed:", e) })
   }, [])
 
   // Fetch available markets on mount + auto-detect best date range
@@ -412,7 +412,7 @@ export default function BacktestLab() {
           }
         }
       })
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/BacktestLab.tsx] fetch failed:", e) })
   }, [])
 
   // Validate config and check data availability on every change
@@ -1467,6 +1467,14 @@ export default function BacktestLab() {
                       {progress.pct}%
                     </div>
                   )}
+                  {/* D-4.5-ui — cancel button while a backtest is running */}
+                  <button
+                    type="button"
+                    onClick={() => cancelBacktest()}
+                    className="w-full mt-2 py-1 text-[10px] tracking-wider border border-border/60 text-ghost/70 hover:text-amber hover:border-amber transition-colors"
+                  >
+                    ✕ CANCEL
+                  </button>
                 </div>
               ) : optStatus === 'running' && optProgress ? (
                 /* ── optimization progress ─────────────── */

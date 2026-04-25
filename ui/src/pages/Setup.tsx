@@ -74,7 +74,7 @@ export default function Setup() {
           birdeye_api_key: birdeyeKey || undefined,
           helius_api_key: heliusKey || undefined,
         }),
-      }).catch(() => {})
+      }).catch((e) => { console.warn("[pages/Setup.tsx] fetch failed:", e) })
     }
   }
 

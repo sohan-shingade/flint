@@ -35,13 +35,34 @@ Read the relevant guide when working on that area. These same files power the we
 
 To update docs: edit `docs/guides/*.md`, then run `python scripts/build_docs.py` to regenerate the UI docs page.
 
+## Architecture cheat sheet
+
+`BacktestContext` (and via composition, the paper engine's `LiveContext`)
+delegates state to seven managers in `flint/execution/`:
+
+| Manager | Owns |
+|---|---|
+| `PositionManager` | Open + closed-trade dicts |
+| `CashManager` | Cash + allocator + running counters (fees / tx cost / funding) |
+| `FillRecorder` | Recorded fill list + diagnostic log |
+| `OrderQueue` | Pending limit/stop/TP queue + this-bar market queue |
+| `FundingLedger` | Per-market + per-venue funding history |
+| `BorrowLedger` | Jupiter borrow rates + paid-borrow ledger |
+| `MarketDataFeed` | Cross-market candles + orderbook + OI snapshots |
+
+Pre-trade checks flow through `flint/risk/portfolio_orchestrator.py:PortfolioMarginEngine` (composes `MarginEngine` + `VenueAllocator` + `PortfolioRiskEngine`).
+
+Event sourcing lives in `flint/portfolio/`: `event_log.py` (append-only writer), `replay.py` (`fold(events) → BookState`), `snapshots.py` (compaction). `BacktestContext` emits via `_emit(kind, payload)` when constructed with `event_log_writer + event_session_id`. Replay surface: `/api/v1/replay/{id}/{events,state,summary}` + MCP tools (`replay_summary`, `replay_state`, `list_replay_events`) + UI page at `/replay`.
+
+Service layer in `flint/services/`: `strategies.py` (single builder source), `backtest.py:run_backtest_sync`, `journal.py`, `data.py`, `paper.py`. MCP and routes both go through these — don't reach into route internals from MCP.
+
 ## Common Tasks
 
 **Add a data provider**: Create `flint/providers/my_provider.py`, inherit `DataProvider`, add to `__init__.py`, add config in `flint.yaml`.
 
 **Add an API endpoint**: Add to `flint/api/routes/`. Register router in `flint/api/main.py` if new file.
 
-**Add a strategy template**: Create in `flint/strategy/`, add to builders dict in `flint/api/routes/backtest.py`.
+**Add a strategy template**: Create in `flint/strategy/`, add to the `_BUILTIN_BUILDERS` dict in `flint/services/strategies.py` (single source of truth — both backtest and paper routes plus MCP read from it).
 
 **Modify the UI**: Edit `ui/src/`. Run `cd ui && npm run dev` for hot reload. Build: `npm run build` -> served from `ui/dist/`.
 
@@ -58,3 +79,5 @@ To update docs: edit `docs/guides/*.md`, then run `python scripts/build_docs.py`
 - Don't commit `.env` files -- they contain API keys
 - Don't put personal strategies in `strategies/user/` in git -- they're gitignored
 - User strategies can only import: flint, numpy, math, statistics, collections, dataclasses, typing, enum, abc, functools, itertools, operator
+- New BacktestContext mutations should go through the seven managers (`self._pm`, `self._cm`, `self._fr`, `self._oq`, `self._fl`, `self._bl`, `self._mdf`) — legacy `self._cash` / `self._positions` etc. are read-only property aliases kept for back-compat with tests
+- New strategy templates: edit `flint/services/strategies.py` only — the route layer reads from there

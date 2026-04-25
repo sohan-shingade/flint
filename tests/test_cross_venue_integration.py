@@ -1,11 +1,10 @@
 """Integration tests for cross-venue strategies."""
 import asyncio
-import pytest
 from unittest.mock import MagicMock, AsyncMock, PropertyMock
 
 from flint.models import (
     AccountState, Candle, Fill, FundingRate, OrderLeg,
-    PositionInfo, Side, Signal,
+    Side,
 )
 from flint.execution.live_base import LiveExecutionContext
 

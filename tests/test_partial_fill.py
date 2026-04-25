@@ -1,10 +1,9 @@
 """Tests for PartialFillStage — IOC, FOK, GTC time-in-force semantics."""
 from __future__ import annotations
 
-import pytest
 
 from flint.execution.impact import ImpactResult
-from flint.execution.partial_fill import PartialFillStage, FillDecision
+from flint.execution.partial_fill import PartialFillStage
 from flint.models import Order, OrderType, Side, TimeInForce
 
 

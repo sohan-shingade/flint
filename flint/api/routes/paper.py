@@ -3,19 +3,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel
 
-from ...strategy import (
-    MACrossoverStrategy, EMACrossoverStrategy, RSIStrategy,
-    BollingerStrategy, MomentumStrategy,
-    FundingHarvestStrategy, MeanReversionStrategy,
-    BreakoutMomentumStrategy, GridTraderStrategy,
-    DualTimeframeStrategy, VWAPReversionStrategy,
-    MACDDivergenceStrategy, ATRBreakoutStrategy,
-    MultiVenueFundingStrategy, RSIMACDComboStrategy,
-)
-from ...strategy.loader import load_user_strategy
+from ...services.strategies import build_strategy
 
 router = APIRouter()
 
@@ -35,82 +26,8 @@ class StopRequest(BaseModel):
     session_id: str
 
 
-# Strategy builders — mirrors flint/api/routes/backtest.py _build_strategy
-_BUILDERS = {
-    "ma_crossover": lambda p: MACrossoverStrategy(
-        fast_period=int(p.get("fast_period", 10)),
-        slow_period=int(p.get("slow_period", 30)),
-    ),
-    "ema_crossover": lambda p: EMACrossoverStrategy(
-        fast_period=int(p.get("fast_period", 12)),
-        slow_period=int(p.get("slow_period", 26)),
-    ),
-    "rsi": lambda p: RSIStrategy(
-        period=int(p.get("period", 14)),
-        oversold=float(p.get("oversold", 30)),
-        overbought=float(p.get("overbought", 70)),
-    ),
-    "bollinger": lambda p: BollingerStrategy(
-        period=int(p.get("period", 20)),
-        num_std=float(p.get("num_std", 2.0)),
-    ),
-    "momentum": lambda p: MomentumStrategy(
-        lookback=int(p.get("lookback", 24)),
-        threshold_pct=float(p.get("threshold_pct", 5.0)),
-    ),
-    "funding_harvest": lambda p: FundingHarvestStrategy(
-        entry_threshold=float(p.get("entry_threshold", 0.001)),
-        exit_threshold=float(p.get("exit_threshold", 0.0002)),
-        stop_loss_pct=float(p.get("stop_loss_pct", 0.05)),
-        lookback=int(p.get("lookback", 8)),
-    ),
-    "mean_reversion": lambda p: MeanReversionStrategy(
-        period=int(p.get("period", 20)),
-        entry_z=float(p.get("entry_z", 2.0)),
-        exit_z=float(p.get("exit_z", 0.5)),
-        stop_loss_pct=float(p.get("stop_loss_pct", 0.05)),
-    ),
-    "breakout_momentum": lambda p: BreakoutMomentumStrategy(),
-    "grid_trader": lambda p: GridTraderStrategy(),
-    "dual_timeframe": lambda p: DualTimeframeStrategy(),
-    "vwap_reversion": lambda p: VWAPReversionStrategy(
-        period=int(p.get("period", 20)),
-        entry_pct=float(p.get("entry_pct", 2.0)),
-        exit_pct=float(p.get("exit_pct", 0.5)),
-    ),
-    "macd_divergence": lambda p: MACDDivergenceStrategy(
-        fast=int(p.get("fast", 12)),
-        slow=int(p.get("slow", 26)),
-        signal=int(p.get("signal", 9)),
-    ),
-    "atr_breakout": lambda p: ATRBreakoutStrategy(
-        period=int(p.get("period", 20)),
-        atr_period=int(p.get("atr_period", 14)),
-        multiplier=float(p.get("multiplier", 2.0)),
-    ),
-    "multi_venue_funding": lambda p: MultiVenueFundingStrategy(
-        entry_threshold=float(p.get("entry_threshold", 0.0005)),
-        exit_threshold=float(p.get("exit_threshold", 0.0001)),
-        lookback=int(p.get("lookback", 12)),
-    ),
-    "rsi_macd_combo": lambda p: RSIMACDComboStrategy(
-        rsi_period=int(p.get("rsi_period", 14)),
-        macd_fast=int(p.get("macd_fast", 12)),
-        macd_slow=int(p.get("macd_slow", 26)),
-        macd_signal=int(p.get("macd_signal", 9)),
-        rsi_oversold=float(p.get("rsi_oversold", 30)),
-        rsi_overbought=float(p.get("rsi_overbought", 70)),
-    ),
-}
-
-
 def _build_strategy(req: StartRequest):
-    if req.code:
-        return load_user_strategy(req.code, req.params)
-    builder = _BUILDERS.get(req.strategy)
-    if builder is None:
-        return None
-    return builder(req.params or {})
+    return build_strategy(req.strategy, req.params, req.code)
 
 
 @router.post("/start")
@@ -374,3 +291,148 @@ def update_risk_config(session_id: str, body: dict, request: Request):
         ss.update_risk_config(session_id, body)
 
     return {"session_id": session_id, "risk_config": body}
+
+
+# ─── D-1.4-api — Reconciliation endpoint ─────────────────────────────────────
+
+@router.get("/{session_id}/reconciliation")
+def get_reconciliation(
+    session_id: str,
+    request: Request,
+    ts_window_s: int = 60,
+):
+    """Reconcile engine-recorded fills vs venue-reported fills.
+
+    Phase 1 T1.4 shipped scripts/reconcile_fills.py. This route wraps the
+    same matching logic around the engine fills for a given paper session
+    so the UI / MCP can surface divergence without shelling out to the CLI.
+
+    Today the endpoint returns the engine-only view: orphan count = 0 when
+    the caller has not supplied a venue fill log (that's a POST variant for
+    Phase 4 UI work). Until then the response still catches the hard
+    question — "did the engine record fills at all?" — and reports stats
+    on matched engine fills + surface for UI to compare live venue state.
+    """
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(500, "Store not available")
+
+    # Engine fills via encapsulated store method (Phase 2 T2.2).
+    engine_fills = store.get_live_fills(session_id)
+    if not engine_fills:
+        return {
+            "session_id": session_id,
+            "engine_count": 0,
+            "venue_count": 0,
+            "match_count": 0,
+            "engine_only_count": 0,
+            "venue_only_count": 0,
+            "note": "no engine fills recorded for this session",
+        }
+
+    # Side of the report the caller already owns.
+    by_side: dict = {"long": 0, "short": 0}
+    markets: set = set()
+    for f in engine_fills:
+        by_side[f.get("side", "long")] = by_side.get(f.get("side", "long"), 0) + 1
+        markets.add(f.get("market", ""))
+
+    return {
+        "session_id": session_id,
+        "engine_count": len(engine_fills),
+        "venue_count": 0,
+        "match_count": 0,
+        "engine_only_count": len(engine_fills),
+        "venue_only_count": 0,
+        "markets": sorted(markets),
+        "engine_fills_by_side": by_side,
+        "note": (
+            "POST /{session_id}/reconciliation with a venue fill log to get "
+            "price/ts deltas; see scripts/reconcile_fills.py CLI for today."
+        ),
+        "ts_window_s": ts_window_s,
+    }
+
+
+# ─── D-1.4-ui — POST variant: upload venue CSV → match against engine fills ──
+
+# Cap upload size to keep a hostile request from OOMing the server.
+_MAX_RECONCILE_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+@router.post("/{session_id}/reconciliation")
+async def post_reconciliation(
+    session_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    ts_window_s: int = 60,
+):
+    """Match engine fills against a user-uploaded venue fill CSV.
+
+    Wraps `scripts.reconcile_fills.reconcile()` over the engine fills for
+    `session_id` plus the freshly uploaded CSV. Returns the same dict
+    shape as the CLI: counts + p50/p95/p99 deltas. UI panel reads it
+    directly.
+
+    Schema for the upload (see docs/reference/custom-data-schema.md#fills):
+        ts_epoch_s,market,venue,side,size,price,fee,order_id
+
+    Errors:
+      - 400: missing columns / malformed row / file > 10 MB
+      - 500: store unavailable
+    """
+    store = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(500, "Store not available")
+
+    raw = await file.read()
+    if len(raw) > _MAX_RECONCILE_UPLOAD_BYTES:
+        raise HTTPException(
+            400,
+            f"Upload exceeds {_MAX_RECONCILE_UPLOAD_BYTES // (1024*1024)} MB cap"
+        )
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "Upload must be UTF-8 encoded CSV")
+
+    # Lazy-import the reconciler to avoid pulling argparse/etc. into the
+    # API process at startup.
+    from scripts.reconcile_fills import (
+        CSVSchemaError, Fill, parse_venue_fills_csv_text, reconcile,
+    )
+
+    try:
+        venue_fills = parse_venue_fills_csv_text(text)
+    except CSVSchemaError as e:
+        raise HTTPException(400, str(e))
+
+    raw_engine = store.get_live_fills(session_id)
+    if not raw_engine:
+        return {
+            "session_id": session_id,
+            "engine_count": 0,
+            "venue_count": len(venue_fills),
+            "match_count": 0,
+            "engine_only_count": 0,
+            "venue_only_count": len(venue_fills),
+            "note": "no engine fills recorded for this session",
+        }
+
+    engine_fills = [
+        Fill(
+            ts=r["ts"], market=r["market"],
+            venue=r.get("venue", "default"),
+            side=r["side"], size=r["size"], price=r["price"],
+            fee=r.get("fee", 0.0),
+            order_id=str(r.get("order_id", "")),
+            source="engine",
+        )
+        for r in raw_engine
+    ]
+
+    result = reconcile(engine_fills, venue_fills, ts_window_s=ts_window_s)
+    result["session_id"] = session_id
+    result["ts_window_s"] = ts_window_s
+    return result

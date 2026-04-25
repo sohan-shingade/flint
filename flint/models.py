@@ -123,6 +123,9 @@ class BacktestResult:
     jupiter_borrow_paid: float = 0.0
     borrow_payments: List = field(default_factory=list)
     margin_stats: Optional[Any] = None
+    # Phase 3 T3.2 — which engine executed this run + why Rust was skipped.
+    engine_used: str = "python"
+    fallback_reason: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

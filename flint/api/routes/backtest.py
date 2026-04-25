@@ -2,18 +2,18 @@
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 import time
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime as dt, timezone as tz
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ...backtest.engine import BacktestEngine
+from ...backtest.engine import BacktestCancelled, BacktestEngine
 from ...models import Candle
 from ...analytics.tearsheet import generate_tearsheet
 from ...analytics.monte_carlo import run_monte_carlo
@@ -21,29 +21,6 @@ from ...data.quality import check_candle_quality
 from ...providers.drift_candles import DriftCandleProvider
 from ...providers.drift_s3 import DriftS3Provider
 from ...store import FlintStore
-from ...strategy import (
-    MACrossoverStrategy,
-    EMACrossoverStrategy,
-    RSIStrategy,
-    BollingerStrategy,
-    MomentumStrategy,
-    FundingHarvestStrategy,
-    MeanReversionStrategy,
-    BreakoutMomentumStrategy,
-    GridTraderStrategy,
-    DualTimeframeStrategy,
-    VWAPReversionStrategy,
-    MACDDivergenceStrategy,
-    ATRBreakoutStrategy,
-    MultiVenueFundingStrategy,
-    RSIMACDComboStrategy,
-    FundingMeanReversionStrategy,
-    MomentumBreakoutStrategy,
-    FundingArbStrategy,
-    BasisTradeStrategy,
-    MevArbMonitor,
-)
-from ...strategy.loader import load_user_strategy, StrategyLoadError
 
 logger = logging.getLogger("flint.backtest")
 
@@ -166,125 +143,14 @@ def _auto_register_strategy(store, strategy, code, params, status):
 
 
 def _build_strategy(name: str, params: Dict, code: str = None):
-    """Instantiate a strategy by name, user file, or inline code."""
-    if code:
-        return load_user_strategy(code, params or None)
+    """Instantiate a strategy by name, user file, or inline code.
 
-    if name.startswith("user:"):
-        from pathlib import Path
-        strat_name = name[5:]
-        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_-]{0,63}$', strat_name):
-            return None
-        user_dir = Path(__file__).resolve().parents[3] / "strategies" / "user"
-        path = (user_dir / f"{strat_name}.py").resolve()
-        if not str(path).startswith(str(user_dir.resolve())):
-            return None
-        if not path.exists():
-            return None
-        return load_user_strategy(path.read_text(encoding="utf-8"), params or None)
-
-    builders = {
-        "ma_crossover": lambda p: MACrossoverStrategy(
-            fast_period=int(p.get("fast_period", 10)),
-            slow_period=int(p.get("slow_period", 30)),
-        ),
-        "ema_crossover": lambda p: EMACrossoverStrategy(
-            fast_period=int(p.get("fast_period", 12)),
-            slow_period=int(p.get("slow_period", 26)),
-        ),
-        "rsi": lambda p: RSIStrategy(
-            period=int(p.get("period", 14)),
-            oversold=float(p.get("oversold", 30)),
-            overbought=float(p.get("overbought", 70)),
-        ),
-        "bollinger": lambda p: BollingerStrategy(
-            period=int(p.get("period", 20)),
-            num_std=float(p.get("num_std", 2.0)),
-        ),
-        "momentum": lambda p: MomentumStrategy(
-            lookback=int(p.get("lookback", 24)),
-            threshold_pct=float(p.get("threshold_pct", 5.0)),
-        ),
-        "funding_harvest": lambda p: FundingHarvestStrategy(
-            entry_threshold=float(p.get("entry_threshold", 0.001)),
-            exit_threshold=float(p.get("exit_threshold", 0.0002)),
-            stop_loss_pct=float(p.get("stop_loss_pct", 0.05)),
-            lookback=int(p.get("lookback", 8)),
-        ),
-        "mean_reversion": lambda p: MeanReversionStrategy(
-            period=int(p.get("period", 20)),
-            entry_z=float(p.get("entry_z", 2.0)),
-            exit_z=float(p.get("exit_z", 0.5)),
-            stop_loss_pct=float(p.get("stop_loss_pct", 0.05)),
-        ),
-        "breakout_momentum": lambda p: BreakoutMomentumStrategy(),
-        "grid_trader": lambda p: GridTraderStrategy(),
-        "dual_timeframe": lambda p: DualTimeframeStrategy(),
-        "vwap_reversion": lambda p: VWAPReversionStrategy(
-            period=int(p.get("period", 20)),
-            entry_pct=float(p.get("entry_pct", 2.0)),
-            exit_pct=float(p.get("exit_pct", 0.5)),
-        ),
-        "macd_divergence": lambda p: MACDDivergenceStrategy(
-            fast=int(p.get("fast", 12)),
-            slow=int(p.get("slow", 26)),
-            signal=int(p.get("signal", 9)),
-        ),
-        "atr_breakout": lambda p: ATRBreakoutStrategy(
-            period=int(p.get("period", 20)),
-            atr_period=int(p.get("atr_period", 14)),
-            multiplier=float(p.get("multiplier", 2.0)),
-        ),
-        "multi_venue_funding": lambda p: MultiVenueFundingStrategy(
-            entry_threshold=float(p.get("entry_threshold", 0.0005)),
-            exit_threshold=float(p.get("exit_threshold", 0.0001)),
-            lookback=int(p.get("lookback", 12)),
-        ),
-        "rsi_macd_combo": lambda p: RSIMACDComboStrategy(
-            rsi_period=int(p.get("rsi_period", 14)),
-            macd_fast=int(p.get("macd_fast", 12)),
-            macd_slow=int(p.get("macd_slow", 26)),
-            macd_signal=int(p.get("macd_signal", 9)),
-            rsi_oversold=float(p.get("rsi_oversold", 30)),
-            rsi_overbought=float(p.get("rsi_overbought", 70)),
-        ),
-        "funding_mean_reversion": lambda p: FundingMeanReversionStrategy(
-            bb_lookback=int(p.get("bb_lookback", 24)),
-            bb_std=float(p.get("bb_std", 2.0)),
-            max_hold_hours=int(p.get("max_hold_hours", 12)),
-            position_size_pct=float(p.get("position_size_pct", 0.5)),
-            candle_resolution_s=int(p.get("candle_resolution_s", 3600)),
-        ),
-        "momentum_breakout": lambda p: MomentumBreakoutStrategy(
-            breakout_lookback=int(p.get("breakout_lookback", 20)),
-            trailing_stop_pct=float(p.get("trailing_stop_pct", 0.02)),
-            oracle_confirmation=int(p.get("oracle_confirmation", 1)),
-            candle_resolution_s=int(p.get("candle_resolution_s", 3600)),
-        ),
-        "funding_arb": lambda p: FundingArbStrategy(
-            min_spread_bps=float(p.get("min_spread_bps", 5.0)),
-            exit_spread_bps=float(p.get("exit_spread_bps", 1.0)),
-            max_hold_hours=int(p.get("max_hold_hours", 24)),
-            position_size_usd=float(p.get("position_size_usd", 1000.0)),
-            min_spread_duration=int(p.get("min_spread_duration", 1)),
-            candle_resolution_s=int(p.get("candle_resolution_s", 60)),
-        ),
-        "basis_trade": lambda p: BasisTradeStrategy(
-            entry_basis_bps=float(p.get("entry_basis_bps", 30.0)),
-            exit_basis_bps=float(p.get("exit_basis_bps", 5.0)),
-            max_hold_hours=int(p.get("max_hold_hours", 12)),
-            position_size_usd=float(p.get("position_size_usd", 1000.0)),
-            candle_resolution_s=int(p.get("candle_resolution_s", 3600)),
-        ),
-        "mev_arb_monitor": lambda p: MevArbMonitor(
-            min_profit_bps=float(p.get("min_profit_bps", 10.0)),
-            max_hops=int(p.get("max_hops", 3)),
-            alert_enabled=int(p.get("alert_enabled", 0)),
-            candle_resolution_s=int(p.get("candle_resolution_s", 60)),
-        ),
-    }
-    builder = builders.get(name)
-    return builder(params) if builder else None
+    D-4.7-full: thin wrapper around `flint.services.strategies.build_strategy`.
+    Kept as a route-local function so existing callers (loader auto-register,
+    sandbox routing) don't need to change.
+    """
+    from ...services.strategies import build_strategy
+    return build_strategy(name, params, code)
 
 
 _DEFAULTS = {
@@ -458,7 +324,7 @@ def run_backtest(req: BacktestRequest, request: Request):
                 # Fall back to S3 if API returned nothing
                 if not fetched:
                     _set_progress(run_id, phase="download", pct=30,
-                                  detail=f"API returned no data — trying Drift S3 archive...")
+                                  detail="API returned no data — trying Drift S3 archive...")
                     try:
                         s3_provider = DriftS3Provider()
                         def _on_s3_progress(done, total, date_str):
@@ -627,20 +493,76 @@ def run_backtest(req: BacktestRequest, request: Request):
                     latency_enabled=req.latency_enabled,
                 )
 
-            engine = BacktestEngine(strategy, req.initial_capital, req.fee_rate,
-                                    fill_model=fill_model,
-                                    funding_rates=funding_rates,
-                                    orderbook_snapshots=orderbook_snapshots,
-                                    open_interest=open_interest,
-                                    margin_engine=margin_eng,
-                                    capital_allocator=cap_alloc,
-                                    max_runtime_s=_MAX_BACKTEST_SECONDS)
-            if extra_candles:
-                # Multi-market: pass primary candles + extras separately
-                # so the engine doesn't pick a different primary by count
-                result = engine.run(candles, extra_markets=extra_candles)
+            # Phase 4 T4.5 — cancel_check closure polls _entries for the
+            # 'cancelled' status set by POST /{run_id}/cancel. Engine checks
+            # every 100 bars and raises BacktestCancelled; the except block
+            # below cleans up state so the concurrent slot frees immediately.
+            def _cancelled() -> bool:
+                with _state_lock:
+                    entry = _entries.get(run_id)
+                    return entry is not None and entry.status == "cancelled"
+
+            # D-2.4.b — when the strategy came from user-supplied inline code
+            # or a user:* file path, run the backtest inside a subprocess
+            # sandbox (flint/strategy/sandbox.py) so rogue code cannot hang
+            # the API process or burn memory. Built-in strategies stay
+            # in-process (trusted; well-tested). Sandbox imposes wall-clock +
+            # RSS limit enforced by multiprocessing; parent watches via pipe.
+            #
+            # Multi-market backtests (extra_markets) and margin/capital/
+            # orderbook features are not wired through sandbox yet — those
+            # paths fall back to in-process execution with a warning.
+            is_user_code = bool(req.code) or str(req.strategy).startswith("user:")
+            can_sandbox = (
+                is_user_code
+                and not extra_candles
+                and margin_eng is None
+                and cap_alloc is None
+                and not orderbook_snapshots
+                and not funding_rates  # sandbox helper ignores these today
+            )
+            if can_sandbox:
+                from ...strategy.sandbox import (
+                    run_strategy_in_sandbox,
+                    SandboxConfig,
+                )
+                code_for_sandbox = (
+                    req.code
+                    if req.code else
+                    (Path(__file__).resolve().parents[3] / "strategies" / "user"
+                     / f"{req.strategy[5:]}.py").read_text(encoding="utf-8")
+                )
+                logger.info(
+                    "Backtest %s: routing through sandbox (user-supplied code)",
+                    run_id,
+                )
+                result = run_strategy_in_sandbox(
+                    code=code_for_sandbox,
+                    candles=candles,
+                    initial_capital=req.initial_capital,
+                    fee_rate=req.fee_rate,
+                    params=req.params or {},
+                    config=SandboxConfig(
+                        timeout_s=float(_MAX_BACKTEST_SECONDS),
+                        memory_mb=1024,
+                    ),
+                )
             else:
-                result = engine.run(candles)
+                engine = BacktestEngine(strategy, req.initial_capital, req.fee_rate,
+                                        fill_model=fill_model,
+                                        funding_rates=funding_rates,
+                                        orderbook_snapshots=orderbook_snapshots,
+                                        open_interest=open_interest,
+                                        margin_engine=margin_eng,
+                                        capital_allocator=cap_alloc,
+                                        max_runtime_s=_MAX_BACKTEST_SECONDS,
+                                        cancel_check=_cancelled)
+                if extra_candles:
+                    # Multi-market: pass primary candles + extras separately
+                    # so the engine doesn't pick a different primary by count
+                    result = engine.run(candles, extra_markets=extra_candles)
+                else:
+                    result = engine.run(candles)
 
             # Phase 4: Generate tearsheet
             _set_progress(run_id, phase="tearsheet", pct=90,
@@ -675,6 +597,11 @@ def run_backtest(req: BacktestRequest, request: Request):
                 "duplicates": quality.duplicates,
                 "warnings": data_warnings,
             }
+
+            # Phase 3 T3.2 / Phase 4 T4.6 — thread engine telemetry into
+            # the API response so UI can surface which engine ran + why.
+            ts_dict["engine_used"] = getattr(result, "engine_used", None)
+            ts_dict["fallback_reason"] = getattr(result, "fallback_reason", None)
 
             # Run Monte Carlo if enough trades
             if result.total_trades >= 5:
@@ -714,6 +641,12 @@ def run_backtest(req: BacktestRequest, request: Request):
                 except Exception as journal_err:
                     logger.warning("Journal save failed: %s", journal_err)
 
+        except BacktestCancelled as ce:
+            # Phase 4 T4.5 — clean exit path for user-initiated cancellation.
+            logger.info("Backtest %s cancelled: %s", run_id, ce)
+            _set_status(run_id, "cancelled")
+            _set_result(run_id, {"error": "Cancelled by user"})
+            _set_progress(run_id, phase="cancelled", pct=0, detail=str(ce))
         except Exception as e:
             import traceback
             logger.exception("Backtest %s failed", run_id)
@@ -763,7 +696,7 @@ def list_regimes():
 @router.post("/run-regimes")
 def run_regime_backtest(request: Request, body: dict):
     """Run a separate backtest per regime. Returns an ID to poll for results."""
-    from ...regimes import get_regime, REGIMES as ALL_REGIMES
+    from ...regimes import get_regime
 
     regime_ids = body.get("regime_ids", [])
     if not regime_ids:

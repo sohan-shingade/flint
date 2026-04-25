@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from ..models import BacktestResult, Candle, Position
-from .metrics import MetricsSummary, compute_metrics
+from ..models import BacktestResult, Candle
+from .metrics import compute_metrics
 
 
 @dataclass
@@ -299,7 +299,6 @@ def _compute_instrument_exposure(
 
         for f in sorted(mkt_fills, key=lambda x: x.ts):
             fill_dir = 1 if f.side.value == "long" else -1
-            notional = f.size * f.price
 
             # Track net position
             if pos_side == 0:

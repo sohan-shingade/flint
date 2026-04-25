@@ -1,10 +1,8 @@
 """Integration test: WebSocket feeds → CandleAggregator → event-driven tick loop."""
 import asyncio
-import time
-import pytest
 from unittest.mock import MagicMock
 
-from flint.models import Candle, OrderState, Side
+from flint.models import OrderState
 from flint.execution.live_base import LiveExecutionContext
 from flint.providers.candle_aggregator import CandleAggregator
 from flint.providers.pyth_ws import PythWebSocketFeed

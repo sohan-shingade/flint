@@ -27,6 +27,16 @@ from ..execution.fill_models import FillModel, FillPipeline, OrderbookFillModel,
 from ..strategy.base import Strategy
 
 
+class RustRequiredError(RuntimeError):
+    """Raised when BacktestEngine(rust_required=True) would have fallen back
+    to Python. Phase 3 T3.2."""
+
+
+class BacktestCancelled(RuntimeError):
+    """Raised mid-run when the caller-supplied cancel_check returns True.
+    Phase 4 T4.5 — lets API routes signal running workers to exit cleanly."""
+
+
 def _parse_venue_market(key: str):
     """Parse a 'venue:market' composite key. Returns (venue, market)."""
     if ":" in key:
@@ -125,7 +135,34 @@ class BacktestEngine:
 
     Backwards compatible: v0.1 strategies returning Signal still work.
     v0.2 strategies can use ctx.market_order(), ctx.limit_order(), etc.
+
+    Preferred construction is via `BacktestEngine.from_config(cfg, strategy)`
+    where `cfg` is a `BacktestConfig` (Phase 2 T2.3). Direct kwargs remain
+    supported for one release.
     """
+
+    @classmethod
+    def from_config(cls, config, strategy: Strategy, **overrides):
+        """Construct from a `BacktestConfig` (Phase 2 T2.3).
+
+        Scalar fields flow from the config; callers can still pass FillModel
+        / FeeModel / margin-engine instances as kwargs via `overrides` when
+        they need more than the config surface exposes.
+        """
+        from .config import BacktestConfig
+
+        if not isinstance(config, BacktestConfig):
+            raise TypeError(
+                f"from_config expects BacktestConfig, got {type(config).__name__}"
+            )
+        kwargs = {
+            "initial_capital": config.initial_capital,
+            "fee_rate": config.fee_rate,
+            "position_size": config.position_size,
+            "seed": config.seed,
+        }
+        kwargs.update(overrides)
+        return cls(strategy=strategy, **kwargs)
 
     def __init__(
         self,
@@ -144,6 +181,9 @@ class BacktestEngine:
         capital_allocator=None,
         max_runtime_s: float = 300,
         venue_fill_models: Optional[Dict[str, FillModel]] = None,
+        seed: Optional[int] = None,
+        rust_required: bool = False,
+        cancel_check=None,
     ) -> None:
         self.strategy = strategy
         self.initial_capital = initial_capital
@@ -160,6 +200,18 @@ class BacktestEngine:
         self._risk_manager = risk_manager
         self._max_runtime_s = max_runtime_s
         self._venue_fill_models: Dict[str, FillModel] = venue_fill_models or {}
+        # Deterministic seed threaded through Rust + LatencyStage + MC bootstrap.
+        # None → derive from (strategy name, initial candle ts) at run time.
+        # Phase 1 T1.1.c / T1.1.e.
+        self._seed: Optional[int] = seed
+        # Phase 3 T3.2 — when True, fall-back from Rust to Python is an error.
+        # Forces callers to know when their config can't use the fast path.
+        self._rust_required: bool = rust_required
+        # Phase 4 T4.5 — caller-supplied Callable[[], bool] polled every 100
+        # bars. When True, _run_python raises BacktestCancelled. API routes
+        # pass a closure over their run-state map so cancellation POSTs
+        # actually stop the worker.
+        self._cancel_check = cancel_check
 
     def run(self, candles, extra_markets: dict = None) -> BacktestResult:
         """Run backtest.
@@ -203,35 +255,97 @@ class BacktestEngine:
                 total_trades=0, winning_trades=0, losing_trades=0,
             )
 
-        # Try Rust backend first (10-50x faster).
-        # Only use Rust for compatible configurations:
-        # - No custom fee model (must be FlatFeeModel or default)
-        # - No margin engine (Rust margin is incomplete)
-        # - No capital allocator
-        # - No risk manager
-        # - No venue-specific fill models (Rust doesn't dispatch to venue pipelines from Python yet)
-        # - No orderbook snapshots (Rust doesn't load book data from Python yet)
-        can_use_rust = (
-            isinstance(self._fee_model, FlatFeeModel)
-            and self._margin_engine is None
-            and self._capital_allocator is None
-            and self._risk_manager is None
-            and not self._venue_fill_models
-            and not self._orderbook_snapshots
-            and not self._borrow_snapshots
+        # Try Rust backend first. Each incompatibility is named explicitly so
+        # the result can report WHY the Python fallback ran (Phase 3 T3.2).
+        fill_has_tx_cost = (
+            isinstance(self._fill_model, FillPipeline)
+            and getattr(self._fill_model, "_tx_cost_model", None) is not None
         )
+        fallback_reasons: List[str] = []
+        if not isinstance(self._fee_model, FlatFeeModel):
+            fallback_reasons.append("fee_model: non-flat (needs T3.3 maker/taker in Rust)")
+        if self._margin_engine is not None:
+            fallback_reasons.append("margin_engine set (Rust margin incomplete — T3.5)")
+        if self._capital_allocator is not None:
+            fallback_reasons.append("capital_allocator set")
+        if self._risk_manager is not None:
+            fallback_reasons.append("risk_manager set")
+        if self._venue_fill_models:
+            fallback_reasons.append("venue_fill_models set")
+        if self._orderbook_snapshots:
+            fallback_reasons.append("orderbook_snapshots set (Rust orderbook fills = T3.1)")
+        if self._borrow_snapshots:
+            fallback_reasons.append("borrow_snapshots set")
+        if extra_markets:
+            fallback_reasons.append("extra_markets set (Rust cross-market = sibling PR)")
+        if fill_has_tx_cost:
+            fallback_reasons.append("FillPipeline has tx_cost_model (Rust tx_costs pending)")
+        if self._cancel_check is not None:
+            fallback_reasons.append("cancel_check callback set (Rust engine does not poll)")
+        can_use_rust = not fallback_reasons
+        fallback_reason = "; ".join(fallback_reasons) if fallback_reasons else None
+        # Volume-zero warning must be emitted regardless of engine path.
+        # Pyth price-only data has volume=0 and makes VWAP/volume-breakout indicators unreliable.
+        pre_warnings: List[str] = []
+        sample = candles[:min(100, len(candles))]
+        if sample and all(c.volume == 0 for c in sample):
+            pre_warnings.append(
+                "All candles have zero volume (Pyth price-only data). "
+                "Volume-dependent indicators (VWAP, volume breakout) will be unreliable."
+            )
+
+        # Hard-error when caller demanded Rust but config precludes it.
+        if self._rust_required and not can_use_rust:
+            raise RustRequiredError(
+                f"rust_required=True but Rust engine is not usable: {fallback_reason}"
+            )
+
         if can_use_rust:
             try:
-                return self._run_rust(candles, extra_markets)
-            except ImportError:
-                pass  # flint_core not installed — use Python
+                result = self._run_rust(candles, extra_markets)
+                result.engine_used = "rust"
+                result.fallback_reason = None
+                if pre_warnings:
+                    result.strategy_warnings = pre_warnings + list(result.strategy_warnings or [])
+                return result
+            except ImportError as e:
+                if self._rust_required:
+                    raise RustRequiredError(
+                        f"rust_required=True but flint_core not installed: {e}"
+                    )
+                # flint_core not installed — use Python
+                fallback_reason = f"flint_core not installed: {e}"
             except Exception as e:
                 import logging
                 logging.getLogger("flint.backtest").warning(
                     "Rust engine failed, falling back to Python: %s", e
                 )
+                if self._rust_required:
+                    raise RustRequiredError(
+                        f"rust_required=True but Rust engine raised: {e}"
+                    ) from e
+                fallback_reason = f"Rust engine raised {type(e).__name__}: {e}"
 
-        return self._run_python(candles, extra_markets)
+        result = self._run_python(candles, extra_markets)
+        result.engine_used = "python"
+        result.fallback_reason = fallback_reason
+        if pre_warnings:
+            result.strategy_warnings = pre_warnings + list(result.strategy_warnings or [])
+        return result
+
+    def _resolve_seed(self, candles: List[Candle]) -> int:
+        """Resolve the effective seed for this run.
+
+        If self._seed was explicitly set, use it directly. Otherwise derive a
+        deterministic-but-strategy-local seed from (strategy name, first bar ts).
+        This keeps every run reproducible-by-default without requiring callers
+        to pass a seed — matches Phase 1 T1.1.c / T1.1.e policy.
+        """
+        if self._seed is not None:
+            return int(self._seed) & 0xFFFFFFFFFFFFFFFF
+        first_ts = candles[0].ts if candles else 0
+        name = getattr(self.strategy, "name", self.strategy.__class__.__name__)
+        return abs(hash((str(name), int(first_ts)))) & 0xFFFFFFFFFFFFFFFF
 
     def _run_rust(self, candles: List[Candle], extra_markets: dict = None) -> BacktestResult:
         """Run backtest using the Rust engine core."""
@@ -255,6 +369,7 @@ class BacktestEngine:
             fee_bps=self.fee_rate * 10_000,
             fill_model=fill_type,
             slippage_bps=slippage_bps,
+            seed=self._resolve_seed(candles),
         )
 
         # Load candles
@@ -411,37 +526,36 @@ class BacktestEngine:
                 extra_cursors[mkt] = 0
         extra_histories: dict = {m: [] for m in (extra_markets or {})}
 
-        # Warn if all candle volumes are zero (Pyth price-only data)
-        volume_warnings = []
-        sample = candles[:min(100, len(candles))]
-        if sample and all(c.volume == 0 for c in sample):
-            volume_warnings.append(
-                "All candles have zero volume (Pyth price-only data). "
-                "Volume-dependent indicators (VWAP, volume breakout) will be unreliable."
-            )
-
         _deadline = _time.monotonic() + self._max_runtime_s if self._max_runtime_s > 0 else float('inf')
 
         for _ci, candle in enumerate(candles):
-            # Timeout check (every 100 candles to minimize overhead)
-            if _ci % 100 == 0 and _time.monotonic() > _deadline:
-                raise RuntimeError(
-                    f"Backtest exceeded {self._max_runtime_s:.0f}s time limit "
-                    f"({_ci:,}/{len(candles):,} candles processed)"
-                )
+            # Timeout + cancellation checks (every 100 candles to minimize overhead)
+            if _ci % 100 == 0:
+                if _time.monotonic() > _deadline:
+                    raise RuntimeError(
+                        f"Backtest exceeded {self._max_runtime_s:.0f}s time limit "
+                        f"({_ci:,}/{len(candles):,} candles processed)"
+                    )
+                if self._cancel_check is not None and self._cancel_check():
+                    raise BacktestCancelled(
+                        f"Backtest cancelled by caller at bar {_ci:,}/{len(candles):,}"
+                    )
 
-            # Advance extra market histories up to current timestamp
+            # Advance extra market histories strictly before current timestamp.
+            # Primary market sees its own current bar (history + [candle]); cross
+            # markets only see bars with ts < current, avoiding implicit
+            # simultaneity assumptions between venues. Phase 1 T1.1.g.
             if extra_markets:
                 for mkt in extra_markets:
                     sorted_candles = extra_sorted[mkt]
                     cursor = extra_cursors[mkt]
-                    while cursor < len(sorted_candles) and sorted_candles[cursor].ts <= candle.ts:
+                    while cursor < len(sorted_candles) and sorted_candles[cursor].ts < candle.ts:
                         extra_histories[mkt].append(sorted_candles[cursor])
                         cursor += 1
                     extra_cursors[mkt] = cursor
                 # Update context with current histories
                 combined = dict(extra_histories)
-                combined[candle.market] = history + [candle]  # include current
+                combined[candle.market] = history + [candle]  # primary: include current
                 ctx.set_market_histories(combined)
 
             # 1. Set current candle on context
@@ -518,17 +632,20 @@ class BacktestEngine:
             # 7. Record equity
             equity_curve.append(ctx.account.equity)
 
-        # Force-close open positions at last candle
+        # Force-close open positions at last candle.
+        # Append a distinct terminal equity point (instead of overwriting the
+        # last bar) so the mark-to-market equity at the final bar is preserved;
+        # exit fees from force-close show up as a final drop in the equity
+        # curve, which reflects realized-P&L truth without erasing the last bar.
         if candles and ctx.positions:
             ctx.close_all_positions(candles[-1])
-            equity_curve[-1] = ctx.account.equity
+            equity_curve.append(ctx.account.equity)
 
         res_s = candles[0].resolution_s if candles else 3600
-        return self._build_result(ctx, equity_curve, res_s, volume_warnings=volume_warnings)
+        return self._build_result(ctx, equity_curve, res_s)
 
-    def _build_result(self, ctx: BacktestContext, equity_curve: List[float], resolution_s: int = 3600, volume_warnings: Optional[List[str]] = None) -> BacktestResult:
+    def _build_result(self, ctx: BacktestContext, equity_curve: List[float], resolution_s: int = 3600) -> BacktestResult:
         """Build BacktestResult from context state."""
-        volume_warnings = volume_warnings or []
         trades = ctx.closed_trades
         positions = []
         for t in trades:
@@ -584,13 +701,13 @@ class BacktestEngine:
             total_fees=ctx.total_fees,
             funding_paid=ctx.total_funding,
             total_tx_costs=total_tx_costs,
-            strategy_warnings=volume_warnings + [m for m in ctx.log_messages
+            strategy_warnings=[m for m in ctx.log_messages
                                if "WARNING" in m or "LIQUIDATED" in m or "MARGIN REJECTED" in m],
             per_venue_pnl=per_venue_pnl,
             per_venue_trades=per_venue_trades_count,
             per_venue_funding_income=per_venue_funding,
             jupiter_borrow_paid=ctx.total_borrow_paid,
-            borrow_payments=ctx._borrow_payments,
+            borrow_payments=ctx.borrow_payments,
             margin_stats=self._margin_engine.stats if self._margin_engine else None,
         )
 

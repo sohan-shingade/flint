@@ -76,7 +76,7 @@ class TestDownloadDaysParam:
 
         # Should not raise 400
         try:
-            result = download_market_data(mock_request, {"market": "SOL-PERP", "days": 30})
+            download_market_data(mock_request, {"market": "SOL-PERP", "days": 30})
         except Exception as e:
             if "Invalid date range" in str(e):
                 pytest.fail(f"days=30 was rejected: {e}")
@@ -84,7 +84,6 @@ class TestDownloadDaysParam:
 
     def test_explicit_timestamps_override_days(self):
         """When both days and timestamps provided, timestamps win."""
-        import time
         from flint.api.routes.data import download_market_data
         from unittest.mock import MagicMock
 
@@ -94,7 +93,7 @@ class TestDownloadDaysParam:
         mock_request.app.state.store = mock_store
 
         try:
-            result = download_market_data(mock_request, {
+            download_market_data(mock_request, {
                 "market": "SOL-PERP",
                 "days": 30,
                 "start_ts": 1000,

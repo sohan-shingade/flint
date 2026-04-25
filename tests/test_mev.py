@@ -6,10 +6,10 @@ import pytest
 from flint.mev.arb import ArbDetector, _Edge
 from flint.mev.liquidation import LiquidationScanner, compute_liquidation_price
 from flint.mev.jit import JitDetector
-from flint.mev.bundle import BundleBuilder, Bundle, Instruction
+from flint.mev.bundle import BundleBuilder, Instruction
 from flint.mev.simulator import MevSimulator
 from flint.models import (
-    ArbRoute, LiquidationOpportunity, OrderbookLevel, OrderbookSnapshot,
+    OrderbookLevel, OrderbookSnapshot,
     PoolState, Side,
 )
 

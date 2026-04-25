@@ -1,6 +1,7 @@
 import { Routes, Route, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import AsciiBackground from './components/AsciiBackground'
+import ConnectionBanner from './components/ConnectionBanner'
 import Dashboard from './pages/Dashboard'
 import BacktestLab from './pages/BacktestLab'
 import DataExplorer from './pages/DataExplorer'
@@ -11,6 +12,7 @@ import Setup from './pages/Setup'
 import LiveMonitor from './pages/LiveMonitor'
 import FillAnalysis from './pages/FillAnalysis'
 import FundingHeatmap from './pages/FundingHeatmap'
+import Replay from './pages/Replay'
 
 const navItems = [
   { to: '/', label: 'HOME', key: '1' },
@@ -22,12 +24,24 @@ const navItems = [
   { to: '/live', label: 'LIVE', key: '7' },
   { to: '/fills', label: 'FILLS', key: '8' },
   { to: '/funding', label: 'FUNDING', key: '9' },
+  { to: '/replay', label: 'REPLAY', key: '0' },
 ]
 
 export default function App() {
   const [clock, setClock] = useState('')
+  // Phase 4 T4.6 / BUG-3 — pull live version from /api/v1/capabilities so
+  // the footer never drifts from pyproject. Falls back to "?.?.?" if probe
+  // fails (ConnectionBanner surfaces the connectivity error separately).
+  const [version, setVersion] = useState('?.?.?')
   const navigate = useNavigate()
   const location = useLocation()
+
+  useEffect(() => {
+    fetch('/api/v1/capabilities')
+      .then(r => r.json())
+      .then(d => { if (d?.version) setVersion(String(d.version)) })
+      .catch(err => { console.warn('capabilities probe failed:', err) })
+  }, [])
 
   useEffect(() => {
     const tick = () => {
@@ -60,12 +74,17 @@ export default function App() {
           navigate('/setup', { replace: true })
         }
       })
-      .catch(() => {})
+      .catch(err => {
+        // Phase 4 T4.2 — ConnectionBanner handles user-facing signaling;
+        // log here so devtools still shows the failure cause.
+        console.warn('status probe failed:', err)
+      })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
     <div className="min-h-screen relative">
+      <ConnectionBanner />
       <AsciiBackground />
 
       {/* top border accent line */}
@@ -116,6 +135,7 @@ export default function App() {
           <Route path="/live" element={<LiveMonitor />} />
           <Route path="/fills" element={<FillAnalysis />} />
           <Route path="/funding" element={<FundingHeatmap />} />
+          <Route path="/replay" element={<Replay />} />
           <Route path="/setup" element={<Setup />} />
         </Routes>
       </main>
@@ -123,7 +143,7 @@ export default function App() {
       {/* footer */}
       <footer className="relative z-10 border-t border-border py-3 px-6">
         <div className="max-w-[1400px] mx-auto flex items-center justify-between text-[10px] text-ghost/70 tracking-wider">
-          <span>FLINT v0.3.0</span>
+          <span>FLINT v{version}</span>
           <span className="font-[var(--font-display)] italic text-[11px] text-ghost/60">
             Strike alpha on Solana
           </span>

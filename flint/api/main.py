@@ -7,15 +7,15 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal, system
+from .routes import backtest, strategies, data, mev, user_strategies, collector, paper, optimization, journal, system, replay
 from .routes.live import router as live_router
 from .routes.backtest import configure_concurrency
-from ..config import FlintConfig, load_config
+from ..config import load_config
 from ..store import FlintStore
 from ..collector.service import CollectorService
 from ..paper.engine import PaperTradingEngine
@@ -63,27 +63,20 @@ async def lifespan(app: FastAPI):
         paper_engine.set_event_loop(asyncio.get_running_loop())
         paper_engine.resume_sessions()
         app.state.paper_engine = paper_engine
+        # ws_manager is constructed below; wire it onto the engine
+        # after both exist so per-bar broadcasts can reach clients.
+        # D-4.3-websocket slice 2.
 
         # Mark stale live sessions as interrupted (they can't auto-resume
         # because live trading requires venue credentials and connections)
         try:
-            with store._lock:
-                stale = store._conn.execute(
-                    "SELECT session_id, strategy_name, market, venue FROM live_sessions "
-                    "WHERE status = 'running'"
-                ).fetchall()
-                if stale:
-                    store._conn.execute(
-                        "UPDATE live_sessions SET status = 'interrupted', "
-                        "stopped_at = ? WHERE status = 'running'",
-                        [int(time.time())],
-                    )
-                    for s in stale:
-                        logger.warning(
-                            "Live session %s (%s on %s/%s) marked interrupted — "
-                            "redeploy manually via the Live Trading page",
-                            s[0], s[1], s[2], s[3],
-                        )
+            stale = store.mark_running_live_sessions_interrupted(int(time.time()))
+            for s in stale:
+                logger.warning(
+                    "Live session %s (%s on %s/%s) marked interrupted — "
+                    "redeploy manually via the Live Trading page",
+                    s["session_id"], s["strategy"], s["market"], s["venue"],
+                )
         except Exception as e:
             logger.debug("Live session cleanup: %s", e)
 
@@ -95,6 +88,10 @@ async def lifespan(app: FastAPI):
 
         ws_manager = ConnectionManager()
         app.state.ws_manager = ws_manager
+        # D-4.3-websocket slice 2: thread the manager into the paper
+        # engine so per-bar equity ticks reach `paper:{session_id}`
+        # subscribers.
+        paper_engine.ws_manager = ws_manager
 
         logger.info("Flint API started (collector=%s)", config.collector_enabled)
     except Exception as exc:
@@ -152,6 +149,8 @@ app.include_router(collector.router, prefix="/api/v1/collector", tags=["collecto
 app.include_router(paper.router, prefix="/api/v1/paper", tags=["paper"])
 app.include_router(optimization.router, prefix="/api/v1/optimize", tags=["optimize"])
 app.include_router(journal.router, prefix="/api/v1/journal", tags=["journal"])
+# D-6.4-replay slice 5: read surface for the portfolio event log + replay primitive.
+app.include_router(replay.router, prefix="/api/v1/replay", tags=["replay"])
 app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
 app.include_router(live_router)
 
@@ -159,6 +158,16 @@ app.include_router(live_router)
 @app.get("/api/v1/health")
 def health():
     return {"status": "ok", "service": "flint"}
+
+
+@app.get("/api/v1/capabilities")
+def capabilities_root(request: Request):
+    """Phase 4 T4.6 — alias for GET /api/v1/system/capabilities at root.
+
+    UI + MCP clients probe this to feature-flag missing surface.
+    """
+    from .routes.system import get_capabilities
+    return get_capabilities(request)
 
 
 # ─── Serve built UI static files ───────────────────────────────
@@ -208,15 +217,45 @@ if _UI_DIST.exists() and (_UI_DIST / "index.html").exists():
     logger.info("Serving UI from %s", _UI_DIST)
 
 
-@app.websocket("/ws/{channel}")
-async def websocket_endpoint(websocket: WebSocket, channel: str = "all"):
+async def _ws_loop(websocket: WebSocket, channel: str) -> None:
+    """Shared receive-loop for any /ws endpoint. Pulls `?since=<seq>`
+    from the query string for replay-on-reconnect."""
     manager = getattr(websocket.app.state, "ws_manager", None)
     if manager is None:
         await websocket.close()
         return
-    await manager.connect(websocket, channel)
+    since_raw = websocket.query_params.get("since")
+    since: int | None = None
+    if since_raw is not None:
+        try:
+            since = int(since_raw)
+        except ValueError:
+            since = None
+    await manager.connect(websocket, channel, since_seq=since)
     try:
         while True:
             await websocket.receive_text()  # keep alive
     except WebSocketDisconnect:
         manager.disconnect(websocket, channel)
+
+
+@app.websocket("/ws/paper/{session_id}")
+async def websocket_paper(websocket: WebSocket, session_id: str):
+    """D-4.3-websocket: per-session paper-trading stream.
+    Channel name = `paper:{session_id}`. Server emits equity ticks +
+    last-trade events here; client subscribes via useWebSocket."""
+    await _ws_loop(websocket, f"paper:{session_id}")
+
+
+@app.websocket("/ws/live/{session_id}")
+async def websocket_live(websocket: WebSocket, session_id: str):
+    """D-4.3-websocket: per-session live-trading stream.
+    Channel name = `live:{session_id}`."""
+    await _ws_loop(websocket, f"live:{session_id}")
+
+
+@app.websocket("/ws/{channel}")
+async def websocket_endpoint(websocket: WebSocket, channel: str = "all"):
+    """Legacy generic-channel endpoint. New clients should use the
+    paper/live-specific routes above."""
+    await _ws_loop(websocket, channel)

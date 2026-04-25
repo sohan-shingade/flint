@@ -112,6 +112,11 @@ pub struct FillResult {
     pub latency_ms: f64,
     pub impact_bps: f64,
     pub tx_cost: f64,
+    /// D-3.3: true when the fill was a resting-order (passive) fill, i.e.
+    /// a pending limit order that was taken by another participant. False
+    /// for market orders and for limit orders that cross the book on
+    /// submission. Drives maker-rebate vs taker-fee selection.
+    pub is_maker: bool,
 }
 
 /// Funding rate record.

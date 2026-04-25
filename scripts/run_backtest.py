@@ -55,7 +55,7 @@ def main() -> None:
 
     print(f"\n{'='*50}")
     print(f"  Strategy:       {strategy.name}")
-    print(f"  Market:         SOL-PERP (Drift)")
+    print("  Market:         SOL-PERP (Drift)")
     print(f"  Period:         {datetime.fromtimestamp(start_ts, tz=timezone.utc).date()} → {datetime.fromtimestamp(end_ts, tz=timezone.utc).date()}")
     print(f"  Resolution:     {resolution_s // 3600}h candles")
     print(f"  Candles:        {len(candles)}")

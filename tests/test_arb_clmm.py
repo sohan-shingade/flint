@@ -1,5 +1,4 @@
 """Tests for ArbDetector CLMM integration."""
-import pytest
 from flint.models import PoolState
 from flint.mev.arb import ArbDetector
 from flint.mev.clmm import CLMMPool, TickRange

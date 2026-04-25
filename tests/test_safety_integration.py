@@ -1,7 +1,5 @@
 """Integration test: safety rails end-to-end."""
 import asyncio
-import time
-import pytest
 from unittest.mock import MagicMock, AsyncMock
 
 from flint.models import Candle, Fill, OrderState, Side, PositionInfo

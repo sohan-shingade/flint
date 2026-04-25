@@ -1,6 +1,20 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { useLiveMonitor, useLiveSessions } from '../hooks/useLiveMonitor'
+import { useWebSocket } from '../hooks/useWebSocket'
+
+/** D-4.3-websocket: payload shape LiveExecutionContext broadcasts. */
+interface LiveWsFill {
+  type: 'fill' | 'ping'
+  order_id?: string
+  market?: string
+  venue?: string
+  side?: string
+  price?: number
+  size?: number
+  fee?: number
+  ts?: number
+}
 
 /* ── helpers ─────────────────────────────────────────────── */
 
@@ -55,7 +69,38 @@ export default function LiveMonitor() {
   const [selectedId, setSelectedId] = useState('')
 
   const activeId = selectedId || (sessions.length > 0 ? sessions[0].session_id : '')
-  const { equity, fills, error } = useLiveMonitor(activeId)
+  const { equity, fills: polledFills, error } = useLiveMonitor(activeId)
+
+  // D-4.3-websocket: subscribe to /ws/live/{id} for real-time fill
+  // events. Merge into the polled fills list, deduping by order_id +
+  // ts so the same fill doesn't appear twice when poll + WS race.
+  const ws = useWebSocket<LiveWsFill>(`/ws/live/${activeId}`, {
+    enabled: !!activeId,
+  })
+  const [wsFills, setWsFills] = useState<any[]>([])
+  useEffect(() => {
+    if (ws.data?.type === 'fill') {
+      setWsFills((prev) => [...prev, ws.data as any])
+    }
+  }, [ws.data])
+  // Reset WS-fill buffer when the selected session changes.
+  useEffect(() => {
+    setWsFills([])
+  }, [activeId])
+
+  const fills = (() => {
+    if (wsFills.length === 0) return polledFills
+    const seen = new Set(polledFills.map((f) => `${f.order_id}|${f.ts}`))
+    const merged = [...polledFills]
+    for (const f of wsFills) {
+      const key = `${f.order_id}|${f.ts}`
+      if (!seen.has(key)) {
+        merged.push(f)
+        seen.add(key)
+      }
+    }
+    return merged.sort((a, b) => a.ts - b.ts)
+  })()
 
   const activeSession = sessions.find(s => s.session_id === activeId)
 
@@ -75,6 +120,17 @@ export default function LiveMonitor() {
       <div className="flex items-baseline gap-4">
         <h1 className="font-[var(--font-display)] text-2xl text-white/90 italic">Live</h1>
         <span className="text-[10px] text-ghost tracking-[0.2em]">// LIVE TRADING MONITOR</span>
+        {/* D-4.3-websocket: per-session WS health */}
+        {activeId && (
+          <span
+            className={`text-[10px] tracking-[0.15em] ${
+              ws.status === 'open' ? 'text-gain' : ws.status === 'connecting' ? 'text-amber' : 'text-ghost/40'
+            }`}
+            title={`WebSocket ${ws.status}${ws.errorCount > 0 ? ` (${ws.errorCount} errors)` : ''}`}
+          >
+            {ws.status === 'open' ? 'WS LIVE' : ws.status === 'connecting' ? 'WS CONNECTING' : 'WS OFFLINE'}
+          </span>
+        )}
         {error && <span className="text-[10px] text-loss ml-auto">ERR: {error}</span>}
       </div>
 

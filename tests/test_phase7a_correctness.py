@@ -1,7 +1,6 @@
 """Phase 7A correctness tests — strategy catalog must match backtest builders."""
 from __future__ import annotations
 
-import pytest
 
 from flint.api.routes.backtest import _build_strategy, _DEFAULTS
 from flint.api.routes.strategies import list_strategies

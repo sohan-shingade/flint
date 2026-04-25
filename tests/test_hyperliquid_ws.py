@@ -1,9 +1,7 @@
 """Tests for HyperliquidWebSocketFeed — mocked, no real connections."""
 import asyncio
-import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-from flint.models import Candle
 from flint.providers.hyperliquid_ws import HyperliquidWebSocketFeed
 
 

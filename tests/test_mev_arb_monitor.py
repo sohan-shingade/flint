@@ -1,6 +1,5 @@
 """Tests for MevArbMonitor strategy."""
-import pytest
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from flint.models import Candle, Signal
 from flint.strategy.mev_arb_monitor import MevArbMonitor

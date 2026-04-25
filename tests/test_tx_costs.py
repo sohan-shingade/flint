@@ -1,5 +1,4 @@
 """Tests for CostEstimate, TxCostModel implementations."""
-import pytest
 from flint.execution.tx_costs import (
     CostEstimate, SolanaTxCostModel, HyperliquidTxCostModel,
     CexTxCostModel, get_tx_cost_model,

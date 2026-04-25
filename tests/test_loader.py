@@ -1,6 +1,5 @@
 """Tests for dynamic strategy loader with AST validation."""
-import pytest
-from flint.strategy.loader import load_user_strategy, validate_strategy_code, StrategyLoadError
+from flint.strategy.loader import load_user_strategy, validate_strategy_code
 
 
 VALID_STRATEGY = '''

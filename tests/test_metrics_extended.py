@@ -1,6 +1,5 @@
 """Tests for extended metrics: turnover_annualized, calmar_ratio."""
-import pytest
-from flint.analytics.metrics import compute_metrics, MetricsSummary
+from flint.analytics.metrics import compute_metrics
 from flint.models import BacktestResult, Position, Fill, Side
 
 

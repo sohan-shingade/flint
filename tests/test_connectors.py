@@ -8,11 +8,11 @@ import httpx
 import pytest
 
 from flint.connectors.drift.client import DriftConnector, _KNOWN_PERP_MARKETS
-from flint.connectors.drift.types import DriftPerpMarket, DriftUserPosition
+from flint.connectors.drift.types import DriftUserPosition
 from flint.connectors.drift.stream import DriftPoller
 from flint.connectors.jupiter.client import JupiterConnector
-from flint.models import Order, OrderbookLevel, OrderbookSnapshot, Side, OrderType
-from flint.providers.drift_api import _PRICE_PRECISION, _BASE_PRECISION
+from flint.models import Order, Side, OrderType
+from flint.providers.drift_api import _PRICE_PRECISION
 
 
 # -- Drift types ---------------------------------------------------------------

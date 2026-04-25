@@ -5,8 +5,8 @@ from typing import Dict, List, Optional
 
 import httpx
 
-from ...models import MarketInfo, Order, OrderbookSnapshot, Side
-from ...providers.jupiter import JupiterProvider, SOL_MINT, USDC_MINT
+from ...models import MarketInfo, Order, OrderbookSnapshot
+from ...providers.jupiter import JupiterProvider
 from ..base import BaseConnector
 
 # Jupiter doesn't have a traditional orderbook, but we can use quotes

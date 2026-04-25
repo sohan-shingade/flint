@@ -1,7 +1,6 @@
 """Tests for per-venue fill model dispatch: registry + engine integration."""
 from __future__ import annotations
 
-import pytest
 
 from flint.execution.fill_registry import create_fill_model, create_venue_fill_models
 from flint.execution.fill_drift import DriftFillModel
@@ -11,7 +10,7 @@ from flint.execution.fill_cex import BinanceFillModel, OkxFillModel, BybitFillMo
 from flint.execution.fill_models import FillPipeline, FillModel
 from flint.execution.backtest_context import BacktestContext
 from flint.backtest.engine import BacktestEngine
-from flint.models import Candle, Order, OrderType, Side, Fill
+from flint.models import Candle, Order, Side, Fill
 
 
 # ---------------------------------------------------------------------------

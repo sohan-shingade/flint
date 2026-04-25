@@ -1,8 +1,6 @@
 """Tests for HyperliquidCandleProvider — mocked HTTP."""
-import pytest
 from unittest.mock import patch, MagicMock
 
-from flint.models import Candle
 from flint.providers.hyperliquid_candles import HyperliquidCandleProvider
 
 

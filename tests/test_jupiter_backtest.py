@@ -1,5 +1,4 @@
 """Tests for Task 6: BacktestContext borrow rate tracking."""
-import pytest
 
 from flint.execution.backtest_context import BacktestContext
 from flint.models import BorrowSnapshot

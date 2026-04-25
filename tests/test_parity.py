@@ -1,6 +1,5 @@
 """Tests for ParityTest -- backtest vs paper comparison."""
-import pytest
-from flint.models import Candle, Side
+from flint.models import Candle
 from flint.backtest.parity import ParityTest, ParityReport
 
 

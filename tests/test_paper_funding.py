@@ -1,7 +1,6 @@
 """Tests for paper trading funding rate application."""
 import os
 import tempfile
-import pytest
 
 from flint.execution.paper_broker import PaperBroker
 

@@ -1,6 +1,5 @@
 """Tests for HyperliquidClient — mocked HTTP, no real connections."""
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from flint.connectors.hyperliquid import HyperliquidClient

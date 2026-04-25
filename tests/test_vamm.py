@@ -1,5 +1,4 @@
 """Tests for VammCurve constant-product math."""
-import pytest
 from flint.execution.vamm import VammCurve, VammAccuracyReport, DEFAULT_SQRT_K
 
 class TestVammCurveConstruction:

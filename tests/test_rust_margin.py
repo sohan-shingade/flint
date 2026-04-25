@@ -60,7 +60,7 @@ class TestPerVenueMargin:
             name="default", initial_margin=0.10, maintenance_margin=0.05)}
         engine = MarginEngine(venue_configs=configs)
 
-        from flint.models import Order, OrderType, PositionInfo
+        from flint.models import Order, OrderType
         order = Order(market="SOL-PERP", side=Side.LONG,
                       order_type=OrderType.MARKET, size=1000.0,
                       order_id="t1", ts=0)
@@ -122,7 +122,5 @@ class TestLiquidationInBacktest:
             margin_engine=margin_eng)
         result = engine.run(candles)
 
-        # Should have strategy warnings about liquidation or margin
-        has_liq_warning = any("LIQUIDATED" in w for w in result.strategy_warnings)
         # Position should have been force-closed one way or another
         assert result.total_trades >= 1

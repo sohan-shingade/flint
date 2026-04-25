@@ -1,7 +1,6 @@
 """Tests for Phase 7c analytics additions."""
 from __future__ import annotations
 
-import pytest
 from flint.models import Candle, Signal
 from flint.strategy.base import Strategy
 
@@ -116,7 +115,7 @@ class TestMarginTrackingMetrics:
         assert result.margin_stats is None
 
     def test_update_stats_tracks_leverage(self):
-        from flint.execution.margin import MarginEngine, MarginStats
+        from flint.execution.margin import MarginEngine
         from flint.models import PositionInfo, Side
         engine = MarginEngine()
         pos = PositionInfo(

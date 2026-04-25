@@ -184,16 +184,17 @@ impl BacktestRunner {
 
     /// Finalize: close all positions, compute metrics.
     pub fn finish(&mut self) -> EngineResult {
-        // Force-close all open positions at last candle
+        // Force-close all open positions at last candle.
+        // Append terminal equity (rather than overwriting) so mark-to-market
+        // final-bar equity is preserved; exit fees from force-close surface
+        // as a visible final drop. Matches Python engine behavior
+        // (flint/backtest/engine.py) — Phase 1 T1.1.f.
         if !self.candles.is_empty() && !self.pos_mgr.positions.is_empty() {
             let last = self.candles.last().expect("candles non-empty checked above");
             let mut prices = HashMap::new();
             prices.insert(last.market_id, last.close);
-            self.pos_mgr.close_all(&prices, last.ts);
-            // Update last equity entry
-            if let Some(last_eq) = self.equity_curve.last_mut() {
-                *last_eq = self.pos_mgr.equity();
-            }
+            self.pos_mgr.close_all(&prices, last.ts, &self.config.fee_model);
+            self.equity_curve.push(self.pos_mgr.equity());
         }
 
         let trades = &self.pos_mgr.closed_trades;

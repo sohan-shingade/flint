@@ -1,6 +1,5 @@
 """Tests for CLMMPool tick-range model."""
 import math
-import pytest
 from flint.mev.clmm import TickRange, CLMMPool
 
 class TestTickRange:

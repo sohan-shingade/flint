@@ -24,7 +24,16 @@ class LatencyStage:
         self._base = base_latency_s
         self._jitter = latency_jitter_s
         self._enabled = enabled
-        self._rng = random.Random(seed) if seed is not None else random.Random()
+        # Deterministic default: seed=None falls back to 0, not system time.
+        # Callers that want unseeded behavior must pass seed=-1 explicitly
+        # (we map -1 → unseeded; any int ≥ 0 seeds the RNG reproducibly).
+        # Phase 1 T1.1.e — every RNG path must be seedable by default.
+        if seed is None:
+            self._rng = random.Random(0)
+        elif seed == -1:
+            self._rng = random.Random()
+        else:
+            self._rng = random.Random(seed)
 
     def compute_eligible_ts(self, order: Order) -> int:
         """Compute the earliest timestamp at which this order can fill."""

@@ -50,12 +50,12 @@ export default function Dashboard() {
     fetch('/api/v1/data/markets')
       .then((r) => r.json())
       .then((d) => setMarkets(d.markets || []))
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/Dashboard.tsx] fetch failed:", e) })
 
     fetch('/api/v1/journal/runs?limit=200')
       .then((r) => r.json())
       .then((d) => setJournalRuns(d.runs || d || []))
-      .catch(() => {})
+      .catch((e) => { console.warn("[pages/Dashboard.tsx] fetch failed:", e) })
   }, [])
 
   // Keyboard nav handled globally by App.tsx

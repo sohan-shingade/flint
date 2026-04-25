@@ -1,7 +1,7 @@
 """Tests for LiveHyperliquidContext — mocked, no real connections."""
 import asyncio
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock
 
 from flint.models import Side, OrderType, OrderState
 

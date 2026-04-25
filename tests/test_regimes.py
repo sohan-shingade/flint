@@ -6,10 +6,8 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from flint.regimes import (
-    REGIME_MAP,
     REGIME_TYPES,
     REGIMES,
-    Regime,
     get_all_regime_ids,
     get_regime,
     get_regimes_by_type,

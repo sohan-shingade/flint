@@ -5,10 +5,9 @@ Builds a directed graph of pools and detects negative-weight cycles
 """
 from __future__ import annotations
 
-import math
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Set
 
 from ..models import ArbRoute, PoolState
 

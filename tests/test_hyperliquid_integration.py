@@ -1,9 +1,8 @@
 """Integration tests for Hyperliquid — end-to-end flows with mocks."""
 import asyncio
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from flint.models import Candle, Fill, Order, OrderType, OrderState, PositionInfo, Side
+from flint.models import Candle, Side
 from flint.store import FlintStore
 
 

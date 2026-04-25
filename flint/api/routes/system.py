@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import time
 import uuid
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -39,6 +38,42 @@ def _get_env_path() -> str:
 
 
 def _get_version() -> str:
+    """Return the installed Flint version.
+
+    Preference order:
+      1. pyproject.toml at repo root (authoritative source of truth)
+      2. importlib.metadata for 'flint-trading' (the actual distribution name)
+      3. importlib.metadata for legacy 'flint' package
+      4. "0.0.0" fallback
+
+    Prior behavior (pkg_version("flint") only) returned stale egg-info from
+    a wrongly-named package and produced 3-way version drift across
+    pyproject / API / UI. BUG-3 from the 2026-04-24 smoke run.
+    """
+    # 1. pyproject.toml — walk up from this file to the repo root.
+    try:
+        try:
+            import tomllib  # Python 3.11+
+        except ImportError:
+            import tomli as tomllib  # type: ignore
+        here = Path(__file__).resolve()
+        for parent in [here] + list(here.parents):
+            candidate = parent / "pyproject.toml"
+            if candidate.is_file():
+                with open(candidate, "rb") as f:
+                    data = tomllib.load(f)
+                v = (data.get("project") or {}).get("version")
+                if v:
+                    return str(v)
+                break
+    except Exception:
+        pass
+    # 2. Installed dist "flint-trading"
+    try:
+        return pkg_version("flint-trading")
+    except Exception:
+        pass
+    # 3. Legacy dist "flint"
     try:
         return pkg_version("flint")
     except Exception:
@@ -52,6 +87,48 @@ def system_status(request: Request):
     if store is not None:
         has_data = store.has_candles()
     return SystemStatus(initialized=has_data, version=_get_version())
+
+
+@router.get("/capabilities")
+def get_capabilities(request: Request):
+    """Feature matrix for UI + MCP clients.
+
+    Phase 4 T4.6. Stable contract — UI feature-flags hidden surface when a
+    flag is False; MCP clients can detect missing server features instead
+    of failing at call time.
+    """
+    from ...backtest.rust_capabilities import rust_capabilities
+
+    rust_caps = rust_capabilities()
+    rust_available = rust_caps.get("engine") == "rust"
+    return {
+        "version": _get_version(),
+        "api_version": "v1",
+        "engine": {
+            "rust_available": rust_available,
+            "rust_capabilities": rust_caps,
+        },
+        "features": {
+            # Phase-shipped surface
+            "custom_strategies": True,
+            "optimization": True,
+            "walk_forward": True,
+            "parity_test": True,
+            "reconciliation_cli": True,   # T1.4 CLI; API endpoint = D-1.4-api
+            "pit_audit": True,            # T1.3 CLI
+            "custom_data_ingest": True,   # T1.6
+            "calibration_cli": True,      # T3.6
+            "mev_scanning": True,         # routes exist, user-supplied pools
+            # Surface still building
+            "live_trading_api": False,    # 4 read-only stubs only; Phase 6.5
+            "paper_reconciliation_api": False,  # D-1.4-api
+            "websocket_streams": False,   # D-4.3-websocket
+        },
+        "limits": {
+            "max_concurrent_backtests": 5,
+            "backtest_timeout_s": 300,
+        },
+    }
 
 
 @router.post("/config", response_model=ConfigResponse)
