@@ -9,6 +9,7 @@ use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
 use engine::fees::FeeModel;
+use engine::tx_costs::{TxCostModel as RustTxCostModel, Urgency};
 use runner::{BacktestRunner, RunConfig};
 use types::*;
 
@@ -348,7 +349,7 @@ fn capabilities(py: Python<'_>) -> PyResult<PyObject> {
     // Feature flags — the Python-side can_use_rust gate mirrors these.
     d.set_item("supports_partial_fills", false)?;   // T3.4
     d.set_item("supports_latency_stage", false)?;   // T3.4
-    d.set_item("supports_tx_costs", false)?;        // Phase 1 T1.1.b
+    d.set_item("supports_tx_costs", true)?;         // D-3.4-rust
     d.set_item("supports_orderbook_walk", false)?;  // T3.1 Rust port
     d.set_item("supports_cross_market", false)?;    // Phase 2 follow-up
     d.set_item("supports_multi_venue_margin", false)?;  // T3.5
@@ -361,10 +362,99 @@ fn capabilities(py: Python<'_>) -> PyResult<PyObject> {
     Ok(d.into())
 }
 
+// ----- TxCostModel PyO3 bindings (D-3.4-rust) -----
+//
+// The Python side exposes three concrete classes under
+// `flint.execution.tx_costs`. Rather than mirror the full class
+// hierarchy in PyO3 (three #[pyclass]es all returning the same dict),
+// this wrapper exposes a single factory + `.estimate()` method that
+// dispatches on venue. `test_rust_tx_cost_parity.py` verifies the
+// outputs match the Python models component-by-component.
+
+/// PyO3 wrapper around `engine::tx_costs::TxCostModel`.
+#[pyclass(name = "TxCostModel")]
+struct PyTxCostModel {
+    inner: RustTxCostModel,
+}
+
+#[pymethods]
+impl PyTxCostModel {
+    /// Construct from a venue name. Falls back to the CEX model for
+    /// unknown venues — matches the Python `get_tx_cost_model()`
+    /// factory 1:1.
+    #[staticmethod]
+    fn for_venue(venue: &str) -> Self {
+        PyTxCostModel { inner: RustTxCostModel::for_venue(venue) }
+    }
+
+    /// Drift / Solana defaults (5 bps taker, 5_000 lamports priority,
+    /// 10_000 lamports Jito tip, $150 SOL).
+    #[staticmethod]
+    #[pyo3(signature = (priority_fee_lamports=5_000, jito_tip_lamports=10_000, sol_price_usd=150.0, exchange_fee_bps=5.0, historical_p50=None, historical_p90=None))]
+    fn solana(
+        priority_fee_lamports: u64,
+        jito_tip_lamports: u64,
+        sol_price_usd: f64,
+        exchange_fee_bps: f64,
+        historical_p50: Option<u64>,
+        historical_p90: Option<u64>,
+    ) -> Self {
+        PyTxCostModel {
+            inner: RustTxCostModel::Solana {
+                priority_fee_lamports,
+                jito_tip_lamports,
+                sol_price_usd,
+                exchange_fee_bps,
+                historical_p50,
+                historical_p90,
+            },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (l1_cost_usd=0.001, exchange_fee_bps=3.5))]
+    fn hyperliquid(l1_cost_usd: f64, exchange_fee_bps: f64) -> Self {
+        PyTxCostModel {
+            inner: RustTxCostModel::Hyperliquid { l1_cost_usd, exchange_fee_bps },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (exchange_fee_bps=5.0))]
+    fn cex(exchange_fee_bps: f64) -> Self {
+        PyTxCostModel {
+            inner: RustTxCostModel::Cex { exchange_fee_bps },
+        }
+    }
+
+    /// Estimate cost for a trade. Returns a dict with the same keys
+    /// as Python `CostEstimate.to_dict()`: exchange_fee, network_fee,
+    /// bundle_tip, impact_est, total.
+    #[pyo3(signature = (market, size, price, urgency="normal"))]
+    fn estimate(
+        &self,
+        py: Python<'_>,
+        market: &str,
+        size: f64,
+        price: f64,
+        urgency: &str,
+    ) -> PyResult<PyObject> {
+        let est = self.inner.estimate(market, size, price, Urgency::from_str(urgency));
+        let d = PyDict::new(py);
+        d.set_item("exchange_fee", est.exchange_fee)?;
+        d.set_item("network_fee", est.network_fee)?;
+        d.set_item("bundle_tip", est.bundle_tip)?;
+        d.set_item("impact_est", est.impact_est)?;
+        d.set_item("total", est.total())?;
+        Ok(d.into())
+    }
+}
+
 /// Python module definition.
 #[pymodule]
 fn flint_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustEngine>()?;
+    m.add_class::<PyTxCostModel>()?;
     m.add_function(wrap_pyfunction!(capabilities, m)?)?;
     Ok(())
 }

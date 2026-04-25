@@ -6,5 +6,6 @@ pub mod metrics;
 pub mod orders;
 pub mod positions;
 pub mod synthetic_depth;
+pub mod tx_costs;
 pub mod venue_config;
 pub mod venue_fills;
