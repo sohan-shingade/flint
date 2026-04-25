@@ -105,15 +105,19 @@ batch (see git log on branch `restructure`):
 
 ## Test sweep state
 
-- **1861 pass · 7 skip · 0 fail** as of 2026-04-24 14:35 UTC
-- 4 smoke regressions (BUG-1..4) all captured by red→green tests
-- `tests/test_smoke_regressions.py` runs in <60s
+- **2038 pass · 7 skip · 0 fail** as of 2026-04-25 (post-Wave-3 sweep)
+- Skipped suites: `test_ccxt_live`, `test_hyperliquid_live`, `test_wallet`,
+  `test_connectors`, `test_hyperliquid_client` — all missing-dep failures
+  on the editable install (`ccxt`, `eth_account`, `solders` not present).
+  None are code regressions.
+- 4 smoke regressions (BUG-1..4) from earlier in session all captured by
+  red→green tests.
 
 ---
 
 ## Active branch
 
-`restructure` — 12 commits ahead of `main`, pushed to `origin/restructure`.
+`restructure` — 28 commits ahead of `main`, pushed to `origin/restructure`.
 PR-ready: `https://github.com/sohan-shingade/flint/pull/new/restructure`.
 
 ---
