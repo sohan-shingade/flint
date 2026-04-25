@@ -82,6 +82,7 @@ class BacktestContext(ExecutionContext):
         margin_engine=None,
         capital_allocator=None,
         venue_fill_models: Optional[Dict[str, FillModel]] = None,
+        portfolio_risk=None,
     ):
         self._initial_capital = initial_capital
         self._fill_model = fill_model or FillPipeline()
@@ -89,7 +90,18 @@ class BacktestContext(ExecutionContext):
         self._position_size_pct = position_size_pct
         self._risk_manager = risk_manager
         self._margin_engine = margin_engine  # Optional: enables margin/liquidation tracking
+        self._portfolio_risk = portfolio_risk  # Optional: book-level pre-trade checks
         self._venue_fill_models: Dict[str, FillModel] = venue_fill_models or {}  # per-venue dispatch
+
+        # D-3.5-orchestrator: single facade composing the three pre-trade
+        # check engines. None when none of margin/allocator/portfolio_risk
+        # were supplied — `_check_pretrade()` short-circuits in that case.
+        from ..risk.portfolio_orchestrator import PortfolioMarginEngine
+        self._pme = PortfolioMarginEngine(
+            margin=margin_engine,
+            allocator=capital_allocator,
+            portfolio=portfolio_risk,
+        )
 
         # D-2.1.b Step 2: cash + running-counters owned by CashManager.
         # `self._cash`, `self._total_fees`, `self._total_tx_costs`,
@@ -362,19 +374,25 @@ class BacktestContext(ExecutionContext):
                     f"[{self.timestamp}] WARNING: reduce_only rejected — no opposite position in {market}")
                 return oid
 
-        # Margin check (if enabled and not a reduce-only order)
-        if self._margin_engine and not reduce_only:
+        # D-3.5-orchestrator: single pre-trade check that walks
+        # allocator → margin → portfolio book limits. Reduce-only orders
+        # skip the gauntlet entirely (closing exposure can't fail
+        # margin/book checks when the engine is doing its job).
+        if not reduce_only:
             price = self._current_candle.close if self._current_candle else 0
-            # Use venue-specific cash when allocator is present
-            cash_for_margin = (
+            cash_for_check = (
                 self._allocator.available(venue) if self._allocator
                 else self._cash
             )
-            allowed, reason = self._margin_engine.check_can_open(
-                checked, cash_for_margin, self.positions, price
+            check = self._pme.check_order(
+                checked, cash_for_check, self.positions, price,
+                equity=self.account.equity,
             )
-            if not allowed:
-                self._log_messages.append(f"[{self.timestamp}] MARGIN REJECTED: {reason}")
+            if not check:
+                tag = check.component.upper() or "RISK"
+                self._log_messages.append(
+                    f"[{self.timestamp}] {tag} REJECTED: {check.reason}"
+                )
                 return oid
 
         self._market_orders_queue.append(checked)
