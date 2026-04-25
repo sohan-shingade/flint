@@ -48,7 +48,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 | ID | State | Effort | Prereq | Notes |
 |---|---|---|---|---|
 | D-6.5-api | ⏭️ | 3w | D-2.1.c + secrets | `/api/v1/live/start` two-step confirmation |
-| D-4.3-websocket | 🟡 | 1w | D-4.2-backoff-full ✓ | Foundation + paper tick + paper trade + live fill broadcasts + UI binding shipped. Endpoints `/ws/paper/{id}` + `/ws/live/{id}`; `ConnectionManager` with seq + replay buffer + heartbeat; `useWebSocket<T>` hook with backoff + 30s stale detection. PaperTradingEngine emits `{type: tick}` + `{type: trade}`; LiveExecutionContext emits `{type: fill}`. PaperTrading.tsx `SessionDetail` subscribes to its session's WS, overlays live equity/unrealized PnL/trade-count on the polled snapshot, and shows a `WS LIVE`/`CONNECTING`/`OFFLINE` indicator dot. 23 tests (10 WS + 3 paper-engine + 4 live-ctx + 6 useWebSocket vitest); 133/133 vitest; vite build clean. Hook migration to drop polling deferred |
+| D-4.3-websocket | 🟡 | 1w | D-4.2-backoff-full ✓ | Both pages bound. Endpoints + ConnectionManager + useWebSocket hook + paper tick/trade + live fill broadcasts shipped (slices 1+2+2b). UI: PaperTrading.tsx (slice 3) and LiveMonitor.tsx (slice 4) both subscribe to their session's WS. Paper overlays live equity / unrealized PnL / trade-count on the polled snapshot. Live merges WS fills into polled fills (deduped by order_id+ts) so the fills tape updates without waiting for next poll. Both pages show `WS LIVE`/`CONNECTING`/`OFFLINE` indicator. 23 backend + 6 hook tests + 133/133 vitest + vite build clean. Drop-polling-entirely migration deferred |
 | D-6.6-proof | ⏭️ | 1w | D-1.4-ui + D-6.5-api | Funding dislocation arb proof notebook |
 
 ## Wave 4 — weeks 10–14
