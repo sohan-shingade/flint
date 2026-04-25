@@ -556,6 +556,17 @@ class PaperTradingEngine:
                                 t.setdefault("is_replay", False)
                             ss.save_trades(session.session_id, new_trades)
                             session._persisted_trade_count = len(session.broker.closed_trades)
+                            # D-4.3-websocket slice 2b: broadcast each
+                            # newly-closed trade to ws subscribers.
+                            if self.ws_manager is not None:
+                                for trade in new_trades:
+                                    try:
+                                        await self.ws_manager.broadcast(
+                                            f"paper:{session.session_id}",
+                                            {"type": "trade", **trade},
+                                        )
+                                    except Exception as e:
+                                        logger.debug("WS trade broadcast skipped: %s", e)
 
                     # Track equity for risk guard peak calculation
                     if hasattr(session.broker, "equity_history"):

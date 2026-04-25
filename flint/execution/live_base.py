@@ -90,6 +90,12 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
             on_fail=self._handle_fail,
         )
 
+        # D-4.3-websocket slice 2: optional manager. When set, fills
+        # broadcast to `live:{session_id}` so subscribers see trades
+        # in real time. Wired by the live runner (when implemented)
+        # or by external test harnesses; None elsewhere.
+        self.ws_manager = None
+
     # --- Abstract methods (venue subclasses implement) ---
 
     @abc.abstractmethod
@@ -486,6 +492,30 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         logger.info("Fill: %s %s %.4f @ %.2f (fee=%.4f)",
                      fill.side.value, fill.market, fill.size, fill.price, fill.fee)
         self._notify("fill", f"Fill: {fill.side.value} {fill.market} {fill.size:.4f} @ {fill.price:.2f}")
+
+        # D-4.3-websocket slice 2b: broadcast to `live:{session_id}`
+        # subscribers. Fire-and-forget: failure to broadcast must not
+        # break order processing, so we route through ensure_future
+        # and swallow exceptions.
+        if self.ws_manager is not None and self._session_id:
+            try:
+                import asyncio as _asyncio
+                _asyncio.ensure_future(self.ws_manager.broadcast(
+                    f"live:{self._session_id}",
+                    {
+                        "type": "fill",
+                        "order_id": order_id,
+                        "market": fill.market,
+                        "venue": fill.venue or self._venue,
+                        "side": fill.side.value,
+                        "price": fill.price,
+                        "size": fill.size,
+                        "fee": fill.fee,
+                        "ts": fill.ts,
+                    },
+                ))
+            except Exception as e:
+                logger.debug("WS fill broadcast skipped: %s", e)
 
     def _handle_fail(self, order_id: str, reason: str) -> None:
         logger.warning("Order %s failed: %s (policy=%s)",
