@@ -26,6 +26,7 @@ from .fee_models import FeeModel, FlatFeeModel
 from .fill_models import FillModel, FillPipeline
 from .fill_recorder import FillRecorder
 from .funding_ledger import FundingLedger
+from .market_data_feed import MarketDataFeed
 from .order_queue import OrderQueue
 from .position_manager import PositionManager
 
@@ -118,7 +119,10 @@ class BacktestContext(ExecutionContext):
 
         self._current_candle: Optional[Candle] = None
         self._order_counter = 0
-        self._market_histories: Dict[str, List[Candle]] = {}  # multi-market candle access
+
+        # D-2.1.b Step 7: market data caches (multi-market candles +
+        # orderbook + OI snapshots) owned by MarketDataFeed.
+        self._mdf = MarketDataFeed()
 
         # D-2.1.b Step 5: funding rates owned by FundingLedger.
         # Property aliases below preserve the `self._funding_history`
@@ -132,11 +136,8 @@ class BacktestContext(ExecutionContext):
         # `self._borrow_payments` access patterns used by `_apply_fill`.
         self._bl = BorrowLedger()
 
-        # Orderbook data for strategy access and fill models
-        self._orderbook_history: Dict[str, List] = {}  # market -> [OrderbookSnapshot]
-
-        # Open interest data for strategy access
-        self._oi_history: Dict[str, List] = {}  # market -> [OpenInterest]
+        # Orderbook + OI history live on `self._mdf` (Step 7); read-only
+        # property aliases below preserve the legacy attribute names.
 
     def _next_order_id(self) -> str:
         self._order_counter += 1
@@ -267,6 +268,27 @@ class BacktestContext(ExecutionContext):
     @_total_borrow_paid.setter
     def _total_borrow_paid(self, value: float) -> None:
         self._bl.total_paid = value
+
+    # --- Market data caches (delegates to MarketDataFeed) ---
+    # D-2.1.b Step 7: orderbook + OI + cross-market candle history live
+    # on `self._mdf`. Property aliases preserve `self._market_histories`
+    # / `self._orderbook_history` / `self._oi_history` access patterns.
+
+    @property
+    def _market_histories(self) -> Dict[str, List[Candle]]:
+        return self._mdf.market_histories
+
+    @_market_histories.setter
+    def _market_histories(self, value: Dict[str, List[Candle]]) -> None:
+        self._mdf.market_histories = value
+
+    @property
+    def _orderbook_history(self) -> Dict[str, List]:
+        return self._mdf.orderbook_history
+
+    @property
+    def _oi_history(self) -> Dict[str, List]:
+        return self._mdf.oi_history
 
     # --- ExecutionContext properties ---
 
@@ -440,17 +462,16 @@ class BacktestContext(ExecutionContext):
 
     def set_market_histories(self, histories: Dict[str, List[Candle]]) -> None:
         """Set multi-market candle data for cross-market access."""
-        self._market_histories = histories
+        self._mdf.set_histories(histories)
 
     def get_candles(self, market: str, lookback: int = 50) -> List[Candle]:
         """Get recent candles for any available market."""
-        history = self._market_histories.get(market, [])
-        return history[-lookback:] if history else []
+        return self._mdf.candles(market, lookback)
 
     @property
     def markets(self) -> List[str]:
         """List of available markets."""
-        return list(self._market_histories.keys())
+        return self._mdf.markets()
 
     def add_funding_rate(self, fr: FundingRate) -> None:
         """Record a funding rate for strategy access. Called by engine."""
@@ -510,20 +531,14 @@ class BacktestContext(ExecutionContext):
 
     def add_orderbook_snapshot(self, snapshot) -> None:
         """Record an orderbook snapshot. Called by engine."""
-        mkt = snapshot.market
-        if mkt not in self._orderbook_history:
-            self._orderbook_history[mkt] = []
-        self._orderbook_history[mkt].append(snapshot)
+        self._mdf.add_orderbook(snapshot)
 
     def get_orderbook(self, market: Optional[str] = None):
         """Get the most recent orderbook snapshot for a market."""
         mkt = market or (self._current_candle.market if self._current_candle else None)
         if not mkt:
             return None
-        history = self._orderbook_history.get(mkt)
-        if not history:
-            return None
-        return history[-1]
+        return self._mdf.latest_orderbook(mkt)
 
     def get_impact_price(self, market: Optional[str] = None, side=None, size: float = 0) -> Optional[float]:
         """Estimate fill price for a given size, using the same model as the fill pipeline.
@@ -576,29 +591,21 @@ class BacktestContext(ExecutionContext):
 
     def add_open_interest(self, oi) -> None:
         """Record an OI snapshot. Called by engine."""
-        mkt = oi.market
-        if mkt not in self._oi_history:
-            self._oi_history[mkt] = []
-        self._oi_history[mkt].append(oi)
+        self._mdf.add_open_interest(oi)
 
     def get_open_interest(self, market=None):
         """Get most recent (long_oi, short_oi) for a market."""
         mkt = market or (self._current_candle.market if self._current_candle else None)
         if not mkt:
             return None
-        history = self._oi_history.get(mkt)
-        if not history:
-            return None
-        oi = history[-1]
-        return (oi.long_oi, oi.short_oi)
+        return self._mdf.latest_oi(mkt)
 
     def get_open_interest_history(self, market=None, lookback: int = 24) -> list:
         """Get recent OI as [(ts, long_oi, short_oi), ...]."""
         mkt = market or (self._current_candle.market if self._current_candle else None)
         if not mkt:
             return []
-        history = self._oi_history.get(mkt, [])
-        return [(oi.ts, oi.long_oi, oi.short_oi) for oi in history[-lookback:]]
+        return self._mdf.oi_recent(mkt, lookback)
 
     def check_liquidations(self, candle: Candle) -> list:
         """Check all positions for liquidation. Called by engine each bar.
