@@ -105,7 +105,7 @@ batch (see git log on branch `restructure`):
 
 ## Test sweep state
 
-- **2038 pass · 7 skip · 0 fail** as of 2026-04-25 (post-Wave-3 sweep)
+- **2070 pass · 7 skip · 0 fail** as of 2026-04-25 (post-Wave-5 closeout)
 - Skipped suites: `test_ccxt_live`, `test_hyperliquid_live`, `test_wallet`,
   `test_connectors`, `test_hyperliquid_client` — all missing-dep failures
   on the editable install (`ccxt`, `eth_account`, `solders` not present).
@@ -117,7 +117,7 @@ batch (see git log on branch `restructure`):
 
 ## Active branch
 
-`restructure` — 28 commits ahead of `main`, pushed to `origin/restructure`.
+`restructure` — 50+ commits ahead of `main`, pushed to `origin/restructure`.
 PR-ready: `https://github.com/sohan-shingade/flint/pull/new/restructure`.
 
 ---
@@ -160,3 +160,14 @@ PR-ready: `https://github.com/sohan-shingade/flint/pull/new/restructure`.
   * Internal `_debit_cash` / `_credit_cash` helpers deleted (every caller now uses `_cm` directly)
   * Public `borrow_payments` property added so `flint/backtest/engine.py` no longer reaches into `ctx._borrow_payments` private state.
   Legacy property aliases (`_cash`, `_positions`, `_fills`, etc.) retained for now because tests still exercise them deliberately. 262/262 regression green across backtest/multi-venue/jupiter/funding/paper paths; ruff clean.
+
+## Wave 5 closeout (post-replay UI)
+
+After D-6.4-replay shipped end-to-end, four follow-on items closed out the wave:
+
+- **Auto-compaction (🟢)** — `BacktestContext.__init__` accepts `snapshot_store=` + `snapshot_every=` (default 10_000) ctor kwargs. Every event emit increments a counter; crossing the threshold triggers `_compact_snapshot(seq)` which replay-folds the log and persists a fresh `BookState` to `SnapshotStore`. Snapshot fast-forward replay on subsequent queries skips the early-event scan. Counter resets after each compaction; failures swallowed at debug level. 5 unit tests including parity assertion that snapshot fast-forward never produces a divergent state.
+- **End-to-end replay parity over a real strategy (🟢)** — `tests/test_replay_e2e_backtest.py` drives a real `MACrossoverStrategy` against 300 sine-wave candles with the event log + auto-compaction wired, then asserts replay reproduces the live `BacktestContext.account.cash` byte-for-byte. Three classes covering: full-run parity, auto-compaction-during-run parity, and replay at intermediate ts with monotonic fill counts. Helper `_drive_strategy()` mimics the bar loop because `BacktestEngine.run()` routes through Rust which bypasses the supplied event-log-wired ctx.
+- **Replay UI polish (🟢)** — `ui/src/pages/Replay.tsx` upgraded from bare ts-input to: `<input type="range">` slider bounded to first/last event ts, step controls (← PREV / NEXT → / ⏮ START / END ⏭) that walk actual event ts not arbitrary epoch values, and a color-coded EVENT.TAIL panel showing the 50 most recent folded events. New `useReplayEvents(sessionId, since, limit)` hook backs the slider + tail.
+- **Rust port of FundingLedger + BorrowLedger (🟢)** — `rust/src/engine/{funding_ledger,borrow_ledger}.rs` mirror the Python classes one-for-one. PyO3 classes `flint_core.FundingLedger` (`add`/`latest`/`recent`/`by_venue`) and `flint_core.BorrowLedger` (`record`/`record_payment`/`add_paid`/`total_paid` getter/`latest`/`recent`/`cumulative_at`/`payments_count`). 7 cargo tests + 7 Python↔Rust parity tests pinned to 1e-9 across every method and edge case.
+
+**Final replay surface tally**: 91/91 tests across event log + replay primitive + snapshots + engine writer hooks + REST + MCP + auto-compaction + E2E + ledger parity. ruff clean. 30/30 cargo tests. 133/133 vitest. vite build clean. Wide pytest sweep: 2070/2077 (7 skipped — missing optional deps, no code regressions).
