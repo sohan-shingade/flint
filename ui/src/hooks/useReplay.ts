@@ -122,3 +122,67 @@ export function useReplayState(
 
   return { data, error, loading }
 }
+
+
+export interface ReplayEvent {
+  seq: number
+  ts: number
+  kind: string
+  payload: Record<string, any>
+}
+
+export interface ReplayEventsPage {
+  session_id: string
+  since: number | null
+  count: number
+  has_more: boolean
+  events: ReplayEvent[]
+}
+
+
+/** Fetch a page of events from `/api/v1/replay/{id}/events`. The
+ *  hook re-fires when `since` or `limit` change. Used by the
+ *  Replay page's tail panel. */
+export function useReplayEvents(
+  sessionId: string,
+  since: number | null = null,
+  limit: number = 200,
+) {
+  const [data, setData] = useState<ReplayEventsPage | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!sessionId) {
+      setData(null)
+      return
+    }
+    let active = true
+    setLoading(true)
+
+    const params = new URLSearchParams()
+    if (since != null) params.set('since', String(since))
+    params.set('limit', String(limit))
+    const url = `/api/v1/replay/${encodeURIComponent(sessionId)}/events?${params}`
+
+    fetch(url)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then(json => {
+        if (!active) return
+        setData(json)
+        setError(null)
+        setLoading(false)
+      })
+      .catch(err => {
+        if (!active) return
+        setError(err?.message || String(err))
+        setLoading(false)
+      })
+    return () => { active = false }
+  }, [sessionId, since, limit])
+
+  return { data, error, loading }
+}

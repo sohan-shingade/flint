@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
-import { useReplaySummary, useReplayState } from '../hooks/useReplay'
+import { useReplaySummary, useReplayState, useReplayEvents } from '../hooks/useReplay'
 
 const fmtUsd = (v: number | undefined | null) =>
   v != null
@@ -41,6 +41,13 @@ export default function Replay() {
   const { data: state, error: stateError, loading } = useReplayState(
     activeId, targetTs, initialCapital,
   )
+  // Pull a window of events for the tail panel + timeline range.
+  const { data: eventsPage } = useReplayEvents(activeId, null, 1000)
+  const events = useMemo(() => eventsPage?.events ?? [], [eventsPage])
+  const tsRange = useMemo(() => {
+    if (events.length === 0) return null
+    return { min: events[0].ts, max: events[events.length - 1].ts }
+  }, [events])
 
   // When the user picks a session and the summary lands, default
   // target_ts to "now" so the page shows the latest state immediately.
@@ -97,7 +104,7 @@ export default function Replay() {
         </div>
       )}
 
-      {/* time scrubber */}
+      {/* time scrubber + step controls + capital input */}
       {summary && summary.event_count > 0 && (
         <div className="border border-border bg-surface/60 px-4 py-3 space-y-3">
           <div className="flex items-center justify-between">
@@ -106,22 +113,74 @@ export default function Replay() {
               {targetTs != null ? `${targetTs} (${fmtTs(targetTs)})` : '-'}
             </span>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-[10px] text-ghost/40">epoch s</span>
-            <input
-              type="number"
-              value={targetTs ?? 0}
-              onChange={(e) => setTargetTs(parseInt(e.target.value, 10) || 0)}
-              className="flex-1 bg-void/50 border border-border/50 px-3 py-1 text-[11px] font-mono text-terminal focus:outline-none focus:border-terminal/60"
-            />
-            <span className="text-[10px] text-ghost/40">capital</span>
-            <input
-              type="number"
-              value={initialCapital}
-              onChange={(e) => setInitialCapital(parseFloat(e.target.value) || 10_000)}
-              className="w-28 bg-void/50 border border-border/50 px-3 py-1 text-[11px] font-mono text-terminal focus:outline-none focus:border-terminal/60"
-            />
-          </div>
+
+          {/* Timeline slider gated on having an event range. */}
+          {tsRange && (
+            <div className="space-y-2">
+              <input
+                type="range"
+                min={tsRange.min}
+                max={tsRange.max}
+                value={
+                  targetTs != null
+                    ? Math.min(Math.max(targetTs, tsRange.min), tsRange.max)
+                    : tsRange.max
+                }
+                onChange={(e) => setTargetTs(parseInt(e.target.value, 10))}
+                className="w-full accent-terminal"
+              />
+              <div className="flex items-center justify-between text-[9px] text-ghost/40 font-mono">
+                <span>{fmtTs(tsRange.min)}</span>
+                <span>{events.length} events in window</span>
+                <span>{fmtTs(tsRange.max)}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Step controls — jump to neighboring event timestamps. */}
+          {events.length > 0 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  if (targetTs == null) return
+                  const prev = [...events].reverse().find(e => e.ts < targetTs)
+                  if (prev) setTargetTs(prev.ts)
+                }}
+                className="px-3 py-1 text-[10px] tracking-[0.15em] border border-border text-ghost/70 hover:bg-panel hover:text-white/80 transition-colors"
+              >
+                ← PREV EVENT
+              </button>
+              <button
+                onClick={() => {
+                  if (targetTs == null) return
+                  const next = events.find(e => e.ts > targetTs)
+                  if (next) setTargetTs(next.ts)
+                }}
+                className="px-3 py-1 text-[10px] tracking-[0.15em] border border-border text-ghost/70 hover:bg-panel hover:text-white/80 transition-colors"
+              >
+                NEXT EVENT →
+              </button>
+              <button
+                onClick={() => tsRange && setTargetTs(tsRange.min)}
+                className="px-3 py-1 text-[10px] tracking-[0.15em] border border-border text-ghost/70 hover:bg-panel hover:text-white/80 transition-colors"
+              >
+                ⏮ START
+              </button>
+              <button
+                onClick={() => tsRange && setTargetTs(tsRange.max)}
+                className="px-3 py-1 text-[10px] tracking-[0.15em] border border-border text-ghost/70 hover:bg-panel hover:text-white/80 transition-colors"
+              >
+                END ⏭
+              </button>
+              <span className="ml-auto text-[10px] text-ghost/40">capital</span>
+              <input
+                type="number"
+                value={initialCapital}
+                onChange={(e) => setInitialCapital(parseFloat(e.target.value) || 10_000)}
+                className="w-28 bg-void/50 border border-border/50 px-3 py-1 text-[11px] font-mono text-terminal focus:outline-none focus:border-terminal/60"
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -191,6 +250,62 @@ export default function Replay() {
           </div>
         </div>
       )}
+
+      {/* Event tail — show events ≤ targetTs, newest first, capped */}
+      {state && events.length > 0 && (() => {
+        const folded = events
+          .filter(e => targetTs == null || e.ts <= targetTs)
+          .slice(-50)
+          .reverse()
+        return (
+          <div className="border border-border bg-surface/60">
+            <div className="px-4 py-2.5 border-b border-border flex items-center gap-2">
+              <span className="w-2 h-2 bg-amber/60" />
+              <span className="text-[10px] text-ghost tracking-[0.2em]">EVENT.TAIL</span>
+              <span className="ml-auto text-[10px] text-ghost/40 tabular-nums">
+                showing {folded.length} of {events.filter(e => targetTs == null || e.ts <= targetTs).length} folded
+              </span>
+            </div>
+            {folded.length === 0 ? (
+              <div className="text-[10px] text-ghost/40 tracking-wider py-4 text-center">
+                no events at this target_ts
+              </div>
+            ) : (
+              <div className="max-h-72 overflow-y-auto">
+                <table className="w-full text-[11px] font-mono">
+                  <thead className="bg-panel/40 sticky top-0">
+                    <tr className="text-ghost/40 tracking-wider text-[9px]">
+                      <th className="text-left px-3 py-2">SEQ</th>
+                      <th className="text-left px-3 py-2">TS</th>
+                      <th className="text-left px-3 py-2">KIND</th>
+                      <th className="text-left px-3 py-2">PAYLOAD</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {folded.map(e => (
+                      <tr key={e.seq} className="border-t border-border/50">
+                        <td className="px-3 py-1 text-ghost/60">{e.seq}</td>
+                        <td className="px-3 py-1 text-terminal">{fmtTs(e.ts)}</td>
+                        <td className={`px-3 py-1 ${
+                          e.kind === 'fill' ? 'text-gain'
+                          : e.kind === 'liquidation' ? 'text-loss'
+                          : e.kind.startsWith('order.') ? 'text-amber'
+                          : 'text-ghost/70'
+                        }`}>
+                          {e.kind}
+                        </td>
+                        <td className="px-3 py-1 text-ghost/60 truncate max-w-[400px]">
+                          {JSON.stringify(e.payload)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {loading && (
         <div className="text-[10px] text-ghost/40 tracking-widest text-center py-4 animate-pulse">
