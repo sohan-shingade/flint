@@ -208,15 +208,45 @@ if _UI_DIST.exists() and (_UI_DIST / "index.html").exists():
     logger.info("Serving UI from %s", _UI_DIST)
 
 
-@app.websocket("/ws/{channel}")
-async def websocket_endpoint(websocket: WebSocket, channel: str = "all"):
+async def _ws_loop(websocket: WebSocket, channel: str) -> None:
+    """Shared receive-loop for any /ws endpoint. Pulls `?since=<seq>`
+    from the query string for replay-on-reconnect."""
     manager = getattr(websocket.app.state, "ws_manager", None)
     if manager is None:
         await websocket.close()
         return
-    await manager.connect(websocket, channel)
+    since_raw = websocket.query_params.get("since")
+    since: int | None = None
+    if since_raw is not None:
+        try:
+            since = int(since_raw)
+        except ValueError:
+            since = None
+    await manager.connect(websocket, channel, since_seq=since)
     try:
         while True:
             await websocket.receive_text()  # keep alive
     except WebSocketDisconnect:
         manager.disconnect(websocket, channel)
+
+
+@app.websocket("/ws/paper/{session_id}")
+async def websocket_paper(websocket: WebSocket, session_id: str):
+    """D-4.3-websocket: per-session paper-trading stream.
+    Channel name = `paper:{session_id}`. Server emits equity ticks +
+    last-trade events here; client subscribes via useWebSocket."""
+    await _ws_loop(websocket, f"paper:{session_id}")
+
+
+@app.websocket("/ws/live/{session_id}")
+async def websocket_live(websocket: WebSocket, session_id: str):
+    """D-4.3-websocket: per-session live-trading stream.
+    Channel name = `live:{session_id}`."""
+    await _ws_loop(websocket, f"live:{session_id}")
+
+
+@app.websocket("/ws/{channel}")
+async def websocket_endpoint(websocket: WebSocket, channel: str = "all"):
+    """Legacy generic-channel endpoint. New clients should use the
+    paper/live-specific routes above."""
+    await _ws_loop(websocket, channel)
