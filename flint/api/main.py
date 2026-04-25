@@ -20,6 +20,7 @@ from ..store import FlintStore
 from ..collector.service import CollectorService
 from ..paper.engine import PaperTradingEngine
 from ..paper.price_ticker import PriceTicker
+from ..paper.price_sources import default_chain
 from .websocket import ConnectionManager
 
 logger = logging.getLogger("flint.api")
@@ -80,8 +81,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.debug("Live session cleanup: %s", e)
 
-        # Start price ticker for live PnL updates
-        ticker = PriceTicker(config.default_markets, interval_s=5.0)
+        # Start price ticker for live PnL updates. The chain wraps
+        # HL (live) → Drift DLOB (offline placeholder) → DuckDB
+        # last-candle (stale fallback). Drift is registered so the
+        # chain auto-recovers when Drift comes back, but until then
+        # HL serves and DuckDB catches double-outage windows.
+        ticker = PriceTicker(
+            config.default_markets,
+            interval_s=5.0,
+            sources=default_chain(store),
+        )
         app.state.price_ticker = ticker
         ticker_task = asyncio.create_task(ticker.run())
         paper_engine.price_ticker = ticker

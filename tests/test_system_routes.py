@@ -94,6 +94,40 @@ def test_system_config_skips_empty_values(tmp_path):
     assert "FLINT_HELIUS_API_KEY=hel789" in content
 
 
+def test_price_sources_no_ticker():
+    """Endpoint degrades gracefully if the ticker never started."""
+    client, _ = _make_app()
+    if hasattr(client.app.state, "price_ticker"):
+        delattr(client.app.state, "price_ticker")
+    resp = client.get("/api/v1/system/price-sources")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sources"] == []
+    assert data["running"] is False
+
+
+def test_price_sources_with_ticker():
+    """Returns per-source health + tracked markets when wired."""
+    client, _ = _make_app()
+    fake_ticker = MagicMock()
+    fake_ticker.get_health.return_value = [
+        {"name": "hyperliquid", "success_count": 7, "error_count": 0,
+         "last_error": None, "last_success_ts": 1700000000.0},
+        {"name": "drift_dlob", "success_count": 0, "error_count": 3,
+         "last_error": "ECONNREFUSED", "last_success_ts": None},
+    ]
+    fake_ticker._running = True
+    fake_ticker.markets = ["SOL-PERP", "BTC-PERP"]
+    client.app.state.price_ticker = fake_ticker
+    resp = client.get("/api/v1/system/price-sources")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["running"] is True
+    assert data["tracked_markets"] == ["SOL-PERP", "BTC-PERP"]
+    names = [s["name"] for s in data["sources"]]
+    assert names == ["hyperliquid", "drift_dlob"]
+
+
 def test_system_config_preserves_comments(tmp_path):
     """POST /api/v1/system/config preserves comments and blank lines."""
     env_file = tmp_path / ".env"

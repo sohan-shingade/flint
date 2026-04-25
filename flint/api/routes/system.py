@@ -289,3 +289,21 @@ def delete_registered_strategy(name: str, request: Request):
         raise HTTPException(503, "Store not available")
     store.delete_strategy(name)
     return {"deleted": name}
+
+
+@router.get("/price-sources")
+def price_sources_health(request: Request):
+    """Per-source health for the live PnL ticker chain.
+
+    Returned in priority order — first to serve a market wins. UI
+    shows a banner like "Drift down → using Hyperliquid" when the
+    head source is failing.
+    """
+    ticker = getattr(request.app.state, "price_ticker", None)
+    if ticker is None:
+        return {"sources": [], "running": False}
+    return {
+        "sources": ticker.get_health(),
+        "running": getattr(ticker, "_running", False),
+        "tracked_markets": list(ticker.markets),
+    }
