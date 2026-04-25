@@ -8,7 +8,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
+use engine::borrow_ledger::{BorrowLedger as RustBorrowLedger, BorrowPayment as RustBorrowPayment};
 use engine::fees::FeeModel;
+use engine::funding_ledger::FundingLedger as RustFundingLedger;
 use engine::orderbook_fill::{BookLevel, BookSnapshot, OrderbookFiller as RustOrderbookFiller};
 use engine::tx_costs::{TxCostModel as RustTxCostModel, Urgency};
 use runner::{BacktestRunner, RunConfig};
@@ -532,12 +534,111 @@ impl PyOrderbookFiller {
     }
 }
 
+// ----- FundingLedger PyO3 bindings -----
+
+#[pyclass(name = "FundingLedger")]
+struct PyFundingLedger {
+    inner: RustFundingLedger,
+}
+
+#[pymethods]
+impl PyFundingLedger {
+    #[new]
+    fn new() -> Self {
+        Self { inner: RustFundingLedger::new() }
+    }
+
+    fn add(&mut self, market: &str, venue: &str, ts: i64, rate: f64) {
+        self.inner.add(market, venue, ts, rate);
+    }
+
+    fn latest(&self, market: &str) -> Option<f64> {
+        self.inner.latest(market)
+    }
+
+    #[pyo3(signature = (market, lookback=24))]
+    fn recent(&self, market: &str, lookback: usize) -> Vec<(i64, f64)> {
+        self.inner.recent(market, lookback)
+    }
+
+    #[pyo3(signature = (market, lookback=24))]
+    fn by_venue(
+        &self,
+        py: Python<'_>,
+        market: &str,
+        lookback: usize,
+    ) -> PyResult<PyObject> {
+        let d = PyDict::new(py);
+        for (venue, points) in self.inner.by_venue(market, lookback) {
+            d.set_item(venue, points)?;
+        }
+        Ok(d.into())
+    }
+}
+
+// ----- BorrowLedger PyO3 bindings -----
+
+#[pyclass(name = "BorrowLedger")]
+struct PyBorrowLedger {
+    inner: RustBorrowLedger,
+}
+
+#[pymethods]
+impl PyBorrowLedger {
+    #[new]
+    fn new() -> Self {
+        Self { inner: RustBorrowLedger::new() }
+    }
+
+    fn record(&mut self, market: &str, ts: i64, rate_hourly: f64, cumulative_rate: f64) {
+        self.inner.record(market, ts, rate_hourly, cumulative_rate);
+    }
+
+    fn record_payment(
+        &mut self,
+        market: &str, ts: i64, cost: f64,
+        cum_entry: f64, cum_exit: f64,
+    ) {
+        self.inner.record_payment(RustBorrowPayment {
+            market: market.to_string(), ts, cost, cum_entry, cum_exit,
+        });
+    }
+
+    fn add_paid(&mut self, amount: f64) {
+        self.inner.add_paid(amount);
+    }
+
+    #[getter]
+    fn total_paid(&self) -> f64 {
+        self.inner.total_paid
+    }
+
+    fn latest(&self, market: &str) -> Option<f64> {
+        self.inner.latest(market)
+    }
+
+    #[pyo3(signature = (market, lookback=24))]
+    fn recent(&self, market: &str, lookback: usize) -> Vec<(i64, f64)> {
+        self.inner.recent(market, lookback)
+    }
+
+    fn cumulative_at(&self, market: &str, ts: i64) -> Option<f64> {
+        self.inner.cumulative_at(market, ts)
+    }
+
+    fn payments_count(&self) -> usize {
+        self.inner.payments().len()
+    }
+}
+
 /// Python module definition.
 #[pymodule]
 fn flint_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustEngine>()?;
     m.add_class::<PyTxCostModel>()?;
     m.add_class::<PyOrderbookFiller>()?;
+    m.add_class::<PyFundingLedger>()?;
+    m.add_class::<PyBorrowLedger>()?;
     m.add_function(wrap_pyfunction!(capabilities, m)?)?;
     Ok(())
 }
