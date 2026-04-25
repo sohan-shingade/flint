@@ -3,6 +3,7 @@ pub mod fees;
 pub mod fills;
 pub mod margin;
 pub mod metrics;
+pub mod orderbook_fill;
 pub mod orders;
 pub mod positions;
 pub mod synthetic_depth;

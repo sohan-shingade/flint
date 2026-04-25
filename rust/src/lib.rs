@@ -9,6 +9,7 @@ use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
 use engine::fees::FeeModel;
+use engine::orderbook_fill::{BookLevel, BookSnapshot, OrderbookFiller as RustOrderbookFiller};
 use engine::tx_costs::{TxCostModel as RustTxCostModel, Urgency};
 use runner::{BacktestRunner, RunConfig};
 use types::*;
@@ -367,7 +368,7 @@ fn capabilities(py: Python<'_>) -> PyResult<PyObject> {
     d.set_item("supports_partial_fills", false)?;   // T3.4
     d.set_item("supports_latency_stage", false)?;   // T3.4
     d.set_item("supports_tx_costs", true)?;         // D-3.4-rust
-    d.set_item("supports_orderbook_walk", false)?;  // T3.1 Rust port
+    d.set_item("supports_orderbook_walk", true)?;   // D-3.1-rust (Wave 2)
     d.set_item("supports_cross_market", false)?;    // Phase 2 follow-up
     d.set_item("supports_multi_venue_margin", false)?;  // T3.5
     d.set_item("supports_borrow_snapshots", false)?;
@@ -467,11 +468,76 @@ impl PyTxCostModel {
     }
 }
 
+// ----- OrderbookFiller PyO3 bindings (D-3.1-rust) -----
+//
+// The Python `OrderbookFillModel._walk_book` is the hottest path on
+// the orderbook-aware fill pipeline (one call per fill, with a vector
+// walk over book levels). Exposing it as a PyO3 class lets the Python
+// fill pipeline delegate into Rust for the numeric work while keeping
+// the snapshot-state machinery on the Python side for now.
+
+#[pyclass(name = "OrderbookFiller")]
+struct PyOrderbookFiller {
+    inner: RustOrderbookFiller,
+}
+
+#[pymethods]
+impl PyOrderbookFiller {
+    #[new]
+    #[pyo3(signature = (reject_on_insufficient_depth=true))]
+    fn new(reject_on_insufficient_depth: bool) -> Self {
+        Self { inner: RustOrderbookFiller::new(reject_on_insufficient_depth) }
+    }
+
+    /// Walk a book snapshot for a market order.
+    ///
+    /// Args:
+    ///   side: "long" or "short"
+    ///   size: order size (positive)
+    ///   bids / asks: list of (price, size) tuples. Callers are
+    ///     responsible for sorting (bids descending, asks ascending);
+    ///     the Python `OrderbookSnapshot` dataclass already enforces
+    ///     that invariant upstream.
+    ///
+    /// Returns a dict with `price`, `size`, `impact_bps`, `is_partial`,
+    /// or None if the book is empty / depth insufficient / nothing
+    /// filled (caller falls back to SlippageFill).
+    #[pyo3(signature = (side, size, bids, asks))]
+    fn walk_market(
+        &self,
+        py: Python<'_>,
+        side: &str,
+        size: f64,
+        bids: Vec<(f64, f64)>,
+        asks: Vec<(f64, f64)>,
+    ) -> PyResult<Option<PyObject>> {
+        let book = BookSnapshot {
+            bids: bids.into_iter().map(|(price, size)| BookLevel { price, size }).collect(),
+            asks: asks.into_iter().map(|(price, size)| BookLevel { price, size }).collect(),
+        };
+        let s = match side {
+            "short" => Side::Short,
+            _ => Side::Long,
+        };
+        let walk = match self.inner.walk_market(s, size, &book) {
+            Some(w) => w,
+            None => return Ok(None),
+        };
+        let d = PyDict::new(py);
+        d.set_item("price", walk.price)?;
+        d.set_item("size", walk.size)?;
+        d.set_item("impact_bps", walk.impact_bps)?;
+        d.set_item("is_partial", walk.is_partial)?;
+        Ok(Some(d.into()))
+    }
+}
+
 /// Python module definition.
 #[pymodule]
 fn flint_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustEngine>()?;
     m.add_class::<PyTxCostModel>()?;
+    m.add_class::<PyOrderbookFiller>()?;
     m.add_function(wrap_pyfunction!(capabilities, m)?)?;
     Ok(())
 }
