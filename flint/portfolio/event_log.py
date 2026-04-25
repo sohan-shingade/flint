@@ -171,6 +171,10 @@ class EventLogReader:
 
     def __init__(self, store) -> None:
         self._store = store
+        # Idempotent schema bootstrap so reads against a fresh DB don't
+        # error out when the writer hasn't run yet (replay over an empty
+        # log returns empty results, not a CatalogException).
+        store._conn.execute(CREATE_PORTFOLIO_EVENTS_SQL)
 
     def read_all(self, session_id: str) -> List[PortfolioEvent]:
         rows = self._store._conn.execute(
@@ -182,13 +186,30 @@ class EventLogReader:
 
     def read_until(self, session_id: str, target_ts: int) -> List[PortfolioEvent]:
         """All events with `ts <= target_ts`. The replay primitive
-        (next slice) walks this stream forward from the latest snapshot
-        before `target_ts`."""
+        walks this stream forward from the latest snapshot before
+        `target_ts`."""
         rows = self._store._conn.execute(
             "SELECT session_id, seq, ts, kind, payload "
             "FROM portfolio_events WHERE session_id = ? AND ts <= ? "
             "ORDER BY seq",
             [session_id, int(target_ts)],
+        ).fetchall()
+        return [PortfolioEvent.from_row(r) for r in rows]
+
+    def read_after_seq(
+        self,
+        session_id: str,
+        after_seq: int,
+        target_ts: int,
+    ) -> List[PortfolioEvent]:
+        """Events with `seq > after_seq AND ts <= target_ts`. Used by
+        snapshot-fast-forward replay to fetch only the tail."""
+        rows = self._store._conn.execute(
+            "SELECT session_id, seq, ts, kind, payload "
+            "FROM portfolio_events "
+            "WHERE session_id = ? AND seq > ? AND ts <= ? "
+            "ORDER BY seq",
+            [session_id, int(after_seq), int(target_ts)],
         ).fetchall()
         return [PortfolioEvent.from_row(r) for r in rows]
 

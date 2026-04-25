@@ -78,23 +78,48 @@ def replay(
     session_id: str,
     target_ts: int,
     initial_capital: float,
+    use_snapshot: bool = True,
 ) -> BookState:
     """Reconstruct `BookState` for `session_id` at `target_ts`.
 
-    Reads every event with `ts <= target_ts` from the log and folds
-    them into a fresh `BookState` seeded with `initial_capital`. Slice 3
-    will accept an optional `from_snapshot=BookState` to short-circuit
-    the early-event scan.
+    When `use_snapshot=True` (default) and a snapshot store exists,
+    fast-forward to the latest snapshot with `ts <= target_ts` and
+    fold only the tail (events with `seq > snapshot.seq AND ts <=
+    target_ts`). When `False`, replays from `seq=0` regardless —
+    useful for parity tests.
     """
     reader = EventLogReader(store)
+
+    if use_snapshot:
+        # Local import keeps replay.py independent when snapshot
+        # tooling isn't loaded (e.g. unit tests on `fold` alone).
+        from .snapshots import SnapshotStore
+
+        snap = SnapshotStore(store).latest_before(session_id, target_ts)
+        if snap is not None:
+            seq_at, _ts_at, state = snap
+            tail = reader.read_after_seq(session_id, after_seq=seq_at, target_ts=target_ts)
+            return fold(tail, state.initial_capital, seed=state)
+
     events = reader.read_until(session_id, target_ts)
     return fold(events, initial_capital)
 
 
-def fold(events: Iterable[PortfolioEvent], initial_capital: float) -> BookState:
-    """Pure-Python fold over an event stream. Exposed separately so
-    tests + the future snapshot compactor can call it without a store."""
-    state = BookState(cash=initial_capital, initial_capital=initial_capital)
+def fold(
+    events: Iterable[PortfolioEvent],
+    initial_capital: float,
+    seed: "BookState | None" = None,
+) -> BookState:
+    """Pure-Python fold over an event stream.
+
+    When `seed` is supplied, the fold continues from that state — used
+    by snapshot-fast-forward replay to avoid re-folding the early
+    events. `initial_capital` is ignored when `seed` is given (the
+    seed already carries it).
+    """
+    state = seed if seed is not None else BookState(
+        cash=initial_capital, initial_capital=initial_capital,
+    )
     for ev in events:
         _apply_event(state, ev)
     return state
