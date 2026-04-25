@@ -24,6 +24,7 @@ from .context import ExecutionContext
 from .fee_models import FeeModel, FlatFeeModel
 from .fill_models import FillModel, FillPipeline
 from .fill_recorder import FillRecorder
+from .funding_ledger import FundingLedger
 from .order_queue import OrderQueue
 from .position_manager import PositionManager
 
@@ -118,9 +119,11 @@ class BacktestContext(ExecutionContext):
         self._order_counter = 0
         self._market_histories: Dict[str, List[Candle]] = {}  # multi-market candle access
 
-        # Funding rate data for strategy access
-        self._funding_history: Dict[str, List[FundingRate]] = {}  # market -> [FundingRate]
-        self._venue_funding: Dict[str, Dict[str, List[FundingRate]]] = {}  # market -> {venue -> [FundingRate]}
+        # D-2.1.b Step 5: funding rates owned by FundingLedger.
+        # Property aliases below preserve the `self._funding_history`
+        # / `self._venue_funding` access patterns used by tests and
+        # legacy code paths.
+        self._fl = FundingLedger()
 
         # Borrow rate data for Jupiter Perps
         self._borrow_history: Dict[str, List[BorrowSnapshot]] = {}  # market -> [BorrowSnapshot]
@@ -228,6 +231,19 @@ class BacktestContext(ExecutionContext):
     @_market_orders_queue.setter
     def _market_orders_queue(self, new_list: List[Order]) -> None:
         self._oq.market_queue = new_list
+
+    # --- Funding state (delegates to FundingLedger) ---
+    # D-2.1.b Step 5: read-only views onto the ledger's underlying
+    # dicts. No call sites mutate these directly today (the Python
+    # methods are pure adders), so a read-only alias is sufficient.
+
+    @property
+    def _funding_history(self) -> Dict[str, List[FundingRate]]:
+        return self._fl.history
+
+    @property
+    def _venue_funding(self) -> Dict[str, Dict[str, List[FundingRate]]]:
+        return self._fl.venue_history
 
     # --- ExecutionContext properties ---
 
@@ -415,57 +431,35 @@ class BacktestContext(ExecutionContext):
 
     def add_funding_rate(self, fr: FundingRate) -> None:
         """Record a funding rate for strategy access. Called by engine."""
-        mkt = fr.market
-        if mkt not in self._funding_history:
-            self._funding_history[mkt] = []
-        self._funding_history[mkt].append(fr)
-
-        venue = getattr(fr, 'source', 'drift')
-        if mkt not in self._venue_funding:
-            self._venue_funding[mkt] = {}
-        if venue not in self._venue_funding[mkt]:
-            self._venue_funding[mkt][venue] = []
-        self._venue_funding[mkt][venue].append(fr)
+        self._fl.add(fr)
 
     def get_funding_rate(self, market: Optional[str] = None) -> Optional[float]:
         """Get the most recent funding rate for a market."""
         mkt = market or (self._current_candle.market if self._current_candle else None)
         if not mkt:
             return None
-        history = self._funding_history.get(mkt)
-        if not history:
-            return None
-        return history[-1].rate
+        return self._fl.latest(mkt)
 
     def get_funding_rates(self, market: Optional[str] = None, lookback: int = 24) -> list:
         """Get recent funding rate history as [(ts, rate), ...]."""
         mkt = market or (self._current_candle.market if self._current_candle else None)
         if not mkt:
             return []
-        history = self._funding_history.get(mkt, [])
-        return [(fr.ts, fr.rate) for fr in history[-lookback:]]
+        return self._fl.recent(mkt, lookback)
 
     def get_funding_by_venue(self, market: Optional[str] = None, lookback: int = 24) -> dict:
         """Get recent funding rates grouped by venue: {venue: [(ts, rate), ...]}."""
         mkt = market or (self._current_candle.market if self._current_candle else None)
         if not mkt:
             return {}
-        venues = self._venue_funding.get(mkt, {})
-        return {
-            venue: [(fr.ts, fr.rate) for fr in rates[-lookback:]]
-            for venue, rates in venues.items()
-        }
+        return self._fl.by_venue(mkt, lookback)
 
     def get_venue_snapshots(self, market: Optional[str] = None, lookback: int = 24) -> dict:
         """Get full FundingRate objects grouped by venue (includes mark/oracle prices)."""
         mkt = market or (self._current_candle.market if self._current_candle else None)
         if not mkt:
             return {}
-        venues = self._venue_funding.get(mkt, {})
-        return {
-            venue: list(rates[-lookback:])
-            for venue, rates in venues.items()
-        }
+        return self._fl.venue_snapshots(mkt, lookback)
 
     # --- Borrow rate data (Jupiter Perps) ---
 
