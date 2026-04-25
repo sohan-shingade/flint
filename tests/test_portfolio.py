@@ -50,7 +50,10 @@ class TestPortfolioEngine:
         engine = PortfolioEngine(strategies, initial_capital=10_000, fee_rate=0.0)
         result = engine.run(_candles(60))
         assert isinstance(result, PortfolioResult)
-        assert len(result.combined_equity) == 60
+        # D-1.1.b force-close fix may add a terminal equity point past
+        # the last candle when a strategy had to be closed at engine
+        # exit, so the combined curve length is in {N, N+1}.
+        assert len(result.combined_equity) in (60, 61)
         assert len(result.allocations) == 2
         assert len(result.per_strategy) == 2
 

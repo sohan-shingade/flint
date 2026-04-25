@@ -128,21 +128,36 @@ class TestListStrategies:
 
 class TestRunBacktest:
     def test_returns_valid_json(self):
+        """D-4.7-full migration: MCP `run_backtest` now calls
+        `flint.services.backtest.run_backtest_sync` directly. Mock at
+        the service boundary instead of `BacktestEngine`."""
         from flint.mcp_server import run_backtest
 
-        mock_result = MagicMock()
-        mock_result.total_pnl = 500.0
-        mock_result.sharpe_ratio = 1.5
-        mock_result.max_drawdown = 0.1
-        mock_result.total_trades = 20
-        mock_result.winning_trades = 12
-        mock_result.losing_trades = 8
-        mock_result.win_rate = 0.6
-        mock_result.total_fees = 25.0
-
-        with patch("flint.api.routes.backtest._build_strategy", return_value=MagicMock()), \
-             patch("flint.backtest.engine.BacktestEngine") as mock_engine_cls:
-            mock_engine_cls.return_value.run.return_value = mock_result
+        # The service returns the same dict shape `Tearsheet.to_dict()`
+        # produces, plus the supplementary fields (winning_trades,
+        # losing_trades, total_fees). Only fields the MCP tool reads
+        # need to be present.
+        fake_result = {
+            "metrics": {
+                "total_pnl": 500.0,
+                "total_return_pct": 5.0,
+                "sharpe_ratio": 1.5,
+                "max_drawdown": 0.1,
+                "total_trades": 20,
+                "win_rate": 0.6,
+            },
+            "winning_trades": 12,
+            "losing_trades": 8,
+            "total_fees": 25.0,
+            "engine_used": "python",
+            "fallback_reason": None,
+        }
+        # Pretend candles already exist locally so the auto-fetch path
+        # short-circuits.
+        with patch("flint.services.backtest.run_backtest_sync",
+                   return_value=fake_result), \
+             patch("flint.mcp_server._get_store") as mock_store:
+            mock_store.return_value.query_candles.return_value = [MagicMock()]
             result = json.loads(run_backtest(
                 market="SOL-PERP", strategy="ma_crossover",
                 start_date="2025-01-01", end_date="2025-06-01",
@@ -154,8 +169,13 @@ class TestRunBacktest:
         assert result["total_trades"] == 20
 
     def test_unknown_strategy(self):
+        """The service raises ValueError for unknown strategy names;
+        MCP catches and surfaces as `error`."""
         from flint.mcp_server import run_backtest
-        with patch("flint.api.routes.backtest._build_strategy", return_value=None):
+        with patch("flint.services.backtest.run_backtest_sync",
+                   side_effect=ValueError("Unknown strategy: nonexistent")), \
+             patch("flint.mcp_server._get_store") as mock_store:
+            mock_store.return_value.query_candles.return_value = [MagicMock()]
             result = json.loads(run_backtest(strategy="nonexistent"))
         assert "error" in result
 
