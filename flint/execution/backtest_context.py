@@ -1048,6 +1048,7 @@ class BacktestContext(ExecutionContext):
                 "pnl": pnl,
                 "funding_paid": pos.funding_paid,
                 "borrow_paid": borrow_cost,
+                "exit_order_id": fill.order_id,
             })
             remainder = fill.size - pos.size
             self._pm.delete(key)
@@ -1085,6 +1086,7 @@ class BacktestContext(ExecutionContext):
             "funding_paid": 0.0,
             "borrow_paid": borrow_cost,
             "partial": True,
+            "exit_order_id": fill.order_id,
         })
         pos.size -= fill.size
 

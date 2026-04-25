@@ -239,13 +239,22 @@ class SharedCapitalPortfolioEngine:
             })
 
         for trade in ctx.closed_trades:
-            # Closed trades don't carry an order_id, so attribute by
-            # walking the fills near the trade's exit_ts. For the
-            # foundation slice we approximate by splitting evenly
-            # across strategies that had at least one fill on that
-            # market — refinement is a follow-on PR.
-            mkt = trade.get("market")
+            # Refined attribution (D-6.1 follow-on): closed_trade dicts
+            # now carry `exit_order_id`, which we tagged with the
+            # strategy prefix on submit. So PnL attribution is exact:
+            # whichever strategy placed the closing order owns the PnL.
+            # Fallback (liquidations have no exit_order_id, market data
+            # tags) splits evenly across strategies that touched that
+            # market.
             pnl = trade.get("pnl", 0.0)
+            exit_oid = trade.get("exit_order_id", "")
+            if exit_oid and ":" in exit_oid:
+                tag = exit_oid.split(":", 1)[0]
+                if tag in per_strategy_pnl:
+                    per_strategy_pnl[tag] += pnl
+                    continue
+            # Fallback path
+            mkt = trade.get("market")
             owners = [
                 n for n, fills in fills_by_strategy.items()
                 if any(f["market"] == mkt for f in fills)

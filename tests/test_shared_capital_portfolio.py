@@ -174,6 +174,64 @@ class TestProxyForwarding:
         assert remaining[0].order_id.startswith("a:")
 
 
+class TestPnlAttribution:
+    """Closed-trade PnL is attributed to the strategy whose tagged
+    `exit_order_id` closed the position."""
+
+    def test_pnl_attributed_to_closing_strategy(self):
+        # Strategy A opens a long; B closes it. PnL must go to B.
+        class _OpenLong(Strategy):
+            def __init__(self):
+                self._fired = False
+
+            @property
+            def name(self):
+                return "OpenLong"
+
+            def reset(self):
+                self._fired = False
+
+            def on_candle(self, candle, history, ctx=None):
+                if not self._fired and ctx is not None and len(history) >= 1:
+                    ctx.market_order("SOL-PERP", Side.LONG, 1.0)
+                    self._fired = True
+                return Signal.HOLD
+
+        class _CloseShort(Strategy):
+            def __init__(self):
+                self._fired = False
+
+            @property
+            def name(self):
+                return "CloseShort"
+
+            def reset(self):
+                self._fired = False
+
+            def on_candle(self, candle, history, ctx=None):
+                if (not self._fired and ctx is not None
+                        and len(history) >= 5 and ctx.positions):
+                    ctx.market_order("SOL-PERP", Side.SHORT, 1.0)
+                    self._fired = True
+                return Signal.HOLD
+
+        candles = _sin_candles(20)
+        engine = SharedCapitalPortfolioEngine(
+            strategies=[("opener", _OpenLong()), ("closer", _CloseShort())],
+            initial_capital=10_000.0,
+        )
+        result = engine.run(candles)
+        # Closer placed the closing order so the realized PnL on that
+        # trade goes to it. Opener gets only the entry-fill fees.
+        assert result.per_strategy_trades["opener"] >= 1
+        assert result.per_strategy_trades["closer"] >= 1
+        # Closer's PnL should be the dominant share of total PnL when
+        # exact attribution is working — no even-split fallback hit.
+        if abs(result.total_pnl) > 0.1:
+            closer_share = result.per_strategy_pnl["closer"] / result.total_pnl
+            assert closer_share > 0.5
+
+
 class TestWarningsThreaded:
     def test_warnings_propagate(self):
         """Margin reject warnings from the underlying ctx should appear
