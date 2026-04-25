@@ -24,6 +24,7 @@ from .context import ExecutionContext
 from .fee_models import FeeModel, FlatFeeModel
 from .fill_models import FillModel, FillPipeline
 from .fill_recorder import FillRecorder
+from .order_queue import OrderQueue
 from .position_manager import PositionManager
 
 logger = logging.getLogger("flint.backtest")
@@ -97,10 +98,15 @@ class BacktestContext(ExecutionContext):
         # D-2.1.b Step 1: position state owned by PositionManager.
         # `self._positions` and `self._closed_positions` remain as
         # property aliases below so existing call sites keep working
-        # while we migrate Steps 4–7.
+        # while we migrate Steps 5–7.
         self._pm = PositionManager()
-        self._pending_orders: List[Order] = []
-        self._market_orders_queue: List[Order] = []  # orders placed this bar
+
+        # D-2.1.b Step 4: pending + market-this-bar order queues owned
+        # by OrderQueue. `self._pending_orders` and
+        # `self._market_orders_queue` remain as property aliases with
+        # setters so existing reassignment idioms (filtering on cancel,
+        # swapping during process_pending_orders) keep working.
+        self._oq = OrderQueue()
 
         # D-2.1.b Step 3: recorded fills + diagnostic log messages
         # owned by FillRecorder. Existing call sites use
@@ -200,6 +206,28 @@ class BacktestContext(ExecutionContext):
     @property
     def _log_messages(self) -> List[str]:
         return self._fr.logs
+
+    # --- Order queues (delegates to OrderQueue) ---
+    # D-2.1.b Step 4: existing call sites both append (`.append(order)`)
+    # and reassign (`self._pending_orders = [...filtered...]`) on these
+    # lists. The properties below provide read+write access so both
+    # idioms route through the manager unchanged.
+
+    @property
+    def _pending_orders(self) -> List[Order]:
+        return self._oq.pending
+
+    @_pending_orders.setter
+    def _pending_orders(self, new_list: List[Order]) -> None:
+        self._oq.pending = new_list
+
+    @property
+    def _market_orders_queue(self) -> List[Order]:
+        return self._oq.market_queue
+
+    @_market_orders_queue.setter
+    def _market_orders_queue(self, new_list: List[Order]) -> None:
+        self._oq.market_queue = new_list
 
     # --- ExecutionContext properties ---
 
