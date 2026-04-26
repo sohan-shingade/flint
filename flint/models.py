@@ -346,6 +346,11 @@ class OpenInterest:
     ts: int
     long_oi: float
     short_oi: float
+    # Source venue — defaults to "drift" because the original OI
+    # provider was `flint/providers/open_interest.py` (Drift-only).
+    # Other providers (e.g. `data.py` HL ingest) pass venue explicitly.
+    # NOT a call-site default for trading APIs; see
+    # `flint.config.default_venue()` for that.
     venue: str = "drift"
 
     @property

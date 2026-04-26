@@ -37,7 +37,7 @@ class TestPaperBroker:
         assert len(ctx._pm) == 0
 
     def test_market_order_fills(self):
-        ctx = PaperContext(10000, fee_model=ZeroFeeModel())
+        ctx = PaperContext(10000, venue="drift", fee_model=ZeroFeeModel())
         order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
                       size=10, order_id="o1")
         ctx.submit_order(order)
@@ -101,7 +101,7 @@ class TestPaperBroker:
 
     def test_unrealized_pnl_updates(self):
         import pytest
-        ctx = PaperContext(10000, fee_model=ZeroFeeModel())
+        ctx = PaperContext(10000, venue="drift", fee_model=ZeroFeeModel())
         ctx.submit_order(Order(market="SOL-PERP", side=Side.LONG,
                                order_type=OrderType.MARKET, size=10, order_id="o1"))
         ctx.process_candle(_c(1000, 100.0))

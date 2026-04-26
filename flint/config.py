@@ -55,6 +55,13 @@ class FlintConfig(BaseSettings):
     default_markets: List[str] = Field(
         default=["SOL-PERP", "BTC-PERP", "ETH-PERP"]
     )
+    # Default venue when callers don't specify one. Was "drift" pre-
+    # v1.5.4. Drift is offline post-hack (CLAUDE.md rule), so the
+    # default flips to Hyperliquid — the live wedge. Override per-
+    # session via `venue=` on order/session APIs, or globally via
+    # `FLINT_DEFAULT_VENUE` env var. Set to "drift" to restore old
+    # behavior when Drift returns.
+    default_venue: str = "hyperliquid"
     default_fee_rate: float = 0.0005
     default_capital: float = 10_000.0
 
@@ -176,3 +183,27 @@ def load_config() -> FlintConfig:
     """Load config with YAML settings as initial values, overridden by env vars."""
     yaml_values = _load_yaml_settings()
     return FlintConfig(**yaml_values)
+
+
+_DEFAULT_VENUE_CACHE: list = [None]
+
+
+def default_venue() -> str:
+    """Resolve the default trading venue.
+
+    Was hardcoded to ``"drift"`` in 8 call sites pre-v1.5.4. Drift is
+    offline post-hack (see ``CLAUDE.md``) so the default flips to
+    Hyperliquid. Override per-call by passing ``venue=`` explicitly,
+    or globally via ``FLINT_DEFAULT_VENUE`` / ``flint.yaml``. Set to
+    ``"drift"`` to restore old behavior when Drift returns.
+
+    Cached on first call so we don't reload yaml on every order
+    placement; cache cleared by tests via ``_DEFAULT_VENUE_CACHE[0] = None``.
+    """
+    if _DEFAULT_VENUE_CACHE[0] is None:
+        try:
+            cfg = load_config()
+            _DEFAULT_VENUE_CACHE[0] = cfg.default_venue
+        except Exception:
+            _DEFAULT_VENUE_CACHE[0] = "hyperliquid"
+    return _DEFAULT_VENUE_CACHE[0]

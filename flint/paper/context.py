@@ -73,7 +73,7 @@ class PaperContext(ExecutionContext):
     def __init__(
         self,
         initial_capital: float = 10_000.0,
-        venue: str = "drift",
+        venue: Optional[str] = None,
         capital_allocation: Optional[dict] = None,
         fill_model: Optional[FillModel] = None,
         fee_model: Optional[FeeModel] = None,
@@ -82,6 +82,13 @@ class PaperContext(ExecutionContext):
         resolution_s: int = 3600,
         session_id: str = "",
     ):
+        # Resolve the default venue lazily (post-D-1.4 default flipped
+        # from "drift" to "hyperliquid" because Drift is offline post-
+        # hack — see CLAUDE.md). Pass `venue="drift"` explicitly to
+        # restore the old behavior when Drift returns.
+        if venue is None:
+            from ..config import default_venue
+            venue = default_venue()
         # Strategy-facing state ----------------------------------------------
         self._store = store
         self._resolution_s = resolution_s

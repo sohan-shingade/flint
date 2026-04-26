@@ -907,7 +907,8 @@ def run_calibration(req: dict, request: Request):
         from fastapi import HTTPException
         raise HTTPException(500, "Store not available")
 
-    venue = req.get("venue", "drift")
+    from ...config import default_venue
+    venue = req.get("venue") or default_venue()
     market = req.get("market", "SOL-PERP")
     lookback_days = req.get("lookback_days", 30)
 

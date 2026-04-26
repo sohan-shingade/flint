@@ -103,9 +103,11 @@ def test_transfer_without_allocator():
 
 
 def test_position_has_venue_field():
-    """New positions should include a venue field."""
+    """New positions should include a venue field. Pin venue=`drift`
+    explicitly — post-v1.5.4 the default flipped to `hyperliquid` so
+    legacy single-venue tests have to opt back in."""
     from flint.models import Candle, Order, OrderType, Side
-    ctx = PaperContext(initial_capital=10000)
+    ctx = PaperContext(initial_capital=10000, venue="drift")
     order = Order(market="SOL-PERP", side=Side.LONG, order_type=OrderType.MARKET,
                   size=10, order_id="t1", ts=1000)
     ctx.submit_order(order)
@@ -115,7 +117,7 @@ def test_position_has_venue_field():
     assert ("drift", "SOL-PERP") in ctx._pm
     pos = ctx.position_at("drift", "SOL-PERP")
     assert pos is not None
-    assert pos.venue == "drift"  # default venue
+    assert pos.venue == "drift"
 
 
 # ─── Multi-venue funding (Option A) ─────────────────────────────

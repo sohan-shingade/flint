@@ -120,7 +120,8 @@ class PaperSession:
     """
 
     def __init__(self, session_id: str, strategy: Strategy, market: str,
-                 resolution_s: int, ctx: PaperContext, venue: str = "drift"):
+                 resolution_s: int, ctx: PaperContext,
+                 venue: Optional[str] = None):
         self.session_id = session_id
         self.strategy = strategy
         self.market = market
@@ -130,6 +131,9 @@ class PaperSession:
         # instance. Code that reads `session.broker.cash`, `.positions`,
         # `.equity`, etc. resolves onto PaperContext properties.
         self.broker = ctx
+        if venue is None:
+            from ..config import default_venue
+            venue = default_venue()
         self.venue = venue
         self.started_at = int(time.time())
         self.status = "running"
@@ -210,7 +214,7 @@ class PaperTradingEngine:
         market: str = "SOL-PERP",
         resolution_s: int = 3600,
         initial_capital: float = 10_000.0,
-        venue: str = "drift",
+        venue: Optional[str] = None,
         strategy_code: str = "",
         strategy_params: dict = None,
         risk_config: dict = None,
@@ -320,8 +324,13 @@ class PaperTradingEngine:
                 cash = last_eq["equity"] if last_eq else full["initial_capital"]
                 last_ts = last_eq["ts"] if last_eq else 0
 
-                # Reconstruct context with recovered cash (venue defaults to "drift" for backward compat)
-                resumed_venue = full.get("venue", "drift")
+                # Reconstruct context with recovered cash. If the
+                # persisted session pre-dates the venue column, fall
+                # back to the configured default (Hyperliquid post-
+                # v1.5.4) — never silently force "drift" since that
+                # surface is offline post-hack.
+                from ..config import default_venue
+                resumed_venue = full.get("venue") or default_venue()
                 ctx = PaperContext(
                     initial_capital=cash, venue=resumed_venue,
                     store=self.store, resolution_s=3600, session_id=sid,
@@ -419,9 +428,12 @@ class PaperTradingEngine:
         replay_start_ts: int = 0,
         risk_config: Optional[dict] = None,
         capital_allocation: Optional[dict] = None,
-        venue: str = "drift",
+        venue: Optional[str] = None,
     ) -> str:
         """Deploy a strategy with replay-forward execution."""
+        if venue is None:
+            from ..config import default_venue
+            venue = default_venue()
         session_id = uuid.uuid4().hex[:8]
         risk_cfg = risk_config or {}
         now = int(time.time())

@@ -8,6 +8,34 @@ patch on additive features and fixes.
 
 ---
 
+## [1.5.4] — 2026-04-25
+
+Fix the `"drift"` hardcode flagged externally. [Release notes](https://github.com/sohan-shingade/flint/releases/tag/v1.5.4).
+
+**Changed (BREAKING-ish — default behavior flip)**
+- `flint.config.FlintConfig.default_venue` field added (default
+  `"hyperliquid"`, override via `FLINT_DEFAULT_VENUE` env var or
+  `flint.yaml`). Drift is offline post-hack so the default flips
+  away from it. Pass `venue="drift"` explicitly anywhere you want
+  the old behavior (e.g. when Drift returns).
+- `flint.config.default_venue()` resolver — single source of truth.
+- 7 call sites flipped from hardcoded `"drift"` to lazy
+  `default_venue()` resolution: `PaperContext.__init__`,
+  `PaperSession.__init__`, `PaperTradingEngine.start_session`,
+  `deploy_session`, `resume_sessions` (recovers persisted venue with
+  default-fallback), `paper.py` request schema + body parser,
+  `backtest.py` calibration body parser.
+- `flint/models.py:OpenInterest.venue = "drift"` left as-is (provider-
+  specific data class default for the Drift OI provider; not a call-
+  site default for trading APIs). Documented inline.
+
+**Tests**
+- Two existing tests that asserted `("drift", "SOL-PERP") in ctx._pm`
+  on default-constructed `PaperContext` now pass `venue="drift"`
+  explicitly. Test intent unchanged.
+
+---
+
 ## [1.5.3] — 2026-04-25
 
 Three open polish items shipped together. [Release notes](https://github.com/sohan-shingade/flint/releases/tag/v1.5.3).

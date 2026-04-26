@@ -18,7 +18,10 @@ class StartRequest(BaseModel):
     resolution_s: int = 3600
     initial_capital: float = 10_000.0
     params: Optional[dict] = None
-    venue: str = "drift"
+    # Default venue resolved server-side via `flint.config.default_venue()`
+    # so it follows the deployment's config (Hyperliquid by default
+    # post-v1.5.4 because Drift is offline).
+    venue: Optional[str] = None
     risk_config: Optional[dict] = None
 
 
@@ -145,7 +148,7 @@ def get_portfolio(request: Request):
             "session_id": s["session_id"],
             "strategy_name": s.get("strategy", ""),
             "market": s.get("market", ""),
-            "venue": s.get("venue", "drift"),
+            "venue": s.get("venue") or "",
             "equity": round(equity, 2),
             "pnl": round(pnl, 2),
             "status": s.get("status", ""),
@@ -178,7 +181,8 @@ def deploy_strategy(body: dict, request: Request):
     risk_config = body.get("risk_config", {})
     resolution_s = body.get("resolution_s", 3600)
     capital_allocation = body.get("capital_allocation")
-    venue = body.get("venue", "drift")
+    from ...config import default_venue
+    venue = body.get("venue") or default_venue()
 
     from ...strategy.loader import load_user_strategy, StrategyLoadError
     try:
