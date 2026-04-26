@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react'
 
 import { useBackoffPoll } from './useBackoffPoll'
+import { useHybridPoll } from './useHybridPoll'
+
+interface PaperTickPayload {
+  type: 'tick' | 'trade'
+  ts?: number
+  equity?: number
+  cash?: number
+  unrealized_pnl?: number
+  total_trades?: number
+}
 
 const API = '/api/v1/paper'
 
@@ -62,16 +72,37 @@ export function usePaperPortfolio(pollInterval = 2000) {
 }
 
 export function useSessionStatus(sessionId: string | null, pollInterval = 2000) {
-  const { data } = useBackoffPoll<SessionStatus>(
+  // WS-primary, polling fallback. When `paper:{sessionId}` is open
+  // and emitting ticks the snapshot poll drops to 30s; when the
+  // socket dies polling re-arms at `pollInterval` so the panel
+  // never goes blank.
+  const hybrid = useHybridPoll<SessionStatus, PaperTickPayload>(
+    `/ws/paper/${sessionId ?? ''}`,
     async (signal) => {
       const res = await fetch(`${API}/status/${sessionId}`, { signal })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       return res.json()
     },
-    { enabled: !!sessionId, intervalMs: pollInterval },
+    {
+      enabled: !!sessionId,
+      slowIntervalMs: 30_000,
+      fastIntervalMs: pollInterval,
+    },
   )
 
-  return data
+  // Overlay live tick fields on the polled snapshot so the
+  // equity/cash/total_trades widgets feel real-time when WS is up.
+  if (hybrid.data && hybrid.wsData?.type === 'tick') {
+    const tick = hybrid.wsData
+    return {
+      ...hybrid.data,
+      equity: tick.equity ?? hybrid.data.equity,
+      cash: tick.cash ?? hybrid.data.cash,
+      unrealized_pnl: tick.unrealized_pnl ?? hybrid.data.unrealized_pnl,
+      total_trades: tick.total_trades ?? hybrid.data.total_trades,
+    }
+  }
+  return hybrid.data
 }
 
 export function useSessionTrades(sessionId: string | null) {
