@@ -23,10 +23,11 @@ class _Position:
 
     __slots__ = ("market", "venue", "side", "size", "entry_price", "entry_ts",
                  "unrealized_pnl", "funding_paid", "borrow_cumulative_at_entry",
-                 "mark_price")
+                 "mark_price", "entry_order_id")
 
     def __init__(self, market: str, side: Side, size: float,
-                 entry_price: float, entry_ts: int, venue: str = "default"):
+                 entry_price: float, entry_ts: int, venue: str = "default",
+                 entry_order_id: str = ""):
         self.market = market
         self.venue = venue
         self.side = side
@@ -39,6 +40,11 @@ class _Position:
         # Used by paper trading (live mark price between candles); the
         # backtest path computes PnL on demand from the current candle.
         self.mark_price = entry_price
+        # Order ID of the fill that opened this position. Used by
+        # `SharedCapitalPortfolioEngine` to attribute closed-trade PnL
+        # to the strategy that opened the leg, not just the one that
+        # closed it (D-6.1 attribution-by-trade refinement).
+        self.entry_order_id = entry_order_id
 
     def update_pnl(self, current_price: float) -> None:
         if self.side == Side.LONG:

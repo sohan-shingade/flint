@@ -253,7 +253,16 @@ def test_no_borrow_snapshots_zero_borrow_paid():
 # ---------------------------------------------------------------------------
 
 def test_borrow_cost_reduces_equity():
-    """Borrow cost should be debited from cash, reducing final equity."""
+    """Borrow cost should be debited from cash, reducing final equity.
+
+    Forces both engines to `ClosePriceFill` so the slippage profile is
+    identical between the borrow / no-borrow runs — otherwise the
+    `borrow_snapshots` kwarg routes the Python fallback (SlippageFill
+    by default) while the no-borrow run uses the Rust engine, and the
+    fill-price delta swamps the borrow cost we're trying to measure.
+    """
+    from flint.execution.fill_models import ClosePriceFill
+
     candles = _sol_candles()
     borrow_snaps = _borrow_snapshots_increasing()
 
@@ -265,6 +274,7 @@ def test_borrow_cost_reduces_equity():
         strategy=strategy_jup,
         initial_capital=initial_capital,
         fee_rate=0.0,
+        fill_model=ClosePriceFill(),
         borrow_snapshots=borrow_snaps,
     )
     result_jup = engine_jup.run({"jupiter:SOL-PERP": candles})
@@ -275,6 +285,7 @@ def test_borrow_cost_reduces_equity():
         strategy=strategy_no_borrow,
         initial_capital=initial_capital,
         fee_rate=0.0,
+        fill_model=ClosePriceFill(),
         borrow_snapshots=[],
     )
     result_no_borrow = engine_no_borrow.run({"jupiter:SOL-PERP": candles})
@@ -284,6 +295,7 @@ def test_borrow_cost_reduces_equity():
         "Expected total_pnl to be reduced by borrow cost; "
         f"jup={result_jup.total_pnl}, no_borrow={result_no_borrow.total_pnl}"
     )
-    # The difference should equal the borrow paid
+    # The difference should equal the borrow paid (slippage cancels
+    # because both runs share `ClosePriceFill`).
     pnl_diff = result_no_borrow.total_pnl - result_jup.total_pnl
     assert pnl_diff == pytest.approx(result_jup.jupiter_borrow_paid, rel=0.01)

@@ -480,6 +480,7 @@ class PaperContext(ExecutionContext):
             new_pos = _Position(
                 market=fill.market, side=fill.side, size=fill.size,
                 entry_price=fill.price, entry_ts=fill.ts, venue=venue,
+                entry_order_id=fill.order_id,
             )
             new_pos.mark_price = fill.price
             self._pm.set(key, new_pos)
@@ -505,6 +506,8 @@ class PaperContext(ExecutionContext):
                 "exit_price": fill.price,
                 "exit_ts": fill.ts,
                 "pnl": pnl,
+                "entry_order_id": pos.entry_order_id,
+                "exit_order_id": fill.order_id,
             })
             self._pm.delete(key)
             # Flip remainder
@@ -513,6 +516,7 @@ class PaperContext(ExecutionContext):
                 flipped = _Position(
                     market=fill.market, side=fill.side, size=remainder,
                     entry_price=fill.price, entry_ts=fill.ts, venue=venue,
+                    entry_order_id=fill.order_id,
                 )
                 flipped.mark_price = fill.price
                 self._pm.set(key, flipped)
@@ -580,6 +584,8 @@ class PaperContext(ExecutionContext):
                 "exit_price": mark,
                 "exit_ts": now_ts,
                 "pnl": pnl,
+                "entry_order_id": pos.entry_order_id,
+                "liquidated": True,
             })
             self._pm.delete(key)
 

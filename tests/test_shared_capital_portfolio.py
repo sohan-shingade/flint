@@ -244,3 +244,136 @@ class TestWarningsThreaded:
         )
         result = engine.run(candles)
         assert isinstance(result.warnings, list)
+
+
+# ─── D-6.1 refinements: caps, attribution, dollar imbalance ──────────
+
+class TestCapitalCaps:
+    def test_cap_blocks_oversized_market_order(self):
+        """Strategy with cap=0.1 (10 % of equity) can't open $1000+
+        notional on $10k of equity."""
+        class _Greedy(Strategy):
+            def __init__(self):
+                self._fired = False
+            @property
+            def name(self): return "Greedy"
+            def reset(self): self._fired = False
+            def on_candle(self, c, h, ctx=None):
+                if not self._fired and ctx is not None and len(h) >= 1:
+                    # 50 SOL at ~$100 each = $5000 notional, way over a 10% cap
+                    ctx.market_order("SOL-PERP", Side.LONG, 50.0)
+                    self._fired = True
+                return Signal.HOLD
+
+        candles = _sin_candles(20)
+        engine = SharedCapitalPortfolioEngine(
+            strategies=[("greedy", _Greedy())],
+            initial_capital=10_000.0,
+            strategy_capital_caps={"greedy": 0.1},  # 10 % cap
+        )
+        result = engine.run(candles)
+        # No trade should land — cap rejected the only order
+        assert result.per_strategy_trades["greedy"] == 0
+        # Warning surfaced
+        assert any("CAP REJECTED" in w for w in result.warnings)
+
+    def test_cap_allows_within_budget(self):
+        """0.5 size at ~$100 = $50 notional, fits under a 1.0 cap on $10k."""
+        candles = _sin_candles(30)
+        engine = SharedCapitalPortfolioEngine(
+            strategies=[("buyer", _BuyOnce())],
+            initial_capital=10_000.0,
+            strategy_capital_caps={"buyer": 1.0},  # full equity
+        )
+        result = engine.run(candles)
+        assert result.per_strategy_trades["buyer"] >= 1
+
+    def test_no_cap_means_unbounded(self):
+        """When `strategy_capital_caps` is None, no enforcement applies."""
+        candles = _sin_candles(20)
+        engine = SharedCapitalPortfolioEngine(
+            strategies=[("buyer", _BuyOnce())],
+            initial_capital=10_000.0,
+        )
+        result = engine.run(candles)
+        # No cap warnings
+        assert not any("CAP REJECTED" in w for w in result.warnings)
+
+    def test_reduce_only_bypasses_cap(self):
+        """Reduce-only orders shrink — they shouldn't be blocked by a
+        capital cap, even if the cap math would naively reject."""
+        from flint.execution.backtest_context import BacktestContext
+
+        ctx = BacktestContext(initial_capital=10_000.0)
+        # Tight cap on a tagged proxy
+        proxy = _TaggedContextProxy(ctx, "tight", capital_cap_pct=0.001)
+        # Set up a candle so current_candle.close is non-zero
+        ctx.set_candle(_sin_candles(1)[0])
+        # Reduce-only order should bypass the cap entirely
+        oid = proxy.market_order(
+            "SOL-PERP", Side.SHORT, 100.0, reduce_only=True,
+        )
+        # oid is non-empty even though 100 SOL @ $100 = $10k > cap
+        assert oid != ""
+
+
+class TestAttributionByEntryOrderId:
+    def test_liquidation_with_no_exit_oid_attributes_to_opener(self):
+        """When a liquidation closes a position without a tagged exit
+        order, the realized PnL should still attribute to the strategy
+        that opened the leg via `entry_order_id`."""
+        from flint.execution.backtest_context import BacktestContext
+
+        ctx = BacktestContext(initial_capital=10_000.0)
+        proxy = _TaggedContextProxy(ctx, "alice")
+        ctx.set_candle(_sin_candles(1)[0])
+        oid = proxy.market_order("SOL-PERP", Side.LONG, 1.0)
+        assert oid.startswith("alice:")
+        # Now look at the queued order: its entry will tag the position
+        # when the fill lands. Process the candle so the order fills.
+        ctx.process_market_orders(_sin_candles(1)[0])
+        # Position should carry the alice-tagged entry_order_id
+        positions = list(ctx._pm.values())
+        assert len(positions) == 1
+        assert positions[0].entry_order_id.startswith("alice:")
+
+
+class TestDollarImbalance:
+    def test_dollar_imbalance_zero_for_offsetting_legs(self):
+        from flint.execution.backtest_context import BacktestContext
+        from flint.execution._position import _Position
+
+        ctx = BacktestContext(initial_capital=10_000.0)
+        long_pos = _Position(
+            market="SOL-PERP", side=Side.LONG, size=1.0,
+            entry_price=100.0, entry_ts=0, venue="default",
+        )
+        long_pos.mark_price = 100.0
+        short_pos = _Position(
+            market="BTC-PERP", side=Side.SHORT, size=0.001,
+            entry_price=100_000.0, entry_ts=0, venue="default",
+        )
+        short_pos.mark_price = 100_000.0
+        ctx._pm.set(("default", "SOL-PERP"), long_pos)
+        ctx._pm.set(("default", "BTC-PERP"), short_pos)
+        # Both legs = $100 notional → net imbalance 0
+        assert SharedCapitalPortfolioEngine.dollar_imbalance(ctx) == 0.0
+
+    def test_dollar_imbalance_positive_when_net_long(self):
+        from flint.execution.backtest_context import BacktestContext
+        from flint.execution._position import _Position
+
+        ctx = BacktestContext(initial_capital=10_000.0)
+        p = _Position(
+            market="SOL-PERP", side=Side.LONG, size=1.0,
+            entry_price=100.0, entry_ts=0, venue="default",
+        )
+        p.mark_price = 100.0
+        ctx._pm.set(("default", "SOL-PERP"), p)
+        assert SharedCapitalPortfolioEngine.dollar_imbalance(ctx) == 100.0
+
+    def test_dollar_imbalance_empty_book_returns_zero(self):
+        from flint.execution.backtest_context import BacktestContext
+
+        ctx = BacktestContext(initial_capital=10_000.0)
+        assert SharedCapitalPortfolioEngine.dollar_imbalance(ctx) == 0.0

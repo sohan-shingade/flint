@@ -26,6 +26,7 @@ jupyter notebook notebooks/funding_arb.py
 | `funding_arb.py` | `FundingArbStrategy` | SOL-PERP | Cross-venue funding dislocation capture |
 | `basis_trade.py` | `BasisTradeStrategy` | SOL-PERP | Perp-vs-spot basis capture |
 | `momentum_breakout.py` | `MomentumBreakoutStrategy` | SOL-PERP | Directional momentum baseline |
+| `multi_venue_funding_arb.py` | (synthetic) | SOL-PERP | D-2.1.d structural correctness — same-market opposing legs on Drift+HL with per-venue funding ledgers (no spillover, exact per-leg attribution) |
 
 ## Prerequisites
 

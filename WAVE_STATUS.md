@@ -39,7 +39,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 |---|---|---|---|---|
 | D-2.1.d | 🟢 | 1w | D-2.1.b ✓ | `flint/paper/context.py:PaperContext` ships — composes the same 7 managers as BacktestContext, positions keyed by `(venue, market)`. Replaces `PaperBroker` + `LiveContext` (both deleted). Schema migration on `paper_positions`. 2169/2171 sweep, ruff clean. Released as v1.5.0. Absorbed Option C of multi-venue funding (same-market opposite-leg arb works) |
 | D-3.5-orchestrator | 🟢 | 1w | D-2.1.b ✓ | `flint/risk/portfolio_orchestrator.py:PortfolioMarginEngine` composes MarginEngine + VenueAllocator + PortfolioRiskEngine into one pre-trade check facade · BacktestContext.market_order routes through it · 16 tests + 207-test regression green |
-| D-2.1.c | ⏭️ | 1w | D-2.1.b + testnet secrets | Merge LiveContext + LiveExecutionContext |
+| D-2.1.c | ⏭️ | 1w | D-2.1.b ✓ + D-2.1.d ✓ + testnet secrets | LiveContext deleted in D-2.1.d. Remaining work: refactor LiveExecutionContext + 3 concrete subclasses (Drift / HL / CCXT) to compose the same 7 managers as PaperContext. Pre-D-2.1.c structural prep slice (manager composition only, ~100 LOC) shipped in v1.5.x — landing now without testnet secrets. Full live-path rewrite still needs real venue creds. |
 | D-3.1-rust | 🟢 | 3d | D-3.4-rust ✓ | `engine/orderbook_fill.rs` walks bids/asks for VWAP fill · PyO3 `OrderbookFiller` · 9 cargo + 13 parity tests (1e-9) · 3.52x speedup over Python |
 | D-3.3-maker-detection | 🟢 | 2d | D-3.4-rust ✓ | Shipped: `FillResult.is_maker` flag, resting-limit path tags maker=true, `compute_fee_with_role` replaces `compute_fee`, `RustEngine(fee_model="drift"/"hyperliquid"/"maker_taker")` exposed — 6 maker-rebate tests green |
 
@@ -48,7 +48,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 | ID | State | Effort | Prereq | Notes |
 |---|---|---|---|---|
 | D-6.5-api | ⏭️ | 3w | D-2.1.c + secrets | `/api/v1/live/start` two-step confirmation |
-| D-4.3-websocket | 🟡 | 1w | D-4.2-backoff-full ✓ | Both pages bound. Endpoints + ConnectionManager + useWebSocket hook + paper tick/trade + live fill broadcasts shipped (slices 1+2+2b). UI: PaperTrading.tsx (slice 3) and LiveMonitor.tsx (slice 4) both subscribe to their session's WS. Paper overlays live equity / unrealized PnL / trade-count on the polled snapshot. Live merges WS fills into polled fills (deduped by order_id+ts) so the fills tape updates without waiting for next poll. Both pages show `WS LIVE`/`CONNECTING`/`OFFLINE` indicator. 23 backend + 6 hook tests + 133/133 vitest + vite build clean. Drop-polling-entirely migration deferred |
+| D-4.3-websocket | 🟢 | 1w | D-4.2-backoff-full ✓ | Endpoints + ConnectionManager + useWebSocket hook + paper tick/trade + live fill broadcasts shipped. UI: PaperTrading.tsx + LiveMonitor.tsx subscribe to their session's WS, overlay live equity/fills on the polled snapshot, show `WS LIVE`/`CONNECTING`/`OFFLINE` indicator. **v1.4.2 closed the wave with `useHybridPoll`**: WS-primary, polling secondary at 30s when WS healthy + 2s when dead. 6 new tests; 139/139 vitest. "Drop polling entirely" deliberately superseded — single WS bug with no fallback = dead UI. |
 | D-6.6-proof | ⏭️ | 1w | D-1.4-ui + D-6.5-api | Funding dislocation arb proof notebook |
 
 ## Wave 4 — weeks 10–14

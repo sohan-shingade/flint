@@ -65,6 +65,7 @@ class TestEngineUsedTelemetryInAPIResponse:
 
     def test_engine_used_key_present_in_results(self):
         from flint.api.main import app
+        from flint.models import Candle
 
         with TestClient(app) as client:
             # Any small run — we only inspect the response envelope shape.
@@ -74,6 +75,26 @@ class TestEngineUsedTelemetryInAPIResponse:
             now = datetime.now(timezone.utc)
             end_ts = int(now.timestamp())
             start_ts = int((now - timedelta(days=14)).timestamp())
+
+            # Pre-seed the store with synthetic SOL-PERP candles so the
+            # backtest doesn't try to download from Drift S3 (offline
+            # post-hack). The test only cares about the response
+            # envelope shape; the candles just need to exist + be valid.
+            store = getattr(client.app.state, "store", None)
+            if store is not None:
+                price = 100.0
+                synth = []
+                ts = start_ts
+                while ts <= end_ts:
+                    price *= 1.005 if (ts // 3600) % 2 == 0 else 0.995
+                    synth.append(Candle(
+                        market="SOL-PERP", resolution_s=3600, ts=ts,
+                        open=price - 0.5, high=price + 1.0,
+                        low=price - 1.0, close=price, volume=1000.0,
+                    ))
+                    ts += 3600
+                store.upsert_candles(synth)
+
             r = client.post("/api/v1/backtest/run", json={
                 "strategy": "ma_crossover",
                 "market": "SOL-PERP",

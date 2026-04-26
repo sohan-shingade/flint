@@ -22,8 +22,15 @@ from ..models import (
     AccountState, Candle, Fill, Order, OrderState, OrderType,
     PositionInfo,
 )
+from .borrow_ledger import BorrowLedger
+from .cash_manager import CashManager
 from .context import ExecutionContext
+from .fill_recorder import FillRecorder
+from .funding_ledger import FundingLedger
+from .market_data_feed import MarketDataFeed
+from .order_queue import OrderQueue
 from .order_tracker import OrderTracker
+from .position_manager import PositionManager
 from ..risk.guards import RiskManager
 
 logger = logging.getLogger("flint.live")
@@ -80,6 +87,21 @@ class LiveExecutionContext(ExecutionContext, abc.ABC):
         self._order_counter = 0
         self._tick_count = 0
         self._running = False
+
+        # D-2.1.c structural prep — compose the same 7 managers as
+        # `BacktestContext` and `PaperContext`. They're empty placeholders
+        # in this slice; the next slice (after testnet credentials are
+        # available) wires venue events into them so live shares the
+        # same state model as paper. Until then `_positions_cache`,
+        # `_cash`, and `_fills` remain the source of truth — these
+        # managers don't yet drive any behavior.
+        self._pm = PositionManager()
+        self._cm = CashManager(initial_capital, allocator=None)
+        self._fr = FillRecorder()
+        self._oq = OrderQueue()
+        self._fl = FundingLedger()
+        self._bl = BorrowLedger()
+        self._mdf = MarketDataFeed()
 
         self._tracker = OrderTracker(
             max_retries=max_retries,

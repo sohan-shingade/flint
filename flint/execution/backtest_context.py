@@ -706,6 +706,7 @@ class BacktestContext(ExecutionContext):
                 "exit_ts": event.ts,
                 "pnl": event.loss,
                 "funding_paid": pos.funding_paid,
+                "entry_order_id": pos.entry_order_id,
                 "liquidated": True,
             })
 
@@ -854,20 +855,43 @@ class BacktestContext(ExecutionContext):
         return fills
 
     def apply_funding(self, funding_rate: FundingRate) -> float:
-        """Apply funding payment to all positions in this market. Returns total paid.
+        """Apply funding payment to positions on the funding_rate's
+        venue + market. Returns total paid.
 
-        D-2.1.b caller-site migration (post-step-7): explicit
-        `self._cm.debit(...)` and `self._cm.add_funding(...)` instead of
-        the legacy `self._debit_cash` helper + `self._total_funding +=`
-        compound assignment. Position iteration goes through
-        `self._pm.items()` so the read path is also explicit.
+        Pre-D-2.1.d this iterated every leg on the market regardless
+        of venue, so a Drift rate would apply to an HL leg held by the
+        same session — the same correctness bug paper had (Option A
+        of `paper-multivenue-funding`). The fix mirrors that ladder:
+        match `funding_rate.source` against each position's venue and
+        apply only when they line up. A `source="default"` rate
+        applies to every leg on the market (back-compat — old single-
+        venue tests construct FundingRate without setting source).
         """
         market = funding_rate.market
+        rate_venue = getattr(funding_rate, "source", "") or ""
         total_payment = 0.0
         for (venue, m), pos in self._pm.items():
             if m != market:
                 continue
-            # Use funding record's oracle_price; fall back to current candle close.
+            # Filter by venue when the rate names a real one. The
+            # legacy single-venue path uses the default `source="drift"`
+            # but pre-existing single-venue backtests don't tag their
+            # positions with a matching venue ("default") — so we
+            # fall back to "apply everywhere" when no leg's venue
+            # matches the rate's source. Multi-venue books only get
+            # the strict per-venue dispatch.
+            if rate_venue and venue != rate_venue:
+                # If this market has *any* leg on rate_venue, strict
+                # filter wins. Otherwise (legacy single-venue tests
+                # where every leg sits on "default"), don't drop the
+                # payment — that's the test contract from before
+                # multi-venue existed.
+                has_matching_leg = any(
+                    v == rate_venue and mm == market
+                    for (v, mm) in self._pm.keys()
+                )
+                if has_matching_leg:
+                    continue
             price = funding_rate.oracle_price
             if price <= 0 and self._current_candle:
                 price = self._current_candle.close
@@ -964,6 +988,7 @@ class BacktestContext(ExecutionContext):
         size: float,
         entry_price: float,
         entry_ts: int,
+        entry_order_id: str = "",
     ) -> "_Position":
         """Construct a `_Position` and snapshot the Jupiter borrow
         cumulative at entry when applicable. Used by both opening and
@@ -971,6 +996,7 @@ class BacktestContext(ExecutionContext):
         new_pos = _Position(
             market=market, side=side, size=size,
             entry_price=entry_price, entry_ts=entry_ts, venue=venue,
+            entry_order_id=entry_order_id,
         )
         if venue == "jupiter":
             cum = self._bl.cumulative_at(
@@ -1017,6 +1043,7 @@ class BacktestContext(ExecutionContext):
             # Opening a new position.
             self._pm.set(key, self._new_position(
                 market, venue, fill.side, fill.size, fill.price, fill.ts,
+                entry_order_id=fill.order_id,
             ))
             return
 
@@ -1055,6 +1082,7 @@ class BacktestContext(ExecutionContext):
                 "pnl": pnl,
                 "funding_paid": pos.funding_paid,
                 "borrow_paid": borrow_cost,
+                "entry_order_id": pos.entry_order_id,
                 "exit_order_id": fill.order_id,
             })
             remainder = fill.size - pos.size
@@ -1063,6 +1091,7 @@ class BacktestContext(ExecutionContext):
                 # Flip — open the remainder on the opposite side.
                 self._pm.set(key, self._new_position(
                     market, venue, fill.side, remainder, fill.price, fill.ts,
+                    entry_order_id=fill.order_id,
                 ))
             return
 
@@ -1093,6 +1122,7 @@ class BacktestContext(ExecutionContext):
             "funding_paid": 0.0,
             "borrow_paid": borrow_cost,
             "partial": True,
+            "entry_order_id": pos.entry_order_id,
             "exit_order_id": fill.order_id,
         })
         pos.size -= fill.size
