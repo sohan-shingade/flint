@@ -1,6 +1,12 @@
 # Paper trading — multi-venue funding correctness
 
-**Status**: design exploration. No code change yet.
+**Status**: shipped end-to-end via the A → C ladder.
+- **Option A** (per-venue funding query in the engine tick loop) — v1.4.2
+- **Option C** (full broker re-architecture as `PaperContext`, positions
+  keyed by `(venue, market)` so same-market opposite-leg arb works) —
+  v1.5.0 (D-2.1.d)
+- **Option B** skipped — the structural fix in v1.5.0 made it redundant.
+
 **Trigger**: audit during the price-ticker discussion. Confirmed that
 single-venue paper trading applies funding correctly per-venue, but
 multi-venue paper sessions silently underreport funding on every leg

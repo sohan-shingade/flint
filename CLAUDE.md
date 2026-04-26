@@ -37,8 +37,10 @@ To update docs: edit `docs/guides/*.md`, then run `python scripts/build_docs.py`
 
 ## Architecture cheat sheet
 
-`BacktestContext` (and via composition, the paper engine's `LiveContext`)
-delegates state to seven managers in `flint/execution/`:
+`BacktestContext` (`flint/execution/`) and `PaperContext` (`flint/paper/context.py`)
+both compose the same seven managers in `flint/execution/`. Paper trading post-D-2.1.d
+unifies the old `PaperBroker` + `LiveContext` split into one class — same shape as
+backtest. Positions keyed by `(venue, market)` tuples in both contexts:
 
 | Manager | Owns |
 |---|---|

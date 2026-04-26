@@ -170,7 +170,7 @@ Multi-venue backtests require `capital_allocation` in the request:
 
 ## ExecutionContext API
 
-The `ctx` parameter is an instance of `ExecutionContext` (defined in `flint/execution/context.py`). All implementations -- `BacktestContext`, `PaperBroker`, `LiveDriftContext`, `LiveHyperliquidContext`, `MultiVenueLiveContext` -- share the same interface. Strategies deploy to any execution environment without modification.
+The `ctx` parameter is an instance of `ExecutionContext` (defined in `flint/execution/context.py`). All implementations -- `BacktestContext`, `PaperContext`, `LiveDriftContext`, `LiveHyperliquidContext`, `MultiVenueLiveContext` -- share the same interface. Strategies deploy to any execution environment without modification.
 
 ### State Properties
 

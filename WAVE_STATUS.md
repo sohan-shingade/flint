@@ -37,7 +37,7 @@ Updated: 2026-04-24 (start of Wave 1 execution).
 
 | ID | State | Effort | Prereq | Notes |
 |---|---|---|---|---|
-| D-2.1.d | ⏭️ | 1w | D-2.1.b | Separate `PaperContext` |
+| D-2.1.d | 🟢 | 1w | D-2.1.b ✓ | `flint/paper/context.py:PaperContext` ships — composes the same 7 managers as BacktestContext, positions keyed by `(venue, market)`. Replaces `PaperBroker` + `LiveContext` (both deleted). Schema migration on `paper_positions`. 2169/2171 sweep, ruff clean. Released as v1.5.0. Absorbed Option C of multi-venue funding (same-market opposite-leg arb works) |
 | D-3.5-orchestrator | 🟢 | 1w | D-2.1.b ✓ | `flint/risk/portfolio_orchestrator.py:PortfolioMarginEngine` composes MarginEngine + VenueAllocator + PortfolioRiskEngine into one pre-trade check facade · BacktestContext.market_order routes through it · 16 tests + 207-test regression green |
 | D-2.1.c | ⏭️ | 1w | D-2.1.b + testnet secrets | Merge LiveContext + LiveExecutionContext |
 | D-3.1-rust | 🟢 | 3d | D-3.4-rust ✓ | `engine/orderbook_fill.rs` walks bids/asks for VWAP fill · PyO3 `OrderbookFiller` · 9 cargo + 13 parity tests (1e-9) · 3.52x speedup over Python |
