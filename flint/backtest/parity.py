@@ -129,19 +129,17 @@ class ParityTest:
         return engine.run(self._candles)
 
     def _run_paper(self):
-        from ..execution.paper_broker import PaperBroker
-        from ..execution.live_context import LiveContext
         from ..execution.fee_models import FlatFeeModel
         from ..execution.fill_models import ClosePriceFill
+        from ..paper.context import PaperContext
 
         self._strategy.reset()
         fee_model = FlatFeeModel(fee_bps=self._fee_rate * 10_000)
-        broker = PaperBroker(
+        ctx = PaperContext(
             initial_capital=self._initial_capital,
             fill_model=ClosePriceFill(),
             fee_model=fee_model,
         )
-        ctx = LiveContext(broker=broker)
 
         equity_curve: List[float] = [self._initial_capital]
         all_fills: List[Fill] = []
@@ -155,39 +153,41 @@ class ParityTest:
             try:
                 result = self._strategy.on_candle(candle, history, ctx)
                 if result == Signal.BUY and not has_position:
-                    size = (broker.cash * 1.0) / candle.close
+                    size = (ctx.cash * 1.0) / candle.close
                     if size > 0:
                         ctx.market_order(candle.market, Side.LONG, size)
                         has_position = True
                 elif result == Signal.SELL and has_position:
-                    pos = broker.positions.get(candle.market)
-                    if pos:
-                        close_side = Side.SHORT if pos["side"] == "long" else Side.LONG
-                        ctx.market_order(candle.market, close_side, pos["size"])
+                    legs = ctx.positions_for_market(candle.market)
+                    if legs:
+                        pos = legs[0]
+                        close_side = Side.SHORT if pos.side == Side.LONG else Side.LONG
+                        ctx.market_order(candle.market, close_side, pos.size)
                         has_position = False
             except Exception as e:
                 logger.warning("Strategy error at candle %d: %s", i, e)
 
-            fills = broker.process_candle(candle)
+            fills = ctx.process_candle(candle)
             all_fills.extend(fills)
 
             # Track position state after fills
-            has_position = candle.market in broker.positions
+            has_position = bool(ctx.positions_for_market(candle.market))
 
-            equity_curve.append(broker.equity)
+            equity_curve.append(ctx.equity)
 
         # Close any remaining position at the last candle.
         # Append terminal equity rather than overwriting so the mark-to-market
         # final-bar equity is preserved — matches behavior in engine.py.
         if self._candles and has_position:
             last = self._candles[-1]
-            pos = broker.positions.get(last.market)
-            if pos:
-                close_side = Side.SHORT if pos["side"] == "long" else Side.LONG
-                ctx.market_order(last.market, close_side, pos["size"])
-                close_fills = broker.process_candle(last)
+            legs = ctx.positions_for_market(last.market)
+            if legs:
+                pos = legs[0]
+                close_side = Side.SHORT if pos.side == Side.LONG else Side.LONG
+                ctx.market_order(last.market, close_side, pos.size)
+                close_fills = ctx.process_candle(last)
                 all_fills.extend(close_fills)
-                equity_curve.append(broker.equity)
+                equity_curve.append(ctx.equity)
 
         return all_fills, equity_curve
 

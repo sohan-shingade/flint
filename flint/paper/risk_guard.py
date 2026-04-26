@@ -55,11 +55,12 @@ class RiskGuard:
             if daily_loss > self.config.daily_loss_limit:
                 return f"daily_loss (${daily_loss:.0f} > ${self.config.daily_loss_limit:.0f})"
 
-        # Position size
+        # Position size — iterate every (venue, market) leg so multi-
+        # venue legs each pass the per-leg cap independently.
         if broker.equity > 0:
-            for market, pos in broker.positions.items():
-                mark = mark_prices.get(market, pos.get("entry_price", 0))
-                pos_value = pos["size"] * mark
+            for pos in broker._pm.values():
+                mark = mark_prices.get(pos.market, pos.entry_price)
+                pos_value = pos.size * mark
                 pos_pct = pos_value / broker.equity
                 if pos_pct > self.config.max_position_pct:
                     return f"max_position ({pos_pct:.0%} > {self.config.max_position_pct:.0%})"
@@ -87,15 +88,15 @@ class RiskGuard:
         mmr, liq_fee = self._get_venue_margins(broker)
 
         total_margin_required = 0.0
-        for market, pos in broker.positions.items():
-            mark = mark_prices.get(market, pos.get("entry_price", 0))
-            notional = pos["size"] * mark
+        for pos in broker._pm.values():
+            mark = mark_prices.get(pos.market, pos.entry_price)
+            notional = pos.size * mark
             total_margin_required += notional * mmr
 
         if total_margin_required > 0 and broker.equity <= total_margin_required:
-            for market, pos in list(broker.positions.items()):
-                mark = mark_prices.get(market, pos.get("entry_price", 0))
-                penalty = pos["size"] * mark * liq_fee
+            for pos in list(broker._pm.values()):
+                mark = mark_prices.get(pos.market, pos.entry_price)
+                penalty = pos.size * mark * liq_fee
                 broker.cash -= penalty
             if hasattr(broker, "close_all_positions"):
                 broker.close_all_positions(mark_prices)
@@ -105,9 +106,9 @@ class RiskGuard:
     def margin_ratio(self, broker, mark_prices: dict) -> float:
         mmr, _ = self._get_venue_margins(broker)
         total_req = 0.0
-        for market, pos in broker.positions.items():
-            mark = mark_prices.get(market, pos.get("entry_price", 0))
-            total_req += pos["size"] * mark * mmr
+        for pos in broker._pm.values():
+            mark = mark_prices.get(pos.market, pos.entry_price)
+            total_req += pos.size * mark * mmr
         return broker.equity / total_req if total_req > 0 else float("inf")
 
     def liquidation_distance_pct(self, broker, mark_prices: dict) -> float:
@@ -124,9 +125,9 @@ class RiskGuard:
             daily_loss = self._day_start_equity - broker.equity
         max_pos_used = 0.0
         if broker.equity > 0:
-            for market, pos in broker.positions.items():
-                mark = mark_prices.get(market, pos.get("entry_price", 0))
-                pos_pct = (pos["size"] * mark) / broker.equity
+            for pos in broker._pm.values():
+                mark = mark_prices.get(pos.market, pos.entry_price)
+                pos_pct = (pos.size * mark) / broker.equity
                 max_pos_used = max(max_pos_used, pos_pct)
         return {
             "current_drawdown": round(dd, 4),

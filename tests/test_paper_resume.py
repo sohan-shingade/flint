@@ -16,9 +16,16 @@ from flint.strategy.ma_crossover import MACrossoverStrategy
 @pytest.fixture
 def store_and_engine():
     db = os.path.join(tempfile.gettempdir(), "test_resume.duckdb")
+    if os.path.exists(db):
+        os.unlink(db)
     store = FlintStore(db)
     engine = PaperTradingEngine(store)
-    yield store, engine
+    # Resume's candle-gap backfill calls live Drift APIs (offline
+    # post-hack); short-circuit to a no-op so tests don't hang on
+    # real network calls. Tests that explicitly verify backfill
+    # patch this themselves and inherit precedence.
+    with patch("flint.paper.engine.backfill_candle_gap", return_value=0):
+        yield store, engine
     store.close()
     if os.path.exists(db):
         os.unlink(db)
@@ -103,8 +110,14 @@ class S(Strategy):
     assert resumed == 1
 
     session = engine2.sessions["resume-test"]
-    assert len(session.broker.positions) == 1
-    assert session.broker.positions["SOL-PERP"]["size"] == 50.0
+    # Post-D-2.1.d: positions are keyed by (venue, market) inside the
+    # PaperContext's PositionManager. The legacy save_positions row above
+    # has no `venue` field, so it lands at venue="unknown" (back-compat
+    # default in session_store.save_positions / load_positions).
+    assert len(session.ctx._pm) == 1
+    pos = session.ctx.position_at("unknown", "SOL-PERP")
+    assert pos is not None
+    assert pos.size == 50.0
     assert session.last_candle_ts == 1700050000
 
 
@@ -152,11 +165,14 @@ class S(Strategy):
     assert resumed == 1
 
     session = engine2.sessions["trades-test"]
-    assert len(session.broker.closed_trades) == 2
-    assert session.broker.closed_trades[0]["pnl"] == 50.0
-    assert session.broker.closed_trades[1]["pnl"] == 10.0
-    assert session.broker.total_fees == 1.5
-    assert session.broker.total_funding == pytest.approx(-1.5)
+    # Post-D-2.1.d: PaperContext exposes the same closed_trades / counters
+    # as the legacy PaperBroker. session.broker is just a back-compat
+    # alias for session.ctx; reading via session.ctx is preferred.
+    assert len(session.ctx.closed_trades) == 2
+    assert session.ctx.closed_trades[0]["pnl"] == 50.0
+    assert session.ctx.closed_trades[1]["pnl"] == 10.0
+    assert session.ctx.total_fees == 1.5
+    assert session.ctx.total_funding == pytest.approx(-1.5)
 
 
 def test_resume_skips_stopped_sessions(store_and_engine):

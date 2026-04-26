@@ -212,13 +212,14 @@ CREATE TABLE IF NOT EXISTS paper_trades (
 _CREATE_PAPER_POSITIONS = """
 CREATE TABLE IF NOT EXISTS paper_positions (
     session_id     VARCHAR NOT NULL,
+    venue          VARCHAR NOT NULL DEFAULT 'unknown',
     market         VARCHAR NOT NULL,
     side           VARCHAR NOT NULL,
     size           DOUBLE NOT NULL,
     entry_price    DOUBLE NOT NULL,
     entry_ts       BIGINT NOT NULL,
     unrealized_pnl DOUBLE NOT NULL DEFAULT 0,
-    PRIMARY KEY (session_id, market)
+    PRIMARY KEY (session_id, venue, market)
 );
 """
 
@@ -506,6 +507,45 @@ class FlintStore:
         self._conn.execute(_CREATE_PAPER_EQUITY_HISTORY)
         self._conn.execute(_CREATE_PAPER_TRADES)
         self._conn.execute(_CREATE_PAPER_POSITIONS)
+        # Migration: add venue column + widen PK if existing table predates it
+        try:
+            cols = {r[0] for r in self._conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='paper_positions'"
+            ).fetchall()}
+            if cols and "venue" not in cols:
+                self._conn.execute("BEGIN TRANSACTION")
+                try:
+                    self._conn.execute("""
+                        CREATE TABLE paper_positions_new (
+                            session_id     VARCHAR NOT NULL,
+                            venue          VARCHAR NOT NULL DEFAULT 'unknown',
+                            market         VARCHAR NOT NULL,
+                            side           VARCHAR NOT NULL,
+                            size           DOUBLE NOT NULL,
+                            entry_price    DOUBLE NOT NULL,
+                            entry_ts       BIGINT NOT NULL,
+                            unrealized_pnl DOUBLE NOT NULL DEFAULT 0,
+                            PRIMARY KEY (session_id, venue, market)
+                        )
+                    """)
+                    self._conn.execute(
+                        "INSERT INTO paper_positions_new "
+                        "SELECT session_id, 'unknown', market, side, size, "
+                        "entry_price, entry_ts, unrealized_pnl "
+                        "FROM paper_positions"
+                    )
+                    self._conn.execute("DROP TABLE paper_positions")
+                    self._conn.execute(
+                        "ALTER TABLE paper_positions_new RENAME TO paper_positions"
+                    )
+                    self._conn.execute("COMMIT")
+                    _logger.info("Migrated paper_positions: added venue column")
+                except Exception as e:
+                    self._conn.execute("ROLLBACK")
+                    _logger.warning("paper_positions venue migration failed: %s", e)
+        except Exception as e:
+            _logger.debug("paper_positions migration check: %s", e)
         self._conn.execute(_CREATE_PAPER_FUNDING_PAYMENTS)
         # Migration: add venue column + widen PK if existing table predates it
         try:

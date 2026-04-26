@@ -1,7 +1,9 @@
 """PaperTradingEngine — runs a strategy against live data with simulated execution.
 
 Uses the same Strategy code as BacktestEngine, but receives candles from
-the live collector and executes orders through PaperBroker.
+the live collector and executes orders through `PaperContext` (post-D-2.1.d
+the unified state owner + strategy-facing context, replacing the old
+`PaperBroker` + `LiveContext` split).
 """
 from __future__ import annotations
 
@@ -12,11 +14,11 @@ import uuid
 from typing import Dict, List, Optional
 
 from ..backtest.engine import BacktestEngine
-from ..execution.live_context import LiveContext
-from ..execution.paper_broker import PaperBroker
+from ..execution._position import _Position
 from ..models import Candle, Signal, Side
 from ..store import FlintStore
 from ..strategy.base import Strategy
+from .context import PaperContext
 from .session_store import PaperSessionStore
 from .risk_guard import RiskGuard, RiskConfig
 
@@ -60,17 +62,26 @@ def backfill_candle_gap(store: FlintStore, market: str, from_ts: int, to_ts: int
 
 
 class PaperSession:
-    """Represents a single paper trading session."""
+    """Represents a single paper trading session.
+
+    Post-D-2.1.d: `ctx` is a `PaperContext` (unified state owner +
+    strategy-facing context). The legacy `broker` attribute aliases
+    the same instance so existing callers that read
+    `session.broker.<x>` keep working — `PaperContext` exposes every
+    `PaperBroker` property + method.
+    """
 
     def __init__(self, session_id: str, strategy: Strategy, market: str,
-                 resolution_s: int, broker: PaperBroker, ctx: LiveContext,
-                 venue: str = "drift"):
+                 resolution_s: int, ctx: PaperContext, venue: str = "drift"):
         self.session_id = session_id
         self.strategy = strategy
         self.market = market
         self.resolution_s = resolution_s
-        self.broker = broker
         self.ctx = ctx
+        # Back-compat alias: `session.broker` is the same PaperContext
+        # instance. Code that reads `session.broker.cash`, `.positions`,
+        # `.equity`, etc. resolves onto PaperContext properties.
+        self.broker = ctx
         self.venue = venue
         self.started_at = int(time.time())
         self.status = "running"
@@ -78,16 +89,16 @@ class PaperSession:
         self.last_candle_ts = 0
 
     def to_dict(self) -> dict:
-        unrealized_pnl = sum(
-            p.get("unrealized_pnl", 0) for p in self.broker.positions.values()
-        )
+        unrealized_pnl = self.ctx.unrealized_pnl_total
         # Include DB trades (replay + live) when session_store is available
         ss = getattr(self, "session_store", None)
         if ss:
             all_trades = ss.get_trades(self.session_id)
         else:
-            all_trades = self.broker.closed_trades
+            all_trades = self.ctx.closed_trades
         realized_pnl = sum(t.get("pnl", 0) for t in all_trades)
+        # Public position list — flat dicts, one per (venue, market) leg.
+        positions = [p.to_dict() for p in self.ctx._pm.values()]
         return {
             "session_id": self.session_id,
             "strategy": self.strategy.name,
@@ -96,14 +107,14 @@ class PaperSession:
             "resolution_s": self.resolution_s,
             "status": self.status,
             "started_at": self.started_at,
-            "equity": self.broker.equity,
-            "cash": self.broker.cash,
-            "initial_capital": self.broker.initial_capital,
-            "positions": list(self.broker.positions.values()),
-            "pending_orders": len(self.broker.pending_orders),
+            "equity": self.ctx.equity,
+            "cash": self.ctx.cash,
+            "initial_capital": self.ctx.initial_capital,
+            "positions": positions,
+            "pending_orders": len(self.ctx.pending_orders),
             "total_trades": len(all_trades),
-            "total_fees": self.broker.total_fees,
-            "total_funding": self.broker.total_funding,
+            "total_fees": self.ctx.total_fees,
+            "total_funding": self.ctx.total_funding,
             "realized_pnl": realized_pnl,
             "unrealized_pnl": unrealized_pnl,
             "pnl": realized_pnl + unrealized_pnl,
@@ -195,12 +206,13 @@ class PaperTradingEngine:
         session = self.sessions.get(session_id)
         if session is None:
             return False
-        # Close all positions
-        for market in list(session.broker.positions.keys()):
-            pos = session.broker.positions[market]
-            opposite = Side.SHORT if pos["side"] == "long" else Side.LONG
-            session.ctx.market_order(market, opposite, pos["size"], reduce_only=True)
-        session.broker.cancel_all()
+        # Close every leg across all (venue, market) pairings.
+        for (venue, market), pos in list(session.ctx._pm.items()):
+            opposite = Side.SHORT if pos.side == Side.LONG else Side.LONG
+            session.ctx.market_order(
+                market, opposite, pos.size, reduce_only=True, venue=venue,
+            )
+        session.ctx.cancel_all()
         session.status = "killed"
         task = self._tasks.get(session_id)
         if task:
@@ -226,7 +238,7 @@ class PaperTradingEngine:
         ss = getattr(session, "session_store", None)
         if ss:
             return ss.get_trades(session_id)
-        return session.broker.closed_trades
+        return session.ctx.closed_trades
 
     def list_sessions(self) -> List[dict]:
         return [s.to_dict() for s in self.sessions.values()]
@@ -260,45 +272,50 @@ class PaperTradingEngine:
                 cash = last_eq["equity"] if last_eq else full["initial_capital"]
                 last_ts = last_eq["ts"] if last_eq else 0
 
-                # Reconstruct broker with recovered cash (venue defaults to "drift" for backward compat)
+                # Reconstruct context with recovered cash (venue defaults to "drift" for backward compat)
                 resumed_venue = full.get("venue", "drift")
-                broker = PaperBroker(initial_capital=cash, venue=resumed_venue)
+                ctx = PaperContext(
+                    initial_capital=cash, venue=resumed_venue,
+                    store=self.store, resolution_s=3600, session_id=sid,
+                )
                 # Restore full equity history for accurate peak/drawdown tracking
-                broker.equity_history = [eq["equity"] for eq in equity_history] if equity_history else [cash]
+                ctx.equity_history = (
+                    [eq["equity"] for eq in equity_history]
+                    if equity_history else [cash]
+                )
 
-                # Restore positions from DB
+                # Restore positions from DB into the PositionManager,
+                # keyed by (venue, market) so multi-venue legs survive.
                 positions = ss.load_positions(sid)
                 for p in positions:
-                    broker.positions[p["market"]] = {
-                        "market": p["market"],
-                        "venue": p.get("venue", resumed_venue),
-                        "side": p["side"],
-                        "size": p["size"],
-                        "entry_price": p["entry_price"],
-                        "entry_ts": p.get("entry_ts", 0),
-                        "unrealized_pnl": p.get("unrealized_pnl", 0),
-                        "mark_price": p.get("entry_price", 0),
-                    }
+                    venue = p.get("venue", resumed_venue)
+                    side = Side.LONG if p["side"] == "long" else Side.SHORT
+                    pos = _Position(
+                        market=p["market"], side=side, size=p["size"],
+                        entry_price=p["entry_price"],
+                        entry_ts=p.get("entry_ts", 0), venue=venue,
+                    )
+                    pos.unrealized_pnl = p.get("unrealized_pnl", 0)
+                    pos.mark_price = p.get("entry_price", 0)
+                    ctx._pm.set((venue, p["market"]), pos)
 
-                # Restore closed trades into broker memory
+                # Restore closed trades + counters via the managers.
                 trades = ss.get_trades(sid)
-                broker.closed_trades = trades
-                broker.total_fees = sum(t.get("fees", 0) for t in trades)
+                # Keep the closed-trade ledger in sync for tearsheet
+                # attribution (PaperContext exposes it via property).
+                ctx._pm._closed.extend(trades)
+                ctx._cm.total_fees = sum(t.get("fees", 0) for t in trades)
 
-                # Restore funding total
+                # Restore funding total from the persisted ledger.
                 funding_payments = ss.get_funding_payments(sid)
-                broker.total_funding = sum(fp.get("payment", 0) for fp in funding_payments)
+                ctx._cm.total_funding = sum(
+                    fp.get("payment", 0) for fp in funding_payments
+                )
 
-                # Create context and session
-                ctx = LiveContext(broker, store=self.store, resolution_s=3600, session_id=sid)
                 session = PaperSession(
-                    session_id=sid,
-                    strategy=strategy,
-                    market=full["market"],
-                    resolution_s=3600,
-                    broker=broker,
-                    ctx=ctx,
-                    venue=resumed_venue,
+                    session_id=sid, strategy=strategy,
+                    market=full["market"], resolution_s=3600,
+                    ctx=ctx, venue=resumed_venue,
                 )
                 session.last_candle_ts = last_ts
                 session.status = "live"
@@ -322,7 +339,7 @@ class PaperTradingEngine:
                 self.sessions[sid] = session
 
                 # Cancel stale pending orders (they're from before restart)
-                broker.pending_orders.clear()
+                ctx._oq.cancel_all()
 
                 # Backfill any candle data missing during server downtime
                 now_ts = int(time.time())
@@ -427,14 +444,20 @@ class PaperTradingEngine:
                 ss.save_trades(session_id, replay_trades)
 
         # Set up live session
-        broker = PaperBroker(initial_capital=final_cash, capital_allocation=capital_allocation, venue=venue)
-        # RiskGuard.check() reads broker.equity_history for peak tracking
-        broker.equity_history = [final_cash]
-        ctx = LiveContext(broker, store=self.store, resolution_s=resolution_s, session_id=session_id)
+        ctx = PaperContext(
+            initial_capital=final_cash,
+            capital_allocation=capital_allocation,
+            venue=venue,
+            store=self.store,
+            resolution_s=resolution_s,
+            session_id=session_id,
+        )
+        # RiskGuard.check() reads ctx.equity_history for peak tracking
+        ctx.equity_history = [final_cash]
 
         session = PaperSession(
             session_id=session_id, strategy=strategy, market=market,
-            resolution_s=resolution_s, broker=broker, ctx=ctx, venue=venue,
+            resolution_s=resolution_s, ctx=ctx, venue=venue,
         )
         session.last_candle_ts = candles[-1].ts if candles else 0
         session.status = "live"
@@ -521,9 +544,13 @@ class PaperTradingEngine:
         """
         last_funding_ts = getattr(session, '_last_funding_ts', 0)
         now_ts = int(time.time())
+        # Distinct venues across the session's open legs. Multi-venue
+        # paper sessions (cross-venue funding-arb, basis trades) hold
+        # legs on multiple venues simultaneously now that positions
+        # are keyed by (venue, market) post-D-2.1.d.
         venues_in_book = {
-            pos.get("venue", session.broker.venue)
-            for pos in session.broker.positions.values()
+            pos.venue for pos in session.ctx._pm.values()
+            if pos.market == session.market
         }
         latest_ts = last_funding_ts
         for v in venues_in_book:
@@ -541,7 +568,7 @@ class PaperTradingEngine:
             for fr in funding:
                 mp = fr["mark_price"] if fr.get("mark_price") else fallback_mark_price
                 try:
-                    payment = session.broker.apply_funding(
+                    payment = session.ctx.apply_funding(
                         session.market, fr["rate_hourly"], mp, venue=v,
                     )
                 except Exception as e:
@@ -551,11 +578,11 @@ class PaperTradingEngine:
                     )
                     continue
                 if payment != 0 and ss:
-                    pos = session.broker.positions.get(session.market)
+                    pos = session.ctx.position_at(v, session.market)
                     ss.save_funding_payment(
                         session.session_id, fr["ts"], session.market,
                         fr["rate_hourly"], payment,
-                        pos["size"] if pos else 0, mp,
+                        pos.size if pos else 0, mp,
                         venue=v,
                     )
                 if fr["ts"] > latest_ts:
@@ -592,7 +619,7 @@ class PaperTradingEngine:
                         history = history[-500:]
                     session.last_candle_ts = candle.ts
                     session.ctx.set_candle(candle)
-                    session.broker.process_candle(candle)
+                    session.ctx.process_candle(candle)
 
                     signal = session.strategy.on_candle(candle, history, ctx=session.ctx)
 
@@ -603,18 +630,18 @@ class PaperTradingEngine:
                     elif signal == Signal.SELL and session.ctx.positions:
                         session.ctx.close_position(candle.market)
 
-                    session.broker.process_candle(candle)
+                    session.ctx.process_candle(candle)
 
                     # Persist new closed trades
                     if ss:
                         trade_count = getattr(session, '_persisted_trade_count', 0)
-                        new_trades = session.broker.closed_trades[trade_count:]
+                        new_trades = session.ctx.closed_trades[trade_count:]
                         if new_trades:
                             for idx, t in enumerate(new_trades):
                                 t.setdefault("trade_id", f"live-{session.session_id}-{trade_count + idx}")
                                 t.setdefault("is_replay", False)
                             ss.save_trades(session.session_id, new_trades)
-                            session._persisted_trade_count = len(session.broker.closed_trades)
+                            session._persisted_trade_count = len(session.ctx.closed_trades)
                             # D-4.3-websocket slice 2b: broadcast each
                             # newly-closed trade to ws subscribers.
                             if self.ws_manager is not None:
@@ -628,13 +655,12 @@ class PaperTradingEngine:
                                         logger.debug("WS trade broadcast skipped: %s", e)
 
                     # Track equity for risk guard peak calculation
-                    if hasattr(session.broker, "equity_history"):
-                        session.broker.equity_history.append(session.broker.equity)
+                    session.ctx.equity_history.append(session.ctx.equity)
 
                     eq_snap = {
-                        "ts": candle.ts, "equity": session.broker.equity,
-                        "cash": session.broker.cash,
-                        "unrealized_pnl": session.broker.equity - session.broker.cash,
+                        "ts": candle.ts, "equity": session.ctx.equity,
+                        "cash": session.ctx.cash,
+                        "unrealized_pnl": session.ctx.unrealized_pnl_total,
                         "is_replay": False,
                     }
                     session.equity_history.append(eq_snap)
@@ -650,26 +676,24 @@ class PaperTradingEngine:
                             await self.ws_manager.broadcast(
                                 f"paper:{session.session_id}",
                                 {"type": "tick", **eq_snap,
-                                 "total_trades": len(session.broker.closed_trades)},
+                                 "total_trades": len(session.ctx.closed_trades)},
                             )
                         except Exception as e:
                             logger.debug("WS broadcast skipped: %s", e)
 
-                    # Persist positions for crash recovery
+                    # Persist positions for crash recovery — one row
+                    # per (venue, market) leg.
                     if ss:
-                        pos_list = [
-                            {"market": m, "side": p["side"], "size": p["size"],
-                             "entry_price": p["entry_price"], "entry_ts": p.get("entry_ts", 0),
-                             "unrealized_pnl": p.get("unrealized_pnl", 0)}
-                            for m, p in session.broker.positions.items()
-                        ]
+                        pos_list = [p.to_dict() for p in session.ctx._pm.values()]
                         ss.save_positions(session.session_id, pos_list)
 
                     # Risk guard check
                     guard = getattr(session, "risk_guard", None)
                     if guard:
                         mark_prices = {session.market: candle.close}
-                        breach = guard.check(session.broker, session.broker.initial_capital, mark_prices)
+                        breach = guard.check(
+                            session.ctx, session.ctx.initial_capital, mark_prices,
+                        )
                         if breach:
                             session.status = "risk_stopped"
                             logger.warning("Session %s risk stop: %s", session.session_id, breach)
@@ -682,7 +706,7 @@ class PaperTradingEngine:
                 # sessions hold legs on >1 venue — query each venue's
                 # funding stream independently and apply per-leg so a
                 # Drift rate doesn't book against an HL leg.
-                if session.broker.positions:
+                if session.ctx._pm:
                     fallback_mp = candle.close if candles else 0.0
                     self._apply_session_funding(session, ss, fallback_mp)
 
@@ -691,23 +715,22 @@ class PaperTradingEngine:
                     equity_buffer.clear()
 
                 # Process pending venue transfers
-                if hasattr(session.broker, '_allocator') and session.broker._allocator:
+                if session.ctx._cm.allocator is not None:
                     import time as _time
-                    session.broker._allocator.process_arrivals(int(_time.time()))
-                    session.broker.cash = session.broker._allocator.total_cash
+                    session.ctx._cm.allocator.process_arrivals(int(_time.time()))
+                    session.ctx.cash = session.ctx._cm.allocator.total_cash
 
-                # Update mark prices from ticker (between candles)
+                # Update mark prices from ticker (between candles).
+                # Multi-venue legs on the same market all repaint to
+                # the latest tick — venue-specific marks would need
+                # per-venue ticker channels.
                 ticker = getattr(self, 'price_ticker', None)
-                if ticker and session.broker.positions:
+                if ticker and session.ctx._pm:
                     mark = ticker.get_price(session.market)
                     if mark is not None:
-                        for market, pos in session.broker.positions.items():
+                        for (_v, market), pos in session.ctx._pm.items():
                             if market == session.market:
-                                pos["mark_price"] = mark
-                                if pos["side"] == "long":
-                                    pos["unrealized_pnl"] = (mark - pos["entry_price"]) * pos["size"]
-                                else:
-                                    pos["unrealized_pnl"] = (pos["entry_price"] - mark) * pos["size"]
+                                pos.update_pnl(mark)
 
                 await asyncio.sleep(10)
 

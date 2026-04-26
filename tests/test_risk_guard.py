@@ -1,13 +1,38 @@
 """Tests for paper trading risk guard."""
 from unittest.mock import MagicMock
+from flint.execution._position import _Position
+from flint.models import Side
 from flint.paper.risk_guard import RiskGuard, RiskConfig
 
 
 def _make_broker(equity=10000, cash=5000, positions=None, equity_history=None):
+    """Build a mock-broker with the post-D-2.1.d shape: positions live
+    on `_pm.values()` as `_Position` objects, not on `broker.positions`
+    as a dict-of-dict. The legacy dict spec the tests pass us
+    (`{"SOL-PERP": {"size": 100, "side": "long", ...}}`) is converted
+    to `_Position` instances and exposed via a real PositionManager-like
+    object so RiskGuard's `for pos in broker._pm.values():` iteration
+    works."""
     b = MagicMock()
     b.equity = equity
     b.cash = cash
-    b.positions = positions or {}
+    pm = MagicMock()
+    pos_objs = []
+    for market, p in (positions or {}).items():
+        side = Side.LONG if p.get("side", "long") == "long" else Side.SHORT
+        po = _Position(
+            market=market, side=side, size=p["size"],
+            entry_price=p["entry_price"],
+            entry_ts=p.get("entry_ts", 0),
+            venue=p.get("venue", "drift"),
+        )
+        po.unrealized_pnl = p.get("unrealized_pnl", 0)
+        po.mark_price = p.get("mark_price", p["entry_price"])
+        pos_objs.append(po)
+    pm.values = MagicMock(return_value=pos_objs)
+    pm.__bool__ = lambda self_: bool(pos_objs)
+    pm.__len__ = lambda self_: len(pos_objs)
+    b._pm = pm
     b.equity_history = equity_history or [10000]
     b.initial_capital = 10000
     return b

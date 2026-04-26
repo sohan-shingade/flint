@@ -134,27 +134,31 @@ class PaperSessionStore:
                 for r in rows]
 
     def save_positions(self, session_id: str, positions: List[dict]) -> None:
+        """Persist all open legs. Each entry must include `venue` —
+        post-D-2.1.d positions are keyed by `(session_id, venue, market)`
+        so legs on Drift+HL for the same market both round-trip."""
         stmts = [(
             "DELETE FROM paper_positions WHERE session_id = ?", [session_id],
         )]
         for p in positions:
             stmts.append((
                 "INSERT INTO paper_positions "
-                "(session_id, market, side, size, entry_price, entry_ts, unrealized_pnl) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [session_id, p["market"], p["side"], p["size"],
-                 p["entry_price"], p["entry_ts"], p.get("unrealized_pnl", 0)],
+                "(session_id, venue, market, side, size, entry_price, entry_ts, unrealized_pnl) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [session_id, p.get("venue", "unknown"), p["market"], p["side"],
+                 p["size"], p["entry_price"], p["entry_ts"],
+                 p.get("unrealized_pnl", 0)],
             ))
         self._store._sql_exec_many(stmts)
 
     def load_positions(self, session_id: str) -> List[dict]:
         rows = self._store._sql_read_all(
-            "SELECT market, side, size, entry_price, entry_ts, unrealized_pnl "
+            "SELECT venue, market, side, size, entry_price, entry_ts, unrealized_pnl "
             "FROM paper_positions WHERE session_id = ?",
             [session_id],
         )
-        return [{"market": r[0], "side": r[1], "size": r[2],
-                 "entry_price": r[3], "entry_ts": r[4], "unrealized_pnl": r[5]}
+        return [{"venue": r[0], "market": r[1], "side": r[2], "size": r[3],
+                 "entry_price": r[4], "entry_ts": r[5], "unrealized_pnl": r[6]}
                 for r in rows]
 
     def list_active_sessions(self) -> List[dict]:

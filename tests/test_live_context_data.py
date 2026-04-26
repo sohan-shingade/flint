@@ -1,10 +1,9 @@
-"""Tests for LiveContext data access methods."""
+"""Tests for PaperContext data access methods (formerly LiveContext)."""
 import os
 import tempfile
 import pytest
 
-from flint.execution.live_context import LiveContext
-from flint.execution.paper_broker import PaperBroker
+from flint.paper.context import PaperContext
 from flint.models import Candle
 from flint.store import FlintStore
 
@@ -13,8 +12,7 @@ from flint.store import FlintStore
 def ctx_with_store():
     db = os.path.join(tempfile.gettempdir(), "test_live_ctx.duckdb")
     store = FlintStore(db)
-    broker = PaperBroker(initial_capital=10000)
-    ctx = LiveContext(broker, store=store, resolution_s=3600, session_id="test1")
+    ctx = PaperContext(initial_capital=10000, store=store, resolution_s=3600, session_id="test1")
     yield ctx, store
     store.close()
     if os.path.exists(db):
@@ -34,29 +32,25 @@ def test_get_candles_returns_data(ctx_with_store):
 
 
 def test_get_candles_without_store():
-    broker = PaperBroker(initial_capital=10000)
-    ctx = LiveContext(broker)
+    ctx = PaperContext(initial_capital=10000)
     result = ctx.get_candles("SOL-PERP", lookback=5)
     assert result == []
 
 
 def test_get_funding_rates_without_store():
-    broker = PaperBroker(initial_capital=10000)
-    ctx = LiveContext(broker)
+    ctx = PaperContext(initial_capital=10000)
     result = ctx.get_funding_rates("SOL-PERP")
     assert result == []
 
 
 def test_get_funding_by_venue_without_store():
-    broker = PaperBroker(initial_capital=10000)
-    ctx = LiveContext(broker)
+    ctx = PaperContext(initial_capital=10000)
     result = ctx.get_funding_by_venue("SOL-PERP")
     assert result == {}
 
 
 def test_get_orderbook_without_store():
-    broker = PaperBroker(initial_capital=10000)
-    ctx = LiveContext(broker)
+    ctx = PaperContext(initial_capital=10000)
     result = ctx.get_orderbook("SOL-PERP")
     assert result is None
 
@@ -67,8 +61,7 @@ def test_log_does_not_crash(ctx_with_store):
 
 
 def test_backward_compatible_no_store():
-    """Creating LiveContext without store should still work."""
-    broker = PaperBroker(initial_capital=10000)
-    ctx = LiveContext(broker)
+    """Creating PaperContext without store should still work."""
+    ctx = PaperContext(initial_capital=10000)
     assert ctx.account.equity == 10000
     assert ctx.positions == []

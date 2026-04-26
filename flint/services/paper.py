@@ -31,18 +31,19 @@ def get_session_status(engine: PaperTradingEngine, session_id: str) -> Optional[
 
     session = engine.sessions.get(session_id)
     if session and status:
-        mr = session.broker.margin_ratio
+        mr = session.ctx.margin_ratio
+        markets_held = sorted({p.market for p in session.ctx.positions})
         status["margin"] = {
-            "leverage": round(session.broker.leverage, 2),
-            "margin_used": round(session.broker.margin_used, 2),
-            "free_margin": round(session.broker.free_margin, 2),
+            "leverage": round(session.ctx.leverage, 2),
+            "margin_used": round(session.ctx.margin_used, 2),
+            "free_margin": round(session.ctx.free_margin, 2),
             "margin_ratio": round(mr, 4) if mr != float("inf") else 0,
             "liquidation_prices": {
-                m: round(session.broker.get_liquidation_price(m), 2)
-                for m in session.broker.positions
+                m: round(session.ctx.get_liquidation_price(m), 2)
+                for m in markets_held
             },
         }
-        status["funding_total"] = round(session.broker.total_funding, 4)
+        status["funding_total"] = round(session.ctx.total_funding, 4)
         status["equity_curve"] = session.equity_history[-200:]
 
     return status

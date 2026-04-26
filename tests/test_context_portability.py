@@ -1,21 +1,15 @@
 """ExecutionContext conformance + portability — Phase 2 T2.1.
 
 Verifies that every concrete context class implements the full
-`ExecutionContext` abstract surface. This doesn't refactor the duplication
-yet (that's a dedicated sibling PR — the god-class breakup is too invasive
-to bundle with Phase 2 plumbing); but it enforces the interface contract
-so any future consolidation work can't silently drop a method.
+`ExecutionContext` abstract surface. Enforces the interface contract so
+future consolidation work can't silently drop a method.
 
 What this test proves today:
 - Every concrete ExecutionContext subclass overrides every abstract method.
 - The method signatures align across contexts (same parameter names).
 - BacktestContext can be instantiated and used end-to-end.
-
-What Phase 2 sibling PR will add:
-- PaperContext as a first-class ExecutionContext (today paper logic rides
-  inside PaperBroker + LiveContext wiring).
-- A round-trip test that runs the same strategy on Backtest + Paper + Live
-  and asserts identical fill counts / equity progression on a fixture.
+- PaperContext (post-D-2.1.d unified state owner + strategy-facing
+  context) is included in the subclass walk.
 """
 from __future__ import annotations
 
@@ -59,6 +53,7 @@ def _import_all_contexts():
     """Trigger subclass registration for every ExecutionContext impl."""
     # Known concrete contexts + their modules:
     import flint.execution.backtest_context  # BacktestContext
+    import flint.paper.context  # PaperContext (post-D-2.1.d)
     try:
         import flint.execution.live_base  # LiveExecutionContext (abstract)
     except ImportError:

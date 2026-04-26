@@ -19,6 +19,7 @@ from ..models import (
     Side,
     TimeInForce,
 )
+from ._position import _Position
 from .borrow_ledger import BorrowLedger
 from .cash_manager import CashManager
 from .context import ExecutionContext
@@ -31,42 +32,6 @@ from .order_queue import OrderQueue
 from .position_manager import PositionManager
 
 logger = logging.getLogger("flint.backtest")
-
-
-class _Position:
-    """Internal mutable position tracker."""
-
-    __slots__ = ("market", "venue", "side", "size", "entry_price", "entry_ts",
-                 "unrealized_pnl", "funding_paid", "borrow_cumulative_at_entry")
-
-    def __init__(self, market: str, side: Side, size: float,
-                 entry_price: float, entry_ts: int, venue: str = "default"):
-        self.market = market
-        self.venue = venue
-        self.side = side
-        self.size = size  # always positive
-        self.entry_price = entry_price
-        self.entry_ts = entry_ts
-        self.unrealized_pnl = 0.0
-        self.funding_paid = 0.0
-        self.borrow_cumulative_at_entry = 0.0
-
-    def update_pnl(self, current_price: float) -> None:
-        if self.side == Side.LONG:
-            self.unrealized_pnl = (current_price - self.entry_price) * self.size
-        else:
-            self.unrealized_pnl = (self.entry_price - current_price) * self.size
-
-    def to_info(self) -> PositionInfo:
-        return PositionInfo(
-            market=self.market,
-            side=self.side,
-            size=self.size,
-            entry_price=self.entry_price,
-            unrealized_pnl=self.unrealized_pnl,
-            entry_ts=self.entry_ts,
-            venue=self.venue,
-        )
 
 
 class BacktestContext(ExecutionContext):
