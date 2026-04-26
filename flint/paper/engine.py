@@ -28,37 +28,85 @@ logger = logging.getLogger("flint.paper")
 def backfill_candle_gap(store: FlintStore, market: str, from_ts: int, to_ts: int) -> int:
     """Download candles for a gap period so resumed sessions can catch up.
 
-    Tries DriftCandleProvider first (faster, recent data), falls back to S3.
-    Returns count of candles stored.
+    Walks a fallback chain so a single venue outage doesn't strand
+    paper sessions on resume. Order:
+
+    1. **Hyperliquid** — primary live source (Drift offline post-hack;
+       see CLAUDE.md). Covers every market in `_FLINT_TO_HL`.
+    2. **Drift Data API** — kept registered so resume auto-recovers
+       when Drift returns; fails fast in the meantime.
+    3. **Drift S3** — archival fallback for older windows; Drift's
+       S3 path is also offline today, but the chain stays in place.
+
+    Returns count of candles stored. Each source is attempted
+    independently; failures are logged at debug and the chain falls
+    through. The first source that returns rows wins.
     """
     if to_ts - from_ts < 3600:
         return 0
 
-    stored = 0
+    # 1. Hyperliquid first — primary live source.
+    try:
+        from ..providers.hyperliquid_candles import (
+            HyperliquidCandleProvider, _FLINT_TO_HL,
+        )
+        if market in _FLINT_TO_HL:
+            provider = HyperliquidCandleProvider()
+            try:
+                candles = provider.fetch_candles(
+                    market, from_ts, to_ts, resolution="1h",
+                )
+            finally:
+                provider.close()
+            if candles:
+                stored = store.upsert_candles(candles)
+                logger.info(
+                    "Backfilled %d candles for %s via Hyperliquid (%d->%d)",
+                    stored, market, from_ts, to_ts,
+                )
+                return stored
+    except Exception as e:
+        logger.debug("Hyperliquid backfill failed for %s: %s", market, e)
+
+    # 2. Drift Data API — offline post-hack, kept for auto-recovery.
     try:
         from ..providers.drift_candles import DriftCandleProvider
         provider = DriftCandleProvider()
-        candles = provider.fetch_candles(market, 3600, from_ts, to_ts)
-        provider.close()
+        try:
+            candles = provider.fetch_candles(market, 3600, from_ts, to_ts)
+        finally:
+            provider.close()
         if candles:
             stored = store.upsert_candles(candles)
-            logger.info("Backfilled %d candles for %s via API (%d->%d)", stored, market, from_ts, to_ts)
+            logger.info(
+                "Backfilled %d candles for %s via Drift API (%d->%d)",
+                stored, market, from_ts, to_ts,
+            )
+            return stored
     except Exception as e:
-        logger.debug("API backfill failed for %s: %s, trying S3", market, e)
+        logger.debug("Drift API backfill failed for %s: %s", market, e)
 
-    if stored == 0:
+    # 3. Drift S3 archival — also offline today.
+    try:
+        from ..providers.drift_s3 import DriftS3Provider
+        provider = DriftS3Provider()
         try:
-            from ..providers.drift_s3 import DriftS3Provider
-            provider = DriftS3Provider()
             candles = provider.fetch_candles(market, 3600, from_ts, to_ts)
+        finally:
             provider.close()
-            if candles:
-                stored = store.upsert_candles(candles)
-                logger.info("Backfilled %d candles for %s via S3 (%d->%d)", stored, market, from_ts, to_ts)
-        except Exception as e:
-            logger.warning("S3 backfill also failed for %s: %s", market, e)
+        if candles:
+            stored = store.upsert_candles(candles)
+            logger.info(
+                "Backfilled %d candles for %s via Drift S3 (%d->%d)",
+                stored, market, from_ts, to_ts,
+            )
+            return stored
+    except Exception as e:
+        logger.warning(
+            "All backfill sources failed for %s: %s", market, e,
+        )
 
-    return stored
+    return 0
 
 
 class PaperSession:

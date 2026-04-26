@@ -487,6 +487,29 @@ function SessionDetail({ sessionId, onStop, onKill }: {
               </div>
             </div>
           )}
+          {Array.isArray(reconcileResult.price_bps_histogram) && reconcileResult.match_count > 0 && (
+            <div className="mt-3">
+              <div className="text-[8px] text-ghost/50 tracking-wider mb-1">PRICE BPS DISTRIBUTION</div>
+              <div className="flex items-end gap-1 h-12 bg-void/40 px-2 py-1 border border-border/50">
+                {(() => {
+                  const bins = reconcileResult.price_bps_histogram as Array<{label: string; count: number; hi: number | null}>
+                  const maxCount = Math.max(1, ...bins.map(b => b.count))
+                  return bins.map((b, i) => {
+                    const heightPct = (b.count / maxCount) * 100
+                    const isOverThreshold = b.hi === null || (b.hi !== null && b.hi > 10)
+                    const color = isOverThreshold && b.count > 0 ? 'bg-loss/70' : 'bg-terminal/70'
+                    return (
+                      <div key={i} className="flex-1 flex flex-col items-center justify-end" title={`${b.label} bps: ${b.count}`}>
+                        <div className={`w-full ${color}`} style={{ height: `${heightPct}%`, minHeight: b.count > 0 ? '2px' : '0' }} />
+                        <div className="text-[7px] text-ghost/50 mt-0.5 tracking-wider">{b.label}</div>
+                      </div>
+                    )
+                  })
+                })()}
+              </div>
+              <div className="text-[8px] text-ghost/40 mt-1 italic">x-axis: |price delta| bps · y-axis: matched-fill count · red ≥ 10 bps (CI threshold)</div>
+            </div>
+          )}
           {reconcileResult.note && (
             <div className="text-[10px] text-ghost/60 mt-3 italic">{reconcileResult.note}</div>
           )}

@@ -377,3 +377,54 @@ class TestDollarImbalance:
 
         ctx = BacktestContext(initial_capital=10_000.0)
         assert SharedCapitalPortfolioEngine.dollar_imbalance(ctx) == 0.0
+
+
+# ─── D-6.1 per-strategy Sharpe / drawdown / equity curve ─────────
+
+class TestPerStrategySharpe:
+    def test_per_strategy_curves_present_for_each_strategy(self):
+        candles = _sin_candles(50)
+        engine = SharedCapitalPortfolioEngine(
+            strategies=[("alpha", _BuyOnce()), ("beta", _SellOnce())],
+            initial_capital=10_000.0,
+        )
+        result = engine.run(candles)
+        # Every named strategy gets its three new fields populated.
+        for name in ("alpha", "beta"):
+            assert name in result.per_strategy_equity_curve
+            assert name in result.per_strategy_sharpe
+            assert name in result.per_strategy_max_drawdown
+            # Curve starts with the initial share (equal split = 5000)
+            assert result.per_strategy_equity_curve[name][0] == 5_000.0
+
+    def test_capital_caps_drive_initial_share(self):
+        """`strategy_capital_caps` renormalized → equity curve starts
+        weighted accordingly."""
+        candles = _sin_candles(20)
+        engine = SharedCapitalPortfolioEngine(
+            strategies=[("a", _BuyOnce()), ("b", _SellOnce())],
+            initial_capital=10_000.0,
+            strategy_capital_caps={"a": 0.7, "b": 0.3},
+        )
+        result = engine.run(candles)
+        # 0.7 / (0.7 + 0.3) * 10000 = 7000
+        assert result.per_strategy_equity_curve["a"][0] == 7_000.0
+        assert result.per_strategy_equity_curve["b"][0] == 3_000.0
+
+    def test_max_drawdown_floors_at_zero_for_flat_curve(self):
+        """Strategy with no closed trades on a sin-wave path that never
+        deploys ⇒ flat curve ⇒ max_drawdown == 0."""
+        class _Idle(Strategy):
+            @property
+            def name(self): return "Idle"
+            def reset(self): pass
+            def on_candle(self, c, h, ctx=None):
+                return Signal.HOLD
+
+        candles = _sin_candles(20)
+        engine = SharedCapitalPortfolioEngine(
+            strategies=[("idle", _Idle())],
+            initial_capital=10_000.0,
+        )
+        result = engine.run(candles)
+        assert result.per_strategy_max_drawdown["idle"] == 0.0

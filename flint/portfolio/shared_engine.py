@@ -54,6 +54,13 @@ class SharedPortfolioResult:
     per_strategy_trades: Dict[str, int] = field(default_factory=dict)
     fills_by_strategy: Dict[str, List[dict]] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
+    # D-6.1 Sharpe / drawdown per strategy. Computed from synthetic
+    # per-strategy equity curves (running PnL deltas keyed by tagged
+    # closed trades + fee-adjusted fill costs). Empty when there are
+    # no closed trades for a strategy.
+    per_strategy_sharpe: Dict[str, float] = field(default_factory=dict)
+    per_strategy_max_drawdown: Dict[str, float] = field(default_factory=dict)
+    per_strategy_equity_curve: Dict[str, List[float]] = field(default_factory=dict)
 
 
 class _TaggedContextProxy:
@@ -381,6 +388,69 @@ class SharedCapitalPortfolioEngine:
             for owner in owners:
                 per_strategy_pnl[owner] += share
 
+        # Per-strategy Sharpe / drawdown / equity curve. Build a
+        # synthetic curve for each strategy from its share of initial
+        # capital + running attributed PnL minus tagged fee drag, sampled
+        # at the timestamps of closed-trade exits. Initial-capital share
+        # uses `strategy_capital_caps` when set (renormalized to sum to
+        # 1.0 across strategies); otherwise equal split.
+        strategy_names = [n for n, _ in self.strategies]
+        if self.strategy_capital_caps:
+            cap_sum = sum(
+                self.strategy_capital_caps.get(n, 0.0) for n in strategy_names
+            )
+            if cap_sum > 0:
+                shares = {
+                    n: (self.strategy_capital_caps.get(n, 0.0) / cap_sum)
+                    * self.initial_capital
+                    for n in strategy_names
+                }
+            else:
+                shares = {n: self.initial_capital / len(strategy_names) for n in strategy_names}
+        else:
+            shares = {n: self.initial_capital / len(strategy_names) for n in strategy_names}
+
+        per_strategy_sharpe: Dict[str, float] = {}
+        per_strategy_max_drawdown: Dict[str, float] = {}
+        per_strategy_equity_curve: Dict[str, List[float]] = {}
+
+        # Sum tagged fees per strategy (from fills) — applied as a
+        # one-shot drag at the strategy's first closed-trade ts. For
+        # finer-grained attribution we'd interleave fees with trades by
+        # ts, but tearsheet-grade equity curves don't need that today.
+        per_strategy_fees: Dict[str, float] = {n: 0.0 for n in strategy_names}
+        for tag, fills in fills_by_strategy.items():
+            per_strategy_fees[tag] = sum(f.get("fee", 0.0) for f in fills)
+
+        for name in strategy_names:
+            initial = shares[name]
+            # Collect this strategy's closed-trade events (tagged on
+            # entry OR exit — same priority as PnL attribution above).
+            events: List[tuple] = []
+            for trade in ctx.closed_trades:
+                exit_oid = trade.get("exit_order_id", "")
+                entry_oid = trade.get("entry_order_id", "")
+                tag = ""
+                if exit_oid and ":" in exit_oid:
+                    tag = exit_oid.split(":", 1)[0]
+                elif entry_oid and ":" in entry_oid:
+                    tag = entry_oid.split(":", 1)[0]
+                if tag != name:
+                    continue
+                events.append((trade.get("exit_ts", 0), trade.get("pnl", 0.0)))
+            events.sort(key=lambda e: e[0])
+
+            curve: List[float] = [initial]
+            running = initial - per_strategy_fees[name]
+            curve.append(running)
+            for _ts, pnl in events:
+                running += pnl
+                curve.append(running)
+
+            per_strategy_equity_curve[name] = curve
+            per_strategy_sharpe[name] = _sharpe_ratio(curve)
+            per_strategy_max_drawdown[name] = _max_drawdown(curve)
+
         total_pnl = ctx.account.equity - self.initial_capital
         return SharedPortfolioResult(
             total_pnl=total_pnl,
@@ -392,4 +462,7 @@ class SharedCapitalPortfolioEngine:
             per_strategy_trades=per_strategy_trades,
             fills_by_strategy=fills_by_strategy,
             warnings=[m for m in ctx.log_messages if "REJECTED" in m or "WARNING" in m],
+            per_strategy_sharpe=per_strategy_sharpe,
+            per_strategy_max_drawdown=per_strategy_max_drawdown,
+            per_strategy_equity_curve=per_strategy_equity_curve,
         )

@@ -347,7 +347,34 @@ def reconcile(
         "price_bps_p99": _percentile(price_bps, 0.99),
         "ts_delta_p50": _percentile([float(x) for x in ts_deltas], 0.50),
         "ts_delta_p95": _percentile([float(x) for x in ts_deltas], 0.95),
+        # Histogram bins for UI display — log-scale buckets at the
+        # boundaries traders actually look for (1 / 2 / 5 / 10 / 20 /
+        # 50 / 100 bps). Each entry is {label, lo, hi, count}; the
+        # last bin is open-ended (`hi` is None).
+        "price_bps_histogram": _bps_histogram(price_bps),
     }
+
+
+_BPS_BIN_EDGES = (0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0)
+
+
+def _bps_histogram(values: Sequence[float]) -> list:
+    """Bucket bps deltas into log-scale bins for tearsheet display.
+    Returns a list of {label, lo, hi, count} dicts; the last bucket
+    catches everything above 100 bps (`hi=None`)."""
+    bins = []
+    for i, lo in enumerate(_BPS_BIN_EDGES):
+        hi = _BPS_BIN_EDGES[i + 1] if i + 1 < len(_BPS_BIN_EDGES) else None
+        bins.append({"label": f"{int(lo)}-{int(hi)}" if hi is not None else f"{int(lo)}+",
+                     "lo": lo, "hi": hi, "count": 0})
+    for v in values:
+        for b in bins:
+            hi = b["hi"]
+            if hi is None or v < hi:
+                if v >= b["lo"]:
+                    b["count"] += 1
+                    break
+    return bins
 
 
 # ---------------------------------------------------------------------------

@@ -128,3 +128,36 @@ class TestReconcileAggregate:
         assert result["match_count"] == 1
         assert result["engine_only_count"] == 1
         assert result["venue_only_count"] == 0
+
+
+class TestBpsHistogram:
+    def test_histogram_present_with_matches(self):
+        from scripts.reconcile_fills import reconcile
+        ef = [_f(ts=1000, price=100.0)]
+        # 100.07 vs 100.0 → ~7 bps delta — lands in the 5-10 bucket.
+        vf = [_f(ts=1000, price=100.07, source="venue")]
+        result = reconcile(ef, vf)
+        bins = result["price_bps_histogram"]
+        assert isinstance(bins, list)
+        assert len(bins) == 8
+        assert sum(b["count"] for b in bins) == 1
+        five_to_ten = next(b for b in bins if b["lo"] == 5.0)
+        assert five_to_ten["count"] == 1
+
+    def test_histogram_open_ended_top_bucket(self):
+        from scripts.reconcile_fills import reconcile
+        # 200 bps = $2 delta on $100 → catch in the 100+ bucket
+        ef = [_f(ts=1000, price=100.0)]
+        vf = [_f(ts=1000, price=102.0, source="venue")]
+        result = reconcile(ef, vf)
+        top = result["price_bps_histogram"][-1]
+        assert top["hi"] is None
+        assert top["count"] == 1
+
+    def test_histogram_empty_when_no_matches(self):
+        from scripts.reconcile_fills import reconcile
+        ef = [_f(ts=1000)]
+        vf = [_f(ts=99999, source="venue")]  # ts gap > window
+        result = reconcile(ef, vf)
+        bins = result["price_bps_histogram"]
+        assert sum(b["count"] for b in bins) == 0

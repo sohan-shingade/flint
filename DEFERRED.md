@@ -102,6 +102,20 @@ remains).
 
 **Trust polish (v1.5.x):**
 
+- ✅ **Drift-S3 backfill fallback** (v1.5.3) — `backfill_candle_gap`
+  now walks Hyperliquid → Drift API → Drift S3, so resume catches
+  up via HL when Drift is offline. 6 unit tests pinning the fallback
+  chain order.
+- ✅ **Per-strategy Sharpe / drawdown** (v1.5.3) — `SharedPortfolioResult`
+  carries `per_strategy_sharpe`, `per_strategy_max_drawdown`, and
+  `per_strategy_equity_curve` (initial-capital share scaled by caps
+  when set, else equal split; running PnL from attributed closed
+  trades minus tagged fee drag). 3 new tests.
+- ✅ **Reconciliation UI bps histogram** (v1.5.3) — `reconcile()`
+  emits a `price_bps_histogram` field with 8 log-scale buckets
+  (0/1/2/5/10/20/50/100+ bps). PaperTrading.tsx renders it under
+  the existing percentile row; bins ≥10 bps render in red (CI
+  threshold). 3 new tests.
 - ✅ **Multi-venue funding correctness ladder** — Option A (engine
   per-venue query) + Option C (PaperContext architectural fix); the
   4th proof notebook `notebooks/multi_venue_funding_arb.py` proves
@@ -165,31 +179,7 @@ These haven't been scoped into a phase — they're bug-fix or quality-of-
 life items surfaced by recent ships. Each is small enough to land
 opportunistically.
 
-### Drift-S3 backfill fallback to HL/Pyth
-
-- `flint/paper/engine.py:backfill_candle_gap` tries Drift Data API,
-  then Drift S3, then gives up. With Drift offline post-hack, both
-  legs fail and resume tests have to monkey-patch the helper.
-- Fix: thread the same fallback chain idea from `flint/paper/
-  price_sources/` so backfill walks HL → Drift → Pyth. Or just pull
-  HL candles directly when Drift is unreachable (HL covers the same
-  perp markets via `hyperliquid_candles.py`).
-- Effort: ~1 day.
-
-### Per-strategy Sharpe / drawdown attribution
-
-- `SharedPortfolioResult` carries `per_strategy_pnl` + trade counts but
-  not per-strategy Sharpe / drawdown. Add `per_strategy_sharpe`,
-  `per_strategy_max_drawdown`, `per_strategy_equity_curve` (synthesized
-  from tagged fills + closed-trade attribution).
-- Effort: ~3 hours.
-
-### Reconciliation UI bps histogram
-
-- Currently text-only p50/p95/p99 panel. Add a small histogram of
-  matched-fill bps deltas + an orphan-fills tab so visual outliers
-  are obvious at a glance.
-- Effort: ~half a day.
+_(empty — last batch shipped in v1.5.3, see "Closed since" above)_
 
 ---
 
