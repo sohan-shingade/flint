@@ -169,22 +169,23 @@ class PaperSessionStore:
 
     def save_funding_payment(self, session_id: str, ts: int, market: str,
                              rate: float, payment: float, position_size: float,
-                             mark_price: float) -> None:
+                             mark_price: float, venue: str = "unknown") -> None:
         self._store._sql_exec(
             "INSERT INTO paper_funding_payments "
-            "(session_id, ts, market, rate, payment, position_size, mark_price) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [session_id, ts, market, rate, payment, position_size, mark_price],
+            "(session_id, ts, market, venue, rate, payment, position_size, mark_price) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [session_id, ts, market, venue, rate, payment, position_size, mark_price],
         )
 
     def get_funding_payments(self, session_id: str) -> list:
         rows = self._store._sql_read_all(
-            "SELECT ts, market, rate, payment, position_size, mark_price "
+            "SELECT ts, market, venue, rate, payment, position_size, mark_price "
             "FROM paper_funding_payments WHERE session_id = ? ORDER BY ts",
             [session_id],
         )
-        return [{"ts": r[0], "market": r[1], "rate": r[2], "payment": r[3],
-                 "position_size": r[4], "mark_price": r[5]} for r in rows]
+        return [{"ts": r[0], "market": r[1], "venue": r[2], "rate": r[3],
+                 "payment": r[4], "position_size": r[5], "mark_price": r[6]}
+                for r in rows]
 
     def clear_session_data(self, session_id: str) -> None:
         """Wipe all live data for a session (equity, trades, positions, funding)."""

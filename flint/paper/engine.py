@@ -503,6 +503,65 @@ class PaperTradingEngine:
 
         return new_id
 
+    def _apply_session_funding(
+        self,
+        session: PaperSession,
+        ss,
+        fallback_mark_price: float,
+    ) -> None:
+        """Multi-venue funding application for one tick.
+
+        Iterates the distinct venues appearing in the session's open
+        positions, queries `venue_funding_rates` per venue, applies
+        with `venue=` so an HL rate doesn't book against a Drift leg.
+        Persists payments with the originating venue tagged.
+
+        Extracted from `_run_live_session` for testability — async
+        loops are awkward to mock; this is sync and pure.
+        """
+        last_funding_ts = getattr(session, '_last_funding_ts', 0)
+        now_ts = int(time.time())
+        venues_in_book = {
+            pos.get("venue", session.broker.venue)
+            for pos in session.broker.positions.values()
+        }
+        latest_ts = last_funding_ts
+        for v in venues_in_book:
+            try:
+                funding = self.store.query_venue_funding(
+                    v, session.market,
+                    last_funding_ts + 1, now_ts,
+                )
+            except Exception as e:
+                logger.debug(
+                    "Funding query error %s/%s: %s",
+                    session.session_id, v, e,
+                )
+                continue
+            for fr in funding:
+                mp = fr["mark_price"] if fr.get("mark_price") else fallback_mark_price
+                try:
+                    payment = session.broker.apply_funding(
+                        session.market, fr["rate_hourly"], mp, venue=v,
+                    )
+                except Exception as e:
+                    logger.debug(
+                        "Funding apply error %s/%s: %s",
+                        session.session_id, v, e,
+                    )
+                    continue
+                if payment != 0 and ss:
+                    pos = session.broker.positions.get(session.market)
+                    ss.save_funding_payment(
+                        session.session_id, fr["ts"], session.market,
+                        fr["rate_hourly"], payment,
+                        pos["size"] if pos else 0, mp,
+                        venue=v,
+                    )
+                if fr["ts"] > latest_ts:
+                    latest_ts = fr["ts"]
+        session._last_funding_ts = latest_ts
+
     async def _run_live_session(self, session: PaperSession) -> None:
         """Live loop with risk guard checks and persistence."""
         logger.info("Live loop STARTED for session %s (%s), last_candle_ts=%d",
@@ -619,29 +678,13 @@ class PaperTradingEngine:
                                                  stopped_at=int(time.time()), stop_reason=breach)
                             break
 
-                # Apply funding rates from store
+                # Apply funding rates from store. Multi-venue paper
+                # sessions hold legs on >1 venue — query each venue's
+                # funding stream independently and apply per-leg so a
+                # Drift rate doesn't book against an HL leg.
                 if session.broker.positions:
-                    try:
-                        last_funding_ts = getattr(session, '_last_funding_ts', 0)
-                        now_ts = int(time.time())
-                        funding = self.store.query_venue_funding(
-                            session.broker.venue, session.market,
-                            last_funding_ts + 1, now_ts,
-                        )
-                        if funding:
-                            for fr in funding:
-                                mp = fr["mark_price"] if fr.get("mark_price") else (candle.close if candles else 0)
-                                payment = session.broker.apply_funding(session.market, fr["rate_hourly"], mp)
-                                if payment != 0 and ss:
-                                    pos = session.broker.positions.get(session.market)
-                                    ss.save_funding_payment(
-                                        session.session_id, fr["ts"], session.market,
-                                        fr["rate_hourly"], payment,
-                                        pos["size"] if pos else 0, mp,
-                                    )
-                            session._last_funding_ts = funding[-1]["ts"]
-                    except Exception as e:
-                        logger.debug("Funding application error for %s: %s", session.session_id, e)
+                    fallback_mp = candle.close if candles else 0.0
+                    self._apply_session_funding(session, ss, fallback_mp)
 
                 if ss and equity_buffer:
                     ss.save_equity_snapshots(session.session_id, equity_buffer)

@@ -227,11 +227,12 @@ CREATE TABLE IF NOT EXISTS paper_funding_payments (
     session_id    VARCHAR NOT NULL,
     ts            BIGINT NOT NULL,
     market        VARCHAR NOT NULL,
+    venue         VARCHAR NOT NULL DEFAULT 'unknown',
     rate          DOUBLE NOT NULL,
     payment       DOUBLE NOT NULL,
     position_size DOUBLE NOT NULL,
     mark_price    DOUBLE NOT NULL,
-    PRIMARY KEY (session_id, market, ts)
+    PRIMARY KEY (session_id, market, venue, ts)
 );
 """
 
@@ -506,6 +507,48 @@ class FlintStore:
         self._conn.execute(_CREATE_PAPER_TRADES)
         self._conn.execute(_CREATE_PAPER_POSITIONS)
         self._conn.execute(_CREATE_PAPER_FUNDING_PAYMENTS)
+        # Migration: add venue column + widen PK if existing table predates it
+        try:
+            cols = {r[0] for r in self._conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='paper_funding_payments'"
+            ).fetchall()}
+            if cols and "venue" not in cols:
+                self._conn.execute("BEGIN TRANSACTION")
+                try:
+                    self._conn.execute("""
+                        CREATE TABLE paper_funding_payments_new (
+                            session_id    VARCHAR NOT NULL,
+                            ts            BIGINT NOT NULL,
+                            market        VARCHAR NOT NULL,
+                            venue         VARCHAR NOT NULL DEFAULT 'unknown',
+                            rate          DOUBLE NOT NULL,
+                            payment       DOUBLE NOT NULL,
+                            position_size DOUBLE NOT NULL,
+                            mark_price    DOUBLE NOT NULL,
+                            PRIMARY KEY (session_id, market, venue, ts)
+                        )
+                    """)
+                    self._conn.execute(
+                        "INSERT INTO paper_funding_payments_new "
+                        "SELECT session_id, ts, market, 'unknown', rate, payment, "
+                        "position_size, mark_price "
+                        "FROM paper_funding_payments"
+                    )
+                    self._conn.execute("DROP TABLE paper_funding_payments")
+                    self._conn.execute(
+                        "ALTER TABLE paper_funding_payments_new "
+                        "RENAME TO paper_funding_payments"
+                    )
+                    self._conn.execute("COMMIT")
+                    _logger.info(
+                        "Migrated paper_funding_payments: added venue column"
+                    )
+                except Exception as e:
+                    self._conn.execute("ROLLBACK")
+                    _logger.warning("paper_funding_payments venue migration failed: %s", e)
+        except Exception as e:
+            _logger.debug("paper_funding_payments migration check: %s", e)
         # Live trading persistence
         self._conn.execute(_CREATE_LIVE_SESSIONS)
         self._conn.execute(_CREATE_LIVE_ORDERS)

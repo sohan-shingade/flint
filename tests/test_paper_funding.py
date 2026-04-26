@@ -112,6 +112,78 @@ def test_funding_persistence():
         assert len(payments) == 1
         assert payments[0]["rate"] == 0.0001
         assert payments[0]["payment"] == 1.0
+        assert payments[0]["venue"] == "unknown"  # default for back-compat
+        store.close()
+    finally:
+        if os.path.exists(db):
+            os.unlink(db)
+
+
+def test_apply_funding_venue_filter_match():
+    """venue= passed and matches position venue → applies normally."""
+    broker = PaperBroker(initial_capital=10000)
+    broker.positions["SOL-PERP"] = {
+        "market": "SOL-PERP", "venue": "drift", "side": "long", "size": 100,
+        "entry_price": 100.0, "entry_ts": 1000, "unrealized_pnl": 0,
+    }
+    payment = broker.apply_funding(
+        "SOL-PERP", rate=0.0001, mark_price=100.0, venue="drift",
+    )
+    assert abs(payment - 1.0) < 0.01
+    assert broker.cash < 10000
+
+
+def test_apply_funding_venue_filter_skip():
+    """venue= passed but doesn't match position venue → skip, cash unchanged."""
+    broker = PaperBroker(initial_capital=10000)
+    broker.positions["SOL-PERP"] = {
+        "market": "SOL-PERP", "venue": "drift", "side": "long", "size": 100,
+        "entry_price": 100.0, "entry_ts": 1000, "unrealized_pnl": 0,
+    }
+    payment = broker.apply_funding(
+        "SOL-PERP", rate=0.0001, mark_price=100.0, venue="hyperliquid",
+    )
+    assert payment == 0.0
+    assert broker.cash == 10000
+    assert broker.total_funding == 0
+
+
+def test_apply_funding_venue_none_back_compat():
+    """venue=None (default) → applies regardless of position venue.
+    Single-venue path stays unchanged."""
+    broker = PaperBroker(initial_capital=10000)
+    broker.positions["SOL-PERP"] = {
+        "market": "SOL-PERP", "venue": "hyperliquid", "side": "long",
+        "size": 100, "entry_price": 100.0, "entry_ts": 1000,
+        "unrealized_pnl": 0,
+    }
+    payment = broker.apply_funding("SOL-PERP", rate=0.0001, mark_price=100.0)
+    assert abs(payment - 1.0) < 0.01
+
+
+def test_funding_persistence_multi_venue():
+    """Two payments at the same ts on the same market, different venues
+    must both persist (PK widening to (session_id, market, venue, ts))."""
+    from flint.store import FlintStore
+    from flint.paper.session_store import PaperSessionStore
+    db = os.path.join(tempfile.gettempdir(), "test_funding_mv.duckdb")
+    try:
+        if os.path.exists(db):
+            os.unlink(db)
+        store = FlintStore(db)
+        ss = PaperSessionStore(store)
+        ss.save_funding_payment(
+            "s1", 1000, "SOL-PERP", 0.0001, 1.0, 100.0, 100.0,
+            venue="drift",
+        )
+        ss.save_funding_payment(
+            "s1", 1000, "SOL-PERP", 0.00015, 1.5, 100.0, 100.0,
+            venue="hyperliquid",
+        )
+        payments = ss.get_funding_payments("s1")
+        assert len(payments) == 2
+        venues = sorted(p["venue"] for p in payments)
+        assert venues == ["drift", "hyperliquid"]
         store.close()
     finally:
         if os.path.exists(db):

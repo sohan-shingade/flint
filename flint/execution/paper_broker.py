@@ -158,15 +158,24 @@ class PaperBroker:
         else:
             return entry + (collateral - mmr * notional) / size if size > 0 else 0
 
-    def apply_funding(self, market: str, rate: float, mark_price: float) -> float:
+    def apply_funding(self, market: str, rate: float, mark_price: float,
+                      venue: Optional[str] = None) -> float:
         """Apply funding rate to an open position.
 
         Positive rate = longs pay shorts.
         Negative rate = shorts pay longs.
         Returns the payment amount (positive = paid, negative = received).
+
+        `venue=None` (default): apply to the position regardless of which
+        venue it sits on — back-compat single-venue path.
+        `venue="drift"` etc.: skip if the open position's venue doesn't
+        match. Used by the multi-venue funding loop in `paper/engine.py`
+        so an HL rate doesn't get applied to a Drift leg.
         """
         pos = self.positions.get(market)
         if pos is None:
+            return 0.0
+        if venue is not None and pos.get("venue") != venue:
             return 0.0
 
         notional = pos["size"] * mark_price
