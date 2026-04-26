@@ -204,16 +204,22 @@ Full reference: [docs/reference/cli.md](docs/reference/cli.md) (or `flint --help
 
 ## Documentation
 
+Doc tree follows the [Diátaxis](https://diataxis.fr/) split — full
+index at [`docs/README.md`](docs/README.md). Quick links:
+
 | Topic | Where |
 |---|---|
-| Quickstart + first backtest | [docs/guides/quickstart.md](docs/guides/quickstart.md) |
-| Architecture (BacktestContext + 7 managers, Rust engine, replay) | [docs/guides/architecture.md](docs/guides/architecture.md) |
+| First backtest in 5 min | [docs/tutorials/01-install-first-backtest.md](docs/tutorials/01-install-first-backtest.md) |
+| Quickstart guide | [docs/guides/quickstart.md](docs/guides/quickstart.md) |
+| Architecture (BacktestContext + 7 managers, PaperContext, Rust engine, replay) | [docs/guides/architecture.md](docs/guides/architecture.md) |
 | Strategy authoring (v1/v2 APIs, indicators, optimization) | [docs/guides/strategy-authoring.md](docs/guides/strategy-authoring.md) |
 | Data providers + PIT declarations | [docs/guides/data-providers.md](docs/guides/data-providers.md) |
 | Live + paper deployment + risk guards | [docs/guides/live-deployment.md](docs/guides/live-deployment.md) |
 | Web UI tour | [docs/guides/web-ui.md](docs/guides/web-ui.md) |
 | MCP integration (AI tooling — experimental) | [docs/guides/mcp-integration.md](docs/guides/mcp-integration.md) |
 | Slippage models + calibration | [docs/guides/slippage-models.md](docs/guides/slippage-models.md) |
+
+Project state: [`ROADMAP.md`](ROADMAP.md) · [`WAVE_STATUS.md`](WAVE_STATUS.md) · [`DEFERRED.md`](DEFERRED.md) · [`TRUST_ARTIFACTS.md`](TRUST_ARTIFACTS.md) · [`CHANGELOG.md`](CHANGELOG.md). AI-dev guide: [`CLAUDE.md`](CLAUDE.md).
 
 ---
 

@@ -488,10 +488,12 @@ Engineer assignments to maximize calendar throughput:
 
 ## Tracking
 
-- Each item closed → mark `✓` in this file + remove from `DEFERRED.md`
+- Each item closed → mark `✓` in this file + move to `DEFERRED.md`'s
+  "Closed since" section with a release link
 - Each new sibling sub-item discovered → add to `DEFERRED.md` first
 - Update `TRUST_ARTIFACTS.md` when D-1.* items move; update
-  `IMPLEMENTATION_PLAN.md` quick-wins list when small items ship
+  `WAVE_STATUS.md` when wave-tracked items ship; update `CHANGELOG.md`
+  with the user-visible delta on every release
 
 ---
 
