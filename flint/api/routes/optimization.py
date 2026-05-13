@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from ...backtest.engine import BacktestEngine
 from ...optimization.optimizer import StrategyOptimizer
+from ...optimization.ga_optimizer import GAOptimizer, GAConfig
 from ...store import FlintStore
 from ...strategy.loader import load_user_strategy
 
@@ -62,6 +63,14 @@ class OptimizeRequest(BaseModel):
     capital_allocation: Optional[Dict[str, float]] = None
     markets: Optional[list] = None  # Additional markets for cross-market optimization
     multi_market_objective: str = "min_sharpe"  # "min_sharpe" or "avg_sharpe"
+    algorithm: str = "tpe"  # "tpe" (Optuna) or "ga" (genetic algorithm)
+    # GA-specific settings (ignored when algorithm="tpe")
+    pop_size: int = Field(default=20, ge=4, le=200)
+    n_generations: int = Field(default=30, ge=1, le=500)
+    cx_prob: float = Field(default=0.5, ge=0.0, le=1.0)
+    mut_prob: float = Field(default=0.3, ge=0.0, le=1.0)
+    tournament_size: int = Field(default=3, ge=2, le=10)
+    elite_pct: float = Field(default=0.2, ge=0.0, le=0.5)
 
 
 class WalkForwardRequest(BaseModel):
@@ -244,25 +253,49 @@ def run_optimization(req: OptimizeRequest, request: Request):
                 }, result=mm_result_dict)
                 return
 
+            algo_label = "GA" if req.algorithm == "ga" else "TPE"
             _set(run_id, progress={
                 "phase": "optimize", "pct": 15,
-                "detail": f"Optimizing {strategy_cls.__name__} ({req.trials} trials, {len(candles)} candles)...",
+                "detail": f"Optimizing {strategy_cls.__name__} via {algo_label} ({len(candles)} candles)...",
                 "candles": len(candles),
             })
 
-            optimizer = StrategyOptimizer(
-                strategy_cls, candles,
-                metric=req.metric,
-                n_trials=req.trials,
-                initial_capital=req.initial_capital,
-                fee_rate=req.fee_rate,
-                fill_model=fill_model,
-                funding_rates=funding_rates,
-                orderbook_snapshots=orderbook_snapshots,
-                open_interest=open_interest,
-                margin_engine=margin_eng,
-                capital_allocator=cap_alloc,
-            )
+            if req.algorithm == "ga":
+                ga_cfg = GAConfig(
+                    pop_size=req.pop_size,
+                    n_generations=req.n_generations,
+                    cx_prob=req.cx_prob,
+                    mut_prob=req.mut_prob,
+                    tournament_size=req.tournament_size,
+                    elite_pct=req.elite_pct,
+                )
+                optimizer = GAOptimizer(
+                    strategy_cls, candles,
+                    metric=req.metric,
+                    ga_config=ga_cfg,
+                    initial_capital=req.initial_capital,
+                    fee_rate=req.fee_rate,
+                    fill_model=fill_model,
+                    funding_rates=funding_rates,
+                    orderbook_snapshots=orderbook_snapshots,
+                    open_interest=open_interest,
+                    margin_engine=margin_eng,
+                    capital_allocator=cap_alloc,
+                )
+            else:
+                optimizer = StrategyOptimizer(
+                    strategy_cls, candles,
+                    metric=req.metric,
+                    n_trials=req.trials,
+                    initial_capital=req.initial_capital,
+                    fee_rate=req.fee_rate,
+                    fill_model=fill_model,
+                    funding_rates=funding_rates,
+                    orderbook_snapshots=orderbook_snapshots,
+                    open_interest=open_interest,
+                    margin_engine=margin_eng,
+                    capital_allocator=cap_alloc,
+                )
             opt_result = optimizer.optimize()
 
             def _safe(v, decimals=4):
@@ -299,26 +332,32 @@ def run_optimization(req: OptimizeRequest, request: Request):
             metric_key = f"best_{req.metric.replace('_ratio', '').replace('total_', '')}"
             result_dict[metric_key] = best_val
 
-            # Convergence: best value over trial number
-            convergence = []
-            best_so_far = float("-inf")
-            if opt_result.study:
-                for t in opt_result.study.trials:
-                    val = t.value if t.value is not None else float("-inf")
-                    if val > best_so_far:
-                        best_so_far = val
-                    convergence.append([t.number, round(best_so_far, 4) if best_so_far > float("-inf") else None])
+            # Convergence: best value over trial/eval number
+            convergence = getattr(opt_result, "convergence", None)
+            if convergence is None:
+                convergence = []
+                best_so_far = float("-inf")
+                if opt_result.study:
+                    for t in opt_result.study.trials:
+                        val = t.value if t.value is not None else float("-inf")
+                        if val > best_so_far:
+                            best_so_far = val
+                        convergence.append([t.number, round(best_so_far, 4) if best_so_far > float("-inf") else None])
             result_dict["convergence"] = convergence
+            result_dict["algorithm"] = req.algorithm
 
-            # Parameter importance (requires sklearn)
-            try:
-                from optuna.importance import get_param_importances
-                if opt_result.study and len(opt_result.study.trials) >= 5:
-                    importance = get_param_importances(opt_result.study)
-                    result_dict["param_importance"] = {k: round(v, 4) for k, v in importance.items()}
-                else:
+            # Parameter importance (Optuna only, requires sklearn)
+            if req.algorithm != "ga":
+                try:
+                    from optuna.importance import get_param_importances
+                    if opt_result.study and len(opt_result.study.trials) >= 5:
+                        importance = get_param_importances(opt_result.study)
+                        result_dict["param_importance"] = {k: round(v, 4) for k, v in importance.items()}
+                    else:
+                        result_dict["param_importance"] = None
+                except Exception:
                     result_dict["param_importance"] = None
-            except Exception:
+            else:
                 result_dict["param_importance"] = None
 
             # Best trial full metrics
