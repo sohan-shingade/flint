@@ -219,7 +219,7 @@ class TestDownloadMarketData:
         patch_store.is_range_synced = MagicMock(return_value=False)
         patch_store.upsert_candles.return_value = 0
         with patch("flint.mcp_server._download_range_mcp", return_value=[]), \
-             patch("flint.api.routes.data._download_funding_all_venues", return_value=0):
+             patch("flint.services.data.download_funding_all_venues", return_value=0):
             result = json.loads(download_market_data(market="SOL-PERP", days=30))
         assert result["market"] == "SOL-PERP"
         assert "total" in result
@@ -230,7 +230,7 @@ class TestDownloadMarketData:
         patch_store.is_range_synced = MagicMock(return_value=False)
         patch_store.upsert_candles.return_value = 0
         with patch("flint.mcp_server._download_range_mcp", return_value=[]), \
-             patch("flint.api.routes.data._download_funding_all_venues", return_value=50):
+             patch("flint.services.data.download_funding_all_venues", return_value=50):
             result = json.loads(download_market_data(market="SOL-PERP", days=30))
         assert result["funding_fetched"] == 50
         assert len(result["funding_venues"]) > 0

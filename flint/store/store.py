@@ -12,10 +12,11 @@ from typing import TYPE_CHECKING, List, Optional
 
 import duckdb
 
-from .models import BorrowSnapshot, Candle, FundingRate, OraclePrice
+from ..models import BorrowSnapshot, Candle, FundingRate, OraclePrice
+from . import schema
 
 if TYPE_CHECKING:  # pragma: no cover
-    from .models import (
+    from ..models import (
         DexVolume,
         Liquidation,
         OpenInterest,
@@ -25,325 +26,6 @@ if TYPE_CHECKING:  # pragma: no cover
     )
 
 _logger = logging.getLogger("flint.store")
-
-_CREATE_CANDLES = """
-CREATE TABLE IF NOT EXISTS candles (
-    market      VARCHAR NOT NULL,
-    resolution_s INTEGER NOT NULL,
-    ts          BIGINT  NOT NULL,
-    open        DOUBLE  NOT NULL,
-    high        DOUBLE  NOT NULL,
-    low         DOUBLE  NOT NULL,
-    close       DOUBLE  NOT NULL,
-    volume      DOUBLE  NOT NULL,
-    venue       VARCHAR NOT NULL DEFAULT 'pyth',
-    PRIMARY KEY (venue, market, resolution_s, ts)
-);
-"""
-
-_CREATE_ORACLE_PRICES = """
-CREATE TABLE IF NOT EXISTS oracle_prices (
-    market  VARCHAR NOT NULL,
-    ts      BIGINT  NOT NULL,
-    price   DOUBLE  NOT NULL,
-    slot    BIGINT,
-    PRIMARY KEY (market, ts)
-);
-"""
-
-_CREATE_ORDERBOOK_SNAPSHOTS = """
-CREATE TABLE IF NOT EXISTS orderbook_snapshots (
-    venue      VARCHAR  NOT NULL DEFAULT 'pyth',
-    market     VARCHAR  NOT NULL,
-    ts         BIGINT   NOT NULL,
-    bid_prices DOUBLE[],
-    bid_sizes  DOUBLE[],
-    ask_prices DOUBLE[],
-    ask_sizes  DOUBLE[],
-    PRIMARY KEY (venue, market, ts)
-);
-"""
-
-_CREATE_POOL_SNAPSHOTS = """
-CREATE TABLE IF NOT EXISTS pool_snapshots (
-    pool_address VARCHAR NOT NULL,
-    dex          VARCHAR NOT NULL,
-    token_a_mint VARCHAR NOT NULL,
-    token_b_mint VARCHAR NOT NULL,
-    reserve_a    DOUBLE  NOT NULL,
-    reserve_b    DOUBLE  NOT NULL,
-    fee_rate     DOUBLE  NOT NULL,
-    ts           BIGINT  NOT NULL,
-    PRIMARY KEY (pool_address, ts)
-);
-"""
-
-
-_CREATE_VENUE_FUNDING = """
-CREATE TABLE IF NOT EXISTS venue_funding_rates (
-    venue       VARCHAR NOT NULL,
-    market      VARCHAR NOT NULL,
-    ts          BIGINT  NOT NULL,
-    rate_hourly DOUBLE  NOT NULL,
-    mark_price  DOUBLE  NOT NULL DEFAULT 0,
-    index_price DOUBLE  NOT NULL DEFAULT 0,
-    PRIMARY KEY (venue, market, ts)
-);
-"""
-
-_CREATE_OPEN_INTEREST = """
-CREATE TABLE IF NOT EXISTS open_interest (
-    venue     VARCHAR NOT NULL DEFAULT 'drift',
-    market    VARCHAR NOT NULL,
-    ts        BIGINT  NOT NULL,
-    long_oi   DOUBLE  NOT NULL,
-    short_oi  DOUBLE  NOT NULL,
-    PRIMARY KEY (venue, market, ts)
-);
-"""
-
-_CREATE_LIQUIDATIONS = """
-CREATE TABLE IF NOT EXISTS liquidations (
-    market  VARCHAR NOT NULL,
-    ts      BIGINT  NOT NULL,
-    side    VARCHAR NOT NULL,
-    size    DOUBLE  NOT NULL,
-    price   DOUBLE  NOT NULL,
-    slot    BIGINT  NOT NULL DEFAULT 0,
-    tx_sig  VARCHAR NOT NULL DEFAULT '',
-    PRIMARY KEY (market, ts, tx_sig)
-);
-"""
-
-_CREATE_WHALE_TRANSFERS = """
-CREATE TABLE IF NOT EXISTS whale_transfers (
-    wallet      VARCHAR NOT NULL,
-    token_mint  VARCHAR NOT NULL,
-    amount      DOUBLE  NOT NULL,
-    ts          BIGINT  NOT NULL,
-    direction   VARCHAR NOT NULL,
-    tx_sig      VARCHAR NOT NULL DEFAULT '',
-    PRIMARY KEY (token_mint, ts, tx_sig)
-);
-"""
-
-_CREATE_DEX_VOLUME = """
-CREATE TABLE IF NOT EXISTS dex_volume (
-    market     VARCHAR NOT NULL,
-    dex        VARCHAR NOT NULL,
-    ts         BIGINT  NOT NULL,
-    volume_usd DOUBLE  NOT NULL,
-    txn_count  INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (market, dex, ts)
-);
-"""
-
-_CREATE_TOKEN_UNLOCKS = """
-CREATE TABLE IF NOT EXISTS token_unlocks (
-    token_mint      VARCHAR NOT NULL,
-    unlock_ts       BIGINT  NOT NULL,
-    amount          DOUBLE  NOT NULL,
-    vesting_account VARCHAR NOT NULL DEFAULT '',
-    PRIMARY KEY (token_mint, unlock_ts)
-);
-"""
-
-_CREATE_SYNC_METADATA = """
-CREATE TABLE IF NOT EXISTS sync_metadata (
-    provider     VARCHAR NOT NULL,
-    market       VARCHAR NOT NULL,
-    data_type    VARCHAR NOT NULL,
-    last_sync_ts BIGINT  NOT NULL,
-    record_count INTEGER NOT NULL DEFAULT 0,
-    status       VARCHAR NOT NULL DEFAULT 'ok',
-    error_msg    VARCHAR NOT NULL DEFAULT '',
-    PRIMARY KEY (provider, market, data_type)
-);
-"""
-
-_CREATE_PAPER_SESSIONS = """
-CREATE TABLE IF NOT EXISTS paper_sessions (
-    session_id      VARCHAR PRIMARY KEY,
-    strategy_name   VARCHAR NOT NULL,
-    strategy_code   TEXT NOT NULL,
-    strategy_params VARCHAR NOT NULL DEFAULT '{}',
-    market          VARCHAR NOT NULL,
-    initial_capital DOUBLE NOT NULL,
-    replay_start_ts BIGINT NOT NULL,
-    live_start_ts   BIGINT NOT NULL DEFAULT 0,
-    started_at      BIGINT NOT NULL,
-    stopped_at      BIGINT,
-    status          VARCHAR NOT NULL DEFAULT 'replaying',
-    stop_reason     VARCHAR NOT NULL DEFAULT '',
-    risk_config     VARCHAR NOT NULL DEFAULT '{}'
-);
-"""
-
-_CREATE_PAPER_EQUITY_HISTORY = """
-CREATE TABLE IF NOT EXISTS paper_equity_history (
-    session_id     VARCHAR NOT NULL,
-    ts             BIGINT NOT NULL,
-    equity         DOUBLE NOT NULL,
-    cash           DOUBLE NOT NULL,
-    unrealized_pnl DOUBLE NOT NULL DEFAULT 0,
-    is_replay      BOOLEAN NOT NULL DEFAULT false,
-    PRIMARY KEY (session_id, ts)
-);
-"""
-
-_CREATE_PAPER_TRADES = """
-CREATE TABLE IF NOT EXISTS paper_trades (
-    session_id  VARCHAR NOT NULL,
-    trade_id    VARCHAR NOT NULL,
-    market      VARCHAR NOT NULL,
-    side        VARCHAR NOT NULL,
-    size        DOUBLE NOT NULL,
-    entry_price DOUBLE NOT NULL,
-    exit_price  DOUBLE NOT NULL,
-    entry_ts    BIGINT NOT NULL,
-    exit_ts     BIGINT NOT NULL,
-    pnl         DOUBLE NOT NULL,
-    fees        DOUBLE NOT NULL DEFAULT 0,
-    is_replay   BOOLEAN NOT NULL DEFAULT false,
-    PRIMARY KEY (session_id, trade_id)
-);
-"""
-
-_CREATE_PAPER_POSITIONS = """
-CREATE TABLE IF NOT EXISTS paper_positions (
-    session_id     VARCHAR NOT NULL,
-    venue          VARCHAR NOT NULL DEFAULT 'unknown',
-    market         VARCHAR NOT NULL,
-    side           VARCHAR NOT NULL,
-    size           DOUBLE NOT NULL,
-    entry_price    DOUBLE NOT NULL,
-    entry_ts       BIGINT NOT NULL,
-    unrealized_pnl DOUBLE NOT NULL DEFAULT 0,
-    PRIMARY KEY (session_id, venue, market)
-);
-"""
-
-_CREATE_PAPER_FUNDING_PAYMENTS = """
-CREATE TABLE IF NOT EXISTS paper_funding_payments (
-    session_id    VARCHAR NOT NULL,
-    ts            BIGINT NOT NULL,
-    market        VARCHAR NOT NULL,
-    venue         VARCHAR NOT NULL DEFAULT 'unknown',
-    rate          DOUBLE NOT NULL,
-    payment       DOUBLE NOT NULL,
-    position_size DOUBLE NOT NULL,
-    mark_price    DOUBLE NOT NULL,
-    PRIMARY KEY (session_id, market, venue, ts)
-);
-"""
-
-_CREATE_LIVE_SESSIONS = """
-CREATE TABLE IF NOT EXISTS live_sessions (
-    session_id      VARCHAR PRIMARY KEY,
-    strategy_name   VARCHAR NOT NULL,
-    market          VARCHAR NOT NULL,
-    network         VARCHAR NOT NULL,
-    venue           VARCHAR NOT NULL DEFAULT 'drift',
-    initial_capital DOUBLE,
-    config_snapshot VARCHAR,
-    status          VARCHAR DEFAULT 'running',
-    started_at      BIGINT NOT NULL,
-    stopped_at      BIGINT
-);
-"""
-
-_CREATE_LIVE_ORDERS = """
-CREATE TABLE IF NOT EXISTS live_orders (
-    order_id       VARCHAR PRIMARY KEY,
-    session_id     VARCHAR NOT NULL,
-    venue_order_id INTEGER,
-    market         VARCHAR NOT NULL,
-    side           VARCHAR NOT NULL,
-    order_type     VARCHAR NOT NULL,
-    size           DOUBLE NOT NULL,
-    price          DOUBLE,
-    state          VARCHAR NOT NULL,
-    retry_count    INTEGER DEFAULT 0,
-    tx_sig         VARCHAR,
-    created_at     BIGINT NOT NULL,
-    updated_at     BIGINT NOT NULL,
-    state_history  VARCHAR
-);
-"""
-
-_CREATE_LIVE_FILLS = """
-CREATE TABLE IF NOT EXISTS live_fills (
-    fill_id    VARCHAR PRIMARY KEY,
-    order_id   VARCHAR NOT NULL,
-    session_id VARCHAR NOT NULL,
-    market     VARCHAR NOT NULL,
-    side       VARCHAR NOT NULL,
-    price      DOUBLE NOT NULL,
-    size       DOUBLE NOT NULL,
-    fee        DOUBLE NOT NULL,
-    tx_sig     VARCHAR NOT NULL,
-    venue      VARCHAR NOT NULL DEFAULT 'drift',
-    is_partial BOOLEAN DEFAULT FALSE,
-    ts         BIGINT NOT NULL
-);
-"""
-
-_CREATE_LIVE_EQUITY_HISTORY = """
-CREATE TABLE IF NOT EXISTS live_equity_history (
-    session_id     VARCHAR NOT NULL,
-    ts             BIGINT NOT NULL,
-    equity         DOUBLE NOT NULL,
-    cash           DOUBLE NOT NULL,
-    unrealized_pnl DOUBLE NOT NULL,
-    PRIMARY KEY (session_id, ts)
-);
-"""
-
-_CREATE_TICK_SNAPSHOTS = """
-CREATE TABLE IF NOT EXISTS tick_snapshots (
-    pool_address VARCHAR NOT NULL, ts BIGINT NOT NULL, dex VARCHAR NOT NULL,
-    token_a_mint VARCHAR NOT NULL, token_b_mint VARCHAR NOT NULL,
-    current_tick INTEGER NOT NULL, tick_spacing INTEGER NOT NULL,
-    fee_rate DOUBLE NOT NULL, sqrt_price DOUBLE NOT NULL,
-    tick_data VARCHAR NOT NULL, PRIMARY KEY (pool_address, ts)
-);
-"""
-
-_CREATE_JUPITER_BORROW_RATES = """
-CREATE TABLE IF NOT EXISTS jupiter_borrow_rates (
-    market          VARCHAR NOT NULL,
-    ts              BIGINT  NOT NULL,
-    rate_hourly     DOUBLE  NOT NULL,
-    utilization     DOUBLE  NOT NULL,
-    cumulative_rate DOUBLE  NOT NULL,
-    source          VARCHAR NOT NULL DEFAULT 'rpc',
-    PRIMARY KEY (market, ts)
-);
-"""
-
-
-_CREATE_JOURNAL_EQUITY = """
-CREATE TABLE IF NOT EXISTS journal_equity (
-    run_id   VARCHAR NOT NULL,
-    ts       BIGINT  NOT NULL,
-    equity   DOUBLE  NOT NULL,
-    PRIMARY KEY (run_id, ts)
-);
-"""
-
-_CREATE_STRATEGIES = """
-CREATE TABLE IF NOT EXISTS strategies (
-    strategy_id   VARCHAR PRIMARY KEY,
-    name          VARCHAR NOT NULL,
-    code          TEXT    NOT NULL DEFAULT '',
-    params_json   VARCHAR NOT NULL DEFAULT '{}',
-    category      VARCHAR NOT NULL DEFAULT 'custom',
-    status        VARCHAR NOT NULL DEFAULT 'draft',
-    created_at    BIGINT  NOT NULL,
-    updated_at    BIGINT  NOT NULL,
-    notes         VARCHAR NOT NULL DEFAULT ''
-);
-"""
 
 
 class FlintStore:
@@ -362,260 +44,7 @@ class FlintStore:
         self._path = path
         self._lock = threading.Lock()
         self._conn = duckdb.connect(path)
-        self._create_tables()
-
-    def _create_tables(self) -> None:
-        try:
-            self._conn.execute("PRAGMA wal_autocheckpoint='1000'")
-        except Exception as e:
-            _logger.debug("WAL pragma not supported: %s", e)
-        self._conn.execute(_CREATE_CANDLES)
-        # Migration: add venue column to candles if missing (existing DBs)
-        try:
-            cols = {r[0] for r in self._conn.execute(
-                "SELECT column_name FROM information_schema.columns WHERE table_name='candles'"
-            ).fetchall()}
-            if cols and "venue" not in cols:
-                # DuckDB doesn't support ALTER PRIMARY KEY, so recreate the table
-                self._conn.execute("BEGIN TRANSACTION")
-                try:
-                    self._conn.execute("""
-                        CREATE TABLE candles_new (
-                            market       VARCHAR NOT NULL,
-                            resolution_s INTEGER NOT NULL,
-                            ts           BIGINT  NOT NULL,
-                            open         DOUBLE  NOT NULL,
-                            high         DOUBLE  NOT NULL,
-                            low          DOUBLE  NOT NULL,
-                            close        DOUBLE  NOT NULL,
-                            volume       DOUBLE  NOT NULL,
-                            venue        VARCHAR NOT NULL DEFAULT 'pyth',
-                            PRIMARY KEY (venue, market, resolution_s, ts)
-                        )
-                    """)
-                    self._conn.execute(
-                        "INSERT INTO candles_new "
-                        "SELECT market, resolution_s, ts, open, high, low, close, volume, 'pyth' "
-                        "FROM candles"
-                    )
-                    self._conn.execute("DROP TABLE candles")
-                    self._conn.execute("ALTER TABLE candles_new RENAME TO candles")
-                    self._conn.execute("COMMIT")
-                    _logger.info("Migrated candles table: added venue column")
-                except Exception as e:
-                    self._conn.execute("ROLLBACK")
-                    _logger.warning("Candles venue migration failed: %s", e)
-        except Exception as e:
-            _logger.debug("Candles migration check: %s", e)
-        self._conn.execute(_CREATE_ORACLE_PRICES)
-        self._conn.execute(_CREATE_ORDERBOOK_SNAPSHOTS)
-        # Migration: add venue column to orderbook_snapshots if missing (existing DBs)
-        try:
-            cols = {r[0] for r in self._conn.execute(
-                "SELECT column_name FROM information_schema.columns WHERE table_name='orderbook_snapshots'"
-            ).fetchall()}
-            if cols and "venue" not in cols:
-                self._conn.execute("BEGIN TRANSACTION")
-                try:
-                    self._conn.execute("""
-                        CREATE TABLE orderbook_snapshots_new (
-                            venue      VARCHAR  NOT NULL DEFAULT 'pyth',
-                            market     VARCHAR  NOT NULL,
-                            ts         BIGINT   NOT NULL,
-                            bid_prices DOUBLE[],
-                            bid_sizes  DOUBLE[],
-                            ask_prices DOUBLE[],
-                            ask_sizes  DOUBLE[],
-                            PRIMARY KEY (venue, market, ts)
-                        )
-                    """)
-                    self._conn.execute(
-                        "INSERT INTO orderbook_snapshots_new "
-                        "SELECT 'pyth', market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes "
-                        "FROM orderbook_snapshots"
-                    )
-                    self._conn.execute("DROP TABLE orderbook_snapshots")
-                    self._conn.execute("ALTER TABLE orderbook_snapshots_new RENAME TO orderbook_snapshots")
-                    self._conn.execute("COMMIT")
-                    _logger.info("Migrated orderbook_snapshots table: added venue column")
-                except Exception as e:
-                    self._conn.execute("ROLLBACK")
-                    _logger.warning("Orderbook snapshots venue migration failed: %s", e)
-        except Exception as e:
-            _logger.debug("Orderbook snapshots migration check: %s", e)
-        self._conn.execute(_CREATE_POOL_SNAPSHOTS)
-        self._conn.execute(_CREATE_VENUE_FUNDING)
-        # Migrate: if old funding_rates table exists, copy data to venue_funding_rates
-        try:
-            count = self._conn.execute(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'funding_rates'"
-            ).fetchone()[0]
-            if count > 0:
-                # Check which columns the old table has before migrating
-                old_cols = {r[0] for r in self._conn.execute(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name = 'funding_rates'"
-                ).fetchall()}
-                if 'rate' in old_cols:
-                    venue_expr = "COALESCE(source, 'drift')" if 'source' in old_cols else "'drift'"
-                    self._conn.execute("BEGIN TRANSACTION")
-                    try:
-                        self._conn.execute(f"""
-                            INSERT OR IGNORE INTO venue_funding_rates
-                                (venue, market, ts, rate_hourly, mark_price, index_price)
-                            SELECT {venue_expr}, market, ts, rate,
-                                   COALESCE(mark_price, 0), COALESCE(oracle_price, 0)
-                            FROM funding_rates
-                            WHERE ABS(rate) < 0.005
-                        """)
-                        self._conn.execute("DROP TABLE funding_rates")
-                        self._conn.execute("COMMIT")
-                        _logger.info("Migrated funding_rates → venue_funding_rates")
-                    except Exception as e:
-                        self._conn.execute("ROLLBACK")
-                        _logger.warning("Funding rates migration failed (data preserved): %s", e)
-                else:
-                    # Old table has incompatible schema — safe to drop
-                    self._conn.execute("DROP TABLE funding_rates")
-                    _logger.info("Dropped incompatible legacy funding_rates table")
-        except Exception as e:
-            _logger.debug("Funding rates migration check: %s", e)
-        # Migrate: add venue column to open_interest if missing
-        try:
-            cols = [r[0] for r in self._conn.execute(
-                "SELECT column_name FROM information_schema.columns WHERE table_name='open_interest'"
-            ).fetchall()]
-            if cols and "venue" not in cols:
-                self._conn.execute("DROP TABLE open_interest")
-        except Exception as e:
-            _logger.debug("Open interest migration check: %s", e)
-        self._conn.execute(_CREATE_OPEN_INTEREST)
-        self._conn.execute(_CREATE_LIQUIDATIONS)
-        self._conn.execute(_CREATE_WHALE_TRANSFERS)
-        self._conn.execute(_CREATE_DEX_VOLUME)
-        self._conn.execute(_CREATE_TOKEN_UNLOCKS)
-        self._conn.execute(_CREATE_SYNC_METADATA)
-        # Migrate: remove 'default' venue candles (legacy, now tagged as 'pyth')
-        try:
-            self._conn.execute("DELETE FROM candles WHERE venue = 'default'")
-            self._conn.execute("UPDATE orderbook_snapshots SET venue = 'pyth' WHERE venue = 'default'")
-        except Exception:
-            pass
-
-        # Paper trading persistence
-        self._conn.execute(_CREATE_PAPER_SESSIONS)
-        self._conn.execute(_CREATE_PAPER_EQUITY_HISTORY)
-        self._conn.execute(_CREATE_PAPER_TRADES)
-        self._conn.execute(_CREATE_PAPER_POSITIONS)
-        # Migration: add venue column + widen PK if existing table predates it
-        try:
-            cols = {r[0] for r in self._conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name='paper_positions'"
-            ).fetchall()}
-            if cols and "venue" not in cols:
-                self._conn.execute("BEGIN TRANSACTION")
-                try:
-                    self._conn.execute("""
-                        CREATE TABLE paper_positions_new (
-                            session_id     VARCHAR NOT NULL,
-                            venue          VARCHAR NOT NULL DEFAULT 'unknown',
-                            market         VARCHAR NOT NULL,
-                            side           VARCHAR NOT NULL,
-                            size           DOUBLE NOT NULL,
-                            entry_price    DOUBLE NOT NULL,
-                            entry_ts       BIGINT NOT NULL,
-                            unrealized_pnl DOUBLE NOT NULL DEFAULT 0,
-                            PRIMARY KEY (session_id, venue, market)
-                        )
-                    """)
-                    self._conn.execute(
-                        "INSERT INTO paper_positions_new "
-                        "SELECT session_id, 'unknown', market, side, size, "
-                        "entry_price, entry_ts, unrealized_pnl "
-                        "FROM paper_positions"
-                    )
-                    self._conn.execute("DROP TABLE paper_positions")
-                    self._conn.execute(
-                        "ALTER TABLE paper_positions_new RENAME TO paper_positions"
-                    )
-                    self._conn.execute("COMMIT")
-                    _logger.info("Migrated paper_positions: added venue column")
-                except Exception as e:
-                    self._conn.execute("ROLLBACK")
-                    _logger.warning("paper_positions venue migration failed: %s", e)
-        except Exception as e:
-            _logger.debug("paper_positions migration check: %s", e)
-        self._conn.execute(_CREATE_PAPER_FUNDING_PAYMENTS)
-        # Migration: add venue column + widen PK if existing table predates it
-        try:
-            cols = {r[0] for r in self._conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name='paper_funding_payments'"
-            ).fetchall()}
-            if cols and "venue" not in cols:
-                self._conn.execute("BEGIN TRANSACTION")
-                try:
-                    self._conn.execute("""
-                        CREATE TABLE paper_funding_payments_new (
-                            session_id    VARCHAR NOT NULL,
-                            ts            BIGINT NOT NULL,
-                            market        VARCHAR NOT NULL,
-                            venue         VARCHAR NOT NULL DEFAULT 'unknown',
-                            rate          DOUBLE NOT NULL,
-                            payment       DOUBLE NOT NULL,
-                            position_size DOUBLE NOT NULL,
-                            mark_price    DOUBLE NOT NULL,
-                            PRIMARY KEY (session_id, market, venue, ts)
-                        )
-                    """)
-                    self._conn.execute(
-                        "INSERT INTO paper_funding_payments_new "
-                        "SELECT session_id, ts, market, 'unknown', rate, payment, "
-                        "position_size, mark_price "
-                        "FROM paper_funding_payments"
-                    )
-                    self._conn.execute("DROP TABLE paper_funding_payments")
-                    self._conn.execute(
-                        "ALTER TABLE paper_funding_payments_new "
-                        "RENAME TO paper_funding_payments"
-                    )
-                    self._conn.execute("COMMIT")
-                    _logger.info(
-                        "Migrated paper_funding_payments: added venue column"
-                    )
-                except Exception as e:
-                    self._conn.execute("ROLLBACK")
-                    _logger.warning("paper_funding_payments venue migration failed: %s", e)
-        except Exception as e:
-            _logger.debug("paper_funding_payments migration check: %s", e)
-        # Live trading persistence
-        self._conn.execute(_CREATE_LIVE_SESSIONS)
-        self._conn.execute(_CREATE_LIVE_ORDERS)
-        self._conn.execute(_CREATE_LIVE_FILLS)
-        self._conn.execute(_CREATE_LIVE_EQUITY_HISTORY)
-        # CLMM tick snapshots
-        self._conn.execute(_CREATE_TICK_SNAPSHOTS)
-        # Jupiter Perps borrow rates
-        self._conn.execute(_CREATE_JUPITER_BORROW_RATES)
-        # Journal equity curves
-        self._conn.execute(_CREATE_JOURNAL_EQUITY)
-        # Strategy registry
-        self._conn.execute(_CREATE_STRATEGIES)
-
-        # ── Indexes for faster queries ──
-        for idx_sql in [
-            "CREATE INDEX IF NOT EXISTS idx_candles_market_res ON candles (market, resolution_s)",
-            "CREATE INDEX IF NOT EXISTS idx_funding_market_venue ON venue_funding_rates (market, venue)",
-            "CREATE INDEX IF NOT EXISTS idx_journal_strategy ON backtest_runs (strategy_name)",
-            "CREATE INDEX IF NOT EXISTS idx_paper_sessions_strategy ON paper_sessions (strategy_name)",
-            "CREATE INDEX IF NOT EXISTS idx_live_sessions_strategy ON live_sessions (strategy_name)",
-            "CREATE INDEX IF NOT EXISTS idx_journal_equity_run ON journal_equity (run_id)",
-        ]:
-            try:
-                self._conn.execute(idx_sql)
-            except Exception:
-                pass  # index may already exist or table missing
+        schema.create_tables(self._conn)
 
     # -- candles ---------------------------------------------------------------
 
@@ -639,7 +68,7 @@ class FlintStore:
                         batch,
                     )
                 self._conn.execute("COMMIT")
-            except Exception:
+            except duckdb.Error:
                 self._conn.execute("ROLLBACK")
                 raise
         return len(rows)
@@ -769,7 +198,7 @@ class FlintStore:
                         batch,
                     )
                 self._conn.execute("COMMIT")
-            except Exception:
+            except duckdb.Error:
                 self._conn.execute("ROLLBACK")
                 raise
         return len(rows)
@@ -862,7 +291,7 @@ class FlintStore:
                         batch,
                     )
                 self._conn.execute("COMMIT")
-            except Exception:
+            except duckdb.Error:
                 self._conn.execute("ROLLBACK")
                 raise
         return len(rows)
@@ -977,7 +406,7 @@ class FlintStore:
         end_ts: Optional[int] = None,
     ) -> List["OrderbookSnapshot"]:
         """Query orderbook snapshots for a market within a time range."""
-        from .models import OrderbookLevel, OrderbookSnapshot
+        from ..models import OrderbookLevel, OrderbookSnapshot
         sql = "SELECT market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes FROM orderbook_snapshots WHERE market = ?"
         params: list = [market]
         if start_ts is not None:
@@ -1006,7 +435,7 @@ class FlintStore:
 
         Returns None if no snapshot exists at or before the given timestamp.
         """
-        from .models import OrderbookLevel, OrderbookSnapshot
+        from ..models import OrderbookLevel, OrderbookSnapshot
         sql = (
             "SELECT market, ts, bid_prices, bid_sizes, ask_prices, ask_sizes "
             "FROM orderbook_snapshots "
@@ -1136,7 +565,7 @@ class FlintStore:
         sql += " ORDER BY ts ASC"
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-        from .models import OpenInterest
+        from ..models import OpenInterest
         return [OpenInterest(venue=r[0], market=r[1], ts=r[2], long_oi=r[3], short_oi=r[4]) for r in rows]
 
     # -- liquidations --------------------------------------------------------
@@ -1170,7 +599,7 @@ class FlintStore:
         sql += " ORDER BY ts ASC"
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-        from .models import Liquidation
+        from ..models import Liquidation
         return [Liquidation(market=r[0], ts=r[1], side=r[2], size=r[3], price=r[4], slot=r[5], tx_sig=r[6]) for r in rows]
 
     # -- whale transfers -----------------------------------------------------
@@ -1211,7 +640,7 @@ class FlintStore:
         sql += " ORDER BY ts ASC"
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-        from .models import WhaleTransfer
+        from ..models import WhaleTransfer
         return [WhaleTransfer(wallet=r[0], token_mint=r[1], amount=r[2], ts=r[3], direction=r[4], tx_sig=r[5]) for r in rows]
 
     # -- dex volume ----------------------------------------------------------
@@ -1249,7 +678,7 @@ class FlintStore:
         sql += " ORDER BY ts ASC"
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-        from .models import DexVolume
+        from ..models import DexVolume
         return [DexVolume(market=r[0], dex=r[1], ts=r[2], volume_usd=r[3], txn_count=r[4]) for r in rows]
 
     # -- token unlocks -------------------------------------------------------
@@ -1287,7 +716,7 @@ class FlintStore:
             ).fetchone()
         if not row:
             return None
-        from .models import SyncMetadata
+        from ..models import SyncMetadata
         return SyncMetadata(provider=row[0], market=row[1], data_type=row[2],
                             last_sync_ts=row[3], record_count=row[4],
                             status=row[5], error_msg=row[6])
@@ -1316,11 +745,9 @@ class FlintStore:
         coverage = count / expected
         if coverage < 0.9:
             return False
-        # Check freshness via sync_metadata
         meta = self.get_sync_metadata("drift_api", market, "candles")
         if meta and (_time.time() - meta.last_sync_ts) < max_age_s:
             return True
-        # Even without sync_metadata, if we have 90%+ coverage, consider it synced
         return coverage >= 0.95
 
     def list_sync_metadata(self, provider: Optional[str] = None) -> list:
@@ -1332,7 +759,7 @@ class FlintStore:
         sql += " ORDER BY provider, market, data_type"
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-        from .models import SyncMetadata
+        from ..models import SyncMetadata
         return [SyncMetadata(provider=r[0], market=r[1], data_type=r[2],
                              last_sync_ts=r[3], record_count=r[4],
                              status=r[5], error_msg=r[6]) for r in rows]
@@ -1614,14 +1041,12 @@ class FlintStore:
         backtest count, best Sharpe, and latest paper/live session status.
         """
         with self._lock:
-            # Base query always works
             rows = self._conn.execute(
                 "SELECT strategy_id, name, category, status, code, "
                 "params_json, created_at, updated_at, notes "
                 "FROM strategies ORDER BY updated_at DESC"
             ).fetchall()
 
-            # Build lifecycle stats from related tables (may not exist in test DBs)
             bt_stats: dict = {}
             paper_stats: dict = {}
             live_stats: dict = {}
@@ -1631,7 +1056,7 @@ class FlintStore:
                     "FROM backtest_runs GROUP BY strategy_name"
                 ).fetchall():
                     bt_stats[r[0]] = {"count": r[1], "best_sharpe": r[2], "best_pnl": r[3]}
-            except Exception:
+            except duckdb.Error:
                 pass
             try:
                 for r in self._conn.execute(
@@ -1640,7 +1065,7 @@ class FlintStore:
                 ).fetchall():
                     if r[0] not in paper_stats:
                         paper_stats[r[0]] = {"session_id": r[1], "status": r[2]}
-            except Exception:
+            except duckdb.Error:
                 pass
             try:
                 for r in self._conn.execute(
@@ -1649,7 +1074,7 @@ class FlintStore:
                 ).fetchall():
                     if r[0] not in live_stats:
                         live_stats[r[0]] = {"session_id": r[1], "status": r[2]}
-            except Exception:
+            except duckdb.Error:
                 pass
 
         result = []
@@ -1694,10 +1119,7 @@ class FlintStore:
             self._conn.execute("DELETE FROM strategies WHERE name = ?", [name])
             return True
 
-    # -- encapsulation methods (Phase 2 T2.2) ---------------------------------
-    # CLAUDE.md rule: "Never access store._conn or store._lock from API routes —
-    # add a method to FlintStore instead." These close out the route-level leaks
-    # flagged in the 2026-04-23 audit.
+    # -- encapsulation methods -------------------------------------------------
 
     def list_live_sessions(self, limit: int = 20) -> list:
         """List recent live trading sessions (most recent first)."""
@@ -1767,13 +1189,13 @@ class FlintStore:
                             [market],
                         )
                         deleted[table] = before
-                except Exception:
+                except duckdb.Error:
                     pass
             try:
                 self._conn.execute(
                     "DELETE FROM sync_metadata WHERE market = ?", [market]
                 )
-            except Exception:
+            except duckdb.Error:
                 pass
         return deleted
 
@@ -1838,10 +1260,9 @@ class FlintStore:
             ).fetchone()
         return int(row[0] if row else 0)
 
-    # ─── D-2.2-internal — lock-wrapping SQL gateways ──────────────────────
-    # Not for API/MCP use (those must use typed methods above). Storage-layer
-    # helpers in flint/journal/ and flint/paper/session_store.py go through
-    # these to avoid touching self._conn / self._lock directly.
+    # ─── Lock-wrapping SQL gateways ──────────────────────────────────────
+    # Storage-layer helpers in flint/journal/ and flint/paper/session_store.py
+    # go through these to avoid touching self._conn / self._lock directly.
 
     def _sql_exec(self, sql: str, params=None) -> None:
         """Run a write statement under the store's lock. No return value."""

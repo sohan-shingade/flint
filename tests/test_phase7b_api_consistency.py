@@ -178,7 +178,7 @@ class TestDownloadResponseClarity:
 
 class TestCCXTWarningDedup:
     def test_ccxt_warning_only_once(self):
-        from flint.api.routes import data as data_module
+        from flint.services import data as data_module
         data_module._ccxt_warned.clear()
 
         warnings1 = []

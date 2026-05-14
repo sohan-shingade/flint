@@ -1,9 +1,8 @@
 """Tests for the multi-source backfill fallback chain.
 
-`backfill_candle_gap` walks Hyperliquid → Drift API → Drift S3 so a
-resumed paper session catches up even when one source is offline (Drift
-is offline post-hack; HL is the primary live source). These tests pin
-that chain order + that any source returning rows short-circuits.
+`backfill_candle_gap` tries Hyperliquid only (Drift was removed post-hack).
+If HL fails or returns empty, the function returns 0 and the caller falls
+back to the DuckDB cache (already queried after this function returns).
 """
 from unittest.mock import MagicMock, patch
 
@@ -32,125 +31,69 @@ def test_short_window_skips_backfill():
     store.upsert_candles.assert_not_called()
 
 
-def test_hyperliquid_first_wins():
-    """When HL returns candles, neither Drift source is touched."""
+def test_hyperliquid_succeeds():
+    """When HL returns candles, they are upserted."""
     store = _store_with_upsert()
 
     hl_provider = MagicMock()
     hl_provider.fetch_candles.return_value = [_candle(1_700_000_000)]
-    drift_api = MagicMock()
-    drift_s3 = MagicMock()
 
     with patch("flint.providers.hyperliquid_candles.HyperliquidCandleProvider",
-               return_value=hl_provider), \
-         patch("flint.providers.drift_candles.DriftCandleProvider",
-               return_value=drift_api), \
-         patch("flint.providers.drift_s3.DriftS3Provider",
-               return_value=drift_s3):
+               return_value=hl_provider):
         n = backfill_candle_gap(
             store, "SOL-PERP", 1_700_000_000, 1_700_010_000,
         )
 
     assert n == 1
     hl_provider.fetch_candles.assert_called_once()
-    drift_api.fetch_candles.assert_not_called()
-    drift_s3.fetch_candles.assert_not_called()
     hl_provider.close.assert_called_once()
 
 
-def test_falls_to_drift_api_when_hl_empty():
-    """HL returning [] (e.g. unsupported market) falls to Drift API."""
+def test_returns_zero_when_hl_empty():
+    """HL returning [] means no data — function returns 0."""
     store = _store_with_upsert()
 
     hl_provider = MagicMock()
     hl_provider.fetch_candles.return_value = []
-    drift_api = MagicMock()
-    drift_api.fetch_candles.return_value = [_candle(1_700_000_000)]
-    drift_s3 = MagicMock()
 
     with patch("flint.providers.hyperliquid_candles.HyperliquidCandleProvider",
-               return_value=hl_provider), \
-         patch("flint.providers.drift_candles.DriftCandleProvider",
-               return_value=drift_api), \
-         patch("flint.providers.drift_s3.DriftS3Provider",
-               return_value=drift_s3):
+               return_value=hl_provider):
         n = backfill_candle_gap(
             store, "SOL-PERP", 1_700_000_000, 1_700_010_000,
         )
 
-    assert n == 1
-    drift_api.fetch_candles.assert_called_once()
-    drift_s3.fetch_candles.assert_not_called()
-
-
-def test_falls_to_s3_when_hl_and_api_fail():
-    """Both HL and Drift API throwing → S3 picks up the gap."""
-    store = _store_with_upsert()
-
-    hl_provider = MagicMock()
-    hl_provider.fetch_candles.side_effect = RuntimeError("hl offline")
-    drift_api = MagicMock()
-    drift_api.fetch_candles.side_effect = RuntimeError("drift api down")
-    drift_s3 = MagicMock()
-    drift_s3.fetch_candles.return_value = [_candle(1_700_000_000)]
-
-    with patch("flint.providers.hyperliquid_candles.HyperliquidCandleProvider",
-               return_value=hl_provider), \
-         patch("flint.providers.drift_candles.DriftCandleProvider",
-               return_value=drift_api), \
-         patch("flint.providers.drift_s3.DriftS3Provider",
-               return_value=drift_s3):
-        n = backfill_candle_gap(
-            store, "SOL-PERP", 1_700_000_000, 1_700_010_000,
-        )
-
-    assert n == 1
-    drift_s3.fetch_candles.assert_called_once()
-
-
-def test_returns_zero_when_all_sources_fail():
-    store = _store_with_upsert()
-
-    hl_provider = MagicMock()
-    hl_provider.fetch_candles.side_effect = RuntimeError("hl down")
-    drift_api = MagicMock()
-    drift_api.fetch_candles.side_effect = RuntimeError("api down")
-    drift_s3 = MagicMock()
-    drift_s3.fetch_candles.side_effect = RuntimeError("s3 down")
-
-    with patch("flint.providers.hyperliquid_candles.HyperliquidCandleProvider",
-               return_value=hl_provider), \
-         patch("flint.providers.drift_candles.DriftCandleProvider",
-               return_value=drift_api), \
-         patch("flint.providers.drift_s3.DriftS3Provider",
-               return_value=drift_s3):
-        n = backfill_candle_gap(
-            store, "SOL-PERP", 1_700_000_000, 1_700_010_000,
-        )
     assert n == 0
     store.upsert_candles.assert_not_called()
 
 
-def test_unsupported_market_skips_hl():
-    """Markets not in the HL map skip directly to Drift, even if HL
-    is reachable."""
+def test_returns_zero_when_hl_fails():
+    """HL throwing an exception — function returns 0."""
     store = _store_with_upsert()
 
     hl_provider = MagicMock()
-    drift_api = MagicMock()
-    drift_api.fetch_candles.return_value = [_candle(1_700_000_000)]
-    drift_s3 = MagicMock()
+    hl_provider.fetch_candles.side_effect = RuntimeError("hl down")
 
     with patch("flint.providers.hyperliquid_candles.HyperliquidCandleProvider",
-               return_value=hl_provider), \
-         patch("flint.providers.drift_candles.DriftCandleProvider",
-               return_value=drift_api), \
-         patch("flint.providers.drift_s3.DriftS3Provider",
-               return_value=drift_s3):
+               return_value=hl_provider):
+        n = backfill_candle_gap(
+            store, "SOL-PERP", 1_700_000_000, 1_700_010_000,
+        )
+
+    assert n == 0
+    store.upsert_candles.assert_not_called()
+
+
+def test_unsupported_market_returns_zero():
+    """Markets not in the HL map return 0 (no Drift fallback anymore)."""
+    store = _store_with_upsert()
+
+    hl_provider = MagicMock()
+
+    with patch("flint.providers.hyperliquid_candles.HyperliquidCandleProvider",
+               return_value=hl_provider):
         n = backfill_candle_gap(
             store, "OBSCURE-PERP", 1_700_000_000, 1_700_010_000,
         )
 
-    assert n == 1
+    assert n == 0
     hl_provider.fetch_candles.assert_not_called()
-    drift_api.fetch_candles.assert_called_once()

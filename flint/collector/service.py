@@ -153,7 +153,7 @@ class CollectorService:
                         lambda m=market: collect_candles_latest(self.store, m),
                     )
                 # Funding rates are fetched when market data is downloaded
-                # via _download_funding_all_venues(), not by the collector.
+                # via download_funding_all_venues() in flint.services.data, not by the collector.
 
             if now - last_oracle >= self.config.oracle_interval_s:
                 last_oracle = now

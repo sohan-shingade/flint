@@ -170,8 +170,8 @@ class TestVenueFunding:
 class TestDownloadEndpoint:
     def test_download_new_market(self, app_client, store):
         candles = _make_candles("ETH-PERP", 1700000000, 24)
-        with patch("flint.api.routes.data._download_pyth_candles", return_value=(candles, None)), \
-             patch("flint.api.routes.data._download_funding_all_venues", return_value=10):
+        with patch("flint.api.routes.data.download_pyth_candles", return_value=(candles, None)), \
+             patch("flint.api.routes.data.download_funding_all_venues", return_value=10):
             resp = app_client.post("/api/v1/data/download", json={
                 "market": "ETH-PERP", "resolution_s": 3600,
                 "start_ts": 1700000000, "end_ts": 1700086400,
@@ -185,8 +185,8 @@ class TestDownloadEndpoint:
         candles = _make_candles("SOL-PERP", 1700000000, 24)
         store.upsert_candles(candles)
 
-        with patch("flint.api.routes.data._download_pyth_candles") as mock_dl, \
-             patch("flint.api.routes.data._download_funding_all_venues", return_value=0):
+        with patch("flint.api.routes.data.download_pyth_candles") as mock_dl, \
+             patch("flint.api.routes.data.download_funding_all_venues", return_value=0):
             resp = app_client.post("/api/v1/data/download", json={
                 "market": "SOL-PERP", "resolution_s": 3600,
                 "start_ts": 1700000000, "end_ts": 1700086400,
@@ -201,8 +201,8 @@ class TestDownloadEndpoint:
         store.upsert_candles(existing)
 
         new_candles = _make_candles("SOL-PERP", 1700043200, 12)
-        with patch("flint.api.routes.data._download_pyth_candles", return_value=(new_candles, None)), \
-             patch("flint.api.routes.data._download_funding_all_venues", return_value=5):
+        with patch("flint.api.routes.data.download_pyth_candles", return_value=(new_candles, None)), \
+             patch("flint.api.routes.data.download_funding_all_venues", return_value=5):
             resp = app_client.post("/api/v1/data/download", json={
                 "market": "SOL-PERP", "resolution_s": 3600,
                 "start_ts": 1700000000, "end_ts": 1700086400,
@@ -212,8 +212,8 @@ class TestDownloadEndpoint:
         assert data["existing"] == 12
 
     def test_download_all_providers_fail(self, app_client):
-        with patch("flint.api.routes.data._download_pyth_candles", return_value=([], "all failed")), \
-             patch("flint.api.routes.data._download_funding_all_venues", return_value=0):
+        with patch("flint.api.routes.data.download_pyth_candles", return_value=([], "all failed")), \
+             patch("flint.api.routes.data.download_funding_all_venues", return_value=0):
             resp = app_client.post("/api/v1/data/download", json={
                 "market": "FAKE-PERP", "resolution_s": 3600,
                 "start_ts": 1700000000, "end_ts": 1700086400,
@@ -333,8 +333,8 @@ class TestDownloadFundingAllVenues:
     def test_spot_market_returns_zero(self, store):
         """Spot markets should not download funding."""
         import logging
-        from flint.api.routes.data import _download_funding_all_venues
-        result = _download_funding_all_venues(store, "SOL", 1700000000, 1700086400, logging.getLogger())
+        from flint.services.data import download_funding_all_venues
+        result = download_funding_all_venues(store, "SOL", 1700000000, 1700086400, logging.getLogger())
         assert result == 0
 
     @patch("flint.providers.funding_rates.DriftFundingProvider")
@@ -344,7 +344,7 @@ class TestDownloadFundingAllVenues:
     def test_fetches_from_all_venues(self, mock_bybit, mock_okx, mock_hl, mock_drift, store):
         """Should attempt all 4 venues."""
         import logging
-        from flint.api.routes.data import _download_funding_all_venues
+        from flint.services.data import download_funding_all_venues
         from flint.providers.funding_rates import FundingSnapshot
 
         for mock_cls, venue in [(mock_drift, "drift"), (mock_hl, "hyperliquid"),
@@ -356,7 +356,7 @@ class TestDownloadFundingAllVenues:
             ]
             mock_cls.return_value = mock_instance
 
-        result = _download_funding_all_venues(
+        result = download_funding_all_venues(
             store, "SOL-PERP", 1700000000, 1700086400, logging.getLogger()
         )
         assert result >= 4  # at least 1 from each venue
@@ -368,7 +368,7 @@ class TestDownloadFundingAllVenues:
     def test_one_venue_failure_doesnt_block_others(self, mock_bybit, mock_okx, mock_hl, mock_drift, store):
         """If one venue fails, others should still succeed."""
         import logging
-        from flint.api.routes.data import _download_funding_all_venues
+        from flint.services.data import download_funding_all_venues
         from flint.providers.funding_rates import FundingSnapshot
 
         # Drift fails
@@ -382,7 +382,7 @@ class TestDownloadFundingAllVenues:
             ]
             mock_cls.return_value = mock_instance
 
-        result = _download_funding_all_venues(
+        result = download_funding_all_venues(
             store, "SOL-PERP", 1700000000, 1700086400, logging.getLogger()
         )
         assert result >= 3  # 3 venues succeeded

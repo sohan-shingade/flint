@@ -1,30 +1,49 @@
+# Eager imports — core infrastructure needed everywhere.
 from .base import CandleProvider
-from .birdeye import BirdeyeProvider
-from .ccxt_markets import CCXTMarketMapper
-from .ccxt_provider import CCXTProvider
-from .drift_candles import DriftCandleProvider
-from .hyperliquid_candles import HyperliquidCandleProvider
-from .drift_s3 import DriftS3Provider
-from .drift_api import DriftDataProvider
-from .funding_rates import (
-    BinanceFundingProvider,
-    BybitFundingProvider,
-    CrossVenueFunding,
-    DriftFundingProvider,
-    HyperliquidFundingProvider,
-    OKXFundingProvider,
-)
-from .coingecko import CoinGeckoProvider
-from .gecko import GeckoProvider
-from .helius import HeliusProvider
-from .jupiter import JupiterProvider
-from .orca import OrcaProvider
-from .open_interest import DriftOpenInterestProvider
-from .pyth import PythProvider
-from .pyth_candles import PythCandleProvider
-from .raydium import RaydiumProvider
-from .jupiter_borrow import JupiterBorrowCollector, DuneBorrowBackfill, RpcBorrowBackfill, JupiterBorrowProvider
 from .registry import DataProvider, ProviderRegistry, register, get_provider_class, list_providers
+
+# Lazy imports — deferred so missing optional deps (ccxt, eth_account, …)
+# don't break the whole package on import.
+_LAZY_IMPORTS = {
+    "BirdeyeProvider": (".birdeye", "BirdeyeProvider"),
+    "CCXTMarketMapper": (".ccxt_markets", "CCXTMarketMapper"),
+    "CCXTProvider": (".ccxt_provider", "CCXTProvider"),
+    "DriftCandleProvider": (".drift_candles", "DriftCandleProvider"),
+    "HyperliquidCandleProvider": (".hyperliquid_candles", "HyperliquidCandleProvider"),
+    "DriftS3Provider": (".drift_s3", "DriftS3Provider"),
+    "DriftDataProvider": (".drift_api", "DriftDataProvider"),
+    "BinanceFundingProvider": (".funding_rates", "BinanceFundingProvider"),
+    "BybitFundingProvider": (".funding_rates", "BybitFundingProvider"),
+    "CrossVenueFunding": (".funding_rates", "CrossVenueFunding"),
+    "DriftFundingProvider": (".funding_rates", "DriftFundingProvider"),
+    "HyperliquidFundingProvider": (".funding_rates", "HyperliquidFundingProvider"),
+    "OKXFundingProvider": (".funding_rates", "OKXFundingProvider"),
+    "CoinGeckoProvider": (".coingecko", "CoinGeckoProvider"),
+    "GeckoProvider": (".gecko", "GeckoProvider"),
+    "HeliusProvider": (".helius", "HeliusProvider"),
+    "JupiterProvider": (".jupiter", "JupiterProvider"),
+    "OrcaProvider": (".orca", "OrcaProvider"),
+    "DriftOpenInterestProvider": (".open_interest", "DriftOpenInterestProvider"),
+    "PythProvider": (".pyth", "PythProvider"),
+    "PythCandleProvider": (".pyth_candles", "PythCandleProvider"),
+    "RaydiumProvider": (".raydium", "RaydiumProvider"),
+    "JupiterBorrowCollector": (".jupiter_borrow", "JupiterBorrowCollector"),
+    "DuneBorrowBackfill": (".jupiter_borrow", "DuneBorrowBackfill"),
+    "RpcBorrowBackfill": (".jupiter_borrow", "RpcBorrowBackfill"),
+    "JupiterBorrowProvider": (".jupiter_borrow", "JupiterBorrowProvider"),
+}
+
+
+def __getattr__(name):
+    if name in _LAZY_IMPORTS:
+        mod_path, cls_name = _LAZY_IMPORTS[name]
+        from importlib import import_module
+        mod = import_module(mod_path, __package__)
+        val = getattr(mod, cls_name)
+        globals()[name] = val  # cache for subsequent access
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "BinanceFundingProvider",

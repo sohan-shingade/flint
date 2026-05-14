@@ -54,8 +54,8 @@ def _mock_candles(market: str = "SOL-PERP") -> list[Candle]:
 def test_download_uses_pyth_by_default(app_client):
     """POST /download should call _download_pyth_candles and return source='pyth'."""
     mock_candles = _mock_candles()
-    with patch("flint.api.routes.data._download_pyth_candles", return_value=(mock_candles, None)), \
-         patch("flint.api.routes.data._download_funding_all_venues", return_value=0):
+    with patch("flint.api.routes.data.download_pyth_candles", return_value=(mock_candles, None)), \
+         patch("flint.api.routes.data.download_funding_all_venues", return_value=0):
         resp = app_client.post("/api/v1/data/download", json={
             "market": "SOL-PERP",
             "start_ts": 1700000000,
@@ -69,8 +69,8 @@ def test_download_uses_pyth_by_default(app_client):
 
 def test_execution_venues_param_accepted(app_client):
     """execution_venues should be accepted without error."""
-    with patch("flint.api.routes.data._download_pyth_candles", return_value=([], None)), \
-         patch("flint.api.routes.data._download_funding_all_venues", return_value=0):
+    with patch("flint.api.routes.data.download_pyth_candles", return_value=([], None)), \
+         patch("flint.api.routes.data.download_funding_all_venues", return_value=0):
         resp = app_client.post("/api/v1/data/download", json={
             "market": "SOL-PERP",
             "start_ts": 1700000000,
@@ -82,8 +82,8 @@ def test_execution_venues_param_accepted(app_client):
 
 def test_funding_venues_alias_works(app_client):
     """funding_venues should be accepted as an alias for execution_venues."""
-    with patch("flint.api.routes.data._download_pyth_candles", return_value=([], None)), \
-         patch("flint.api.routes.data._download_funding_all_venues", return_value=0):
+    with patch("flint.api.routes.data.download_pyth_candles", return_value=([], None)), \
+         patch("flint.api.routes.data.download_funding_all_venues", return_value=0):
         resp = app_client.post("/api/v1/data/download", json={
             "market": "SOL-PERP",
             "start_ts": 1700000000,
@@ -97,8 +97,8 @@ def test_deprecated_venue_param_logs_warning(app_client, caplog):
     """Passing 'venue' should log a deprecation warning but still succeed."""
     import logging
     mock_candles = _mock_candles()
-    with patch("flint.api.routes.data._download_pyth_candles", return_value=(mock_candles, None)), \
-         patch("flint.api.routes.data._download_funding_all_venues", return_value=0), \
+    with patch("flint.api.routes.data.download_pyth_candles", return_value=(mock_candles, None)), \
+         patch("flint.api.routes.data.download_funding_all_venues", return_value=0), \
          caplog.at_level(logging.WARNING, logger="flint.api.data"):
         resp = app_client.post("/api/v1/data/download", json={
             "market": "SOL-PERP",
@@ -114,19 +114,19 @@ def test_deprecated_venue_param_logs_warning(app_client, caplog):
 
 
 def test_download_range_helpers_still_exist():
-    """_download_range and _download_range_for_venue must not be removed."""
-    from flint.api.routes import data as data_module
-    assert callable(getattr(data_module, "_download_range", None)), \
-        "_download_range must remain in data.py"
-    assert callable(getattr(data_module, "_download_range_for_venue", None)), \
-        "_download_range_for_venue must remain in data.py"
+    """download_range and download_range_for_venue must exist in the service module."""
+    from flint.services import data as data_module
+    assert callable(getattr(data_module, "download_range", None)), \
+        "download_range must exist in flint.services.data"
+    assert callable(getattr(data_module, "download_range_for_venue", None)), \
+        "download_range_for_venue must exist in flint.services.data"
 
 
 def test_execution_venues_forwarded_to_funding(app_client, store):
     """execution_venues list should be passed through to _download_funding_all_venues."""
     mock_candles = _mock_candles()
-    with patch("flint.api.routes.data._download_pyth_candles", return_value=(mock_candles, None)) as _pyth, \
-         patch("flint.api.routes.data._download_funding_all_venues", return_value=5) as mock_funding:
+    with patch("flint.api.routes.data.download_pyth_candles", return_value=(mock_candles, None)) as _pyth, \
+         patch("flint.api.routes.data.download_funding_all_venues", return_value=5) as mock_funding:
         resp = app_client.post("/api/v1/data/download", json={
             "market": "SOL-PERP",
             "start_ts": 1700000000,
@@ -155,8 +155,8 @@ def test_cached_data_returns_pyth_source(app_client, store):
     ]
     store.upsert_candles(candles)
 
-    with patch("flint.api.routes.data._download_pyth_candles") as mock_pyth, \
-         patch("flint.api.routes.data._download_funding_all_venues", return_value=0):
+    with patch("flint.api.routes.data.download_pyth_candles") as mock_pyth, \
+         patch("flint.api.routes.data.download_funding_all_venues", return_value=0):
         resp = app_client.post("/api/v1/data/download", json={
             "market": "BTC-PERP",
             "start_ts": 1700000000,

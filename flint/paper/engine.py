@@ -31,21 +31,21 @@ def backfill_candle_gap(store: FlintStore, market: str, from_ts: int, to_ts: int
     Walks a fallback chain so a single venue outage doesn't strand
     paper sessions on resume. Order:
 
-    1. **Hyperliquid** — primary live source (Drift offline post-hack;
-       see CLAUDE.md). Covers every market in `_FLINT_TO_HL`.
-    2. **Drift Data API** — kept registered so resume auto-recovers
-       when Drift returns; fails fast in the meantime.
-    3. **Drift S3** — archival fallback for older windows; Drift's
-       S3 path is also offline today, but the chain stays in place.
+    1. **Hyperliquid** — primary live source. Covers every market
+       in `_FLINT_TO_HL`.
+    2. **DuckDB cache** — caller already queries the store, so if
+       Hyperliquid fails, existing cached candles are still available.
+
+    Drift Data API and Drift S3 were removed from this chain because
+    Drift is offline post-hack (see CLAUDE.md).
 
     Returns count of candles stored. Each source is attempted
-    independently; failures are logged at debug and the chain falls
-    through. The first source that returns rows wins.
+    independently; failures are logged and the chain falls through.
     """
     if to_ts - from_ts < 3600:
         return 0
 
-    # 1. Hyperliquid first — primary live source.
+    # 1. Hyperliquid — primary live source.
     try:
         from ..providers.hyperliquid_candles import (
             HyperliquidCandleProvider, _FLINT_TO_HL,
@@ -68,44 +68,9 @@ def backfill_candle_gap(store: FlintStore, market: str, from_ts: int, to_ts: int
     except Exception as e:
         logger.debug("Hyperliquid backfill failed for %s: %s", market, e)
 
-    # 2. Drift Data API — offline post-hack, kept for auto-recovery.
-    try:
-        from ..providers.drift_candles import DriftCandleProvider
-        provider = DriftCandleProvider()
-        try:
-            candles = provider.fetch_candles(market, 3600, from_ts, to_ts)
-        finally:
-            provider.close()
-        if candles:
-            stored = store.upsert_candles(candles)
-            logger.info(
-                "Backfilled %d candles for %s via Drift API (%d->%d)",
-                stored, market, from_ts, to_ts,
-            )
-            return stored
-    except Exception as e:
-        logger.debug("Drift API backfill failed for %s: %s", market, e)
-
-    # 3. Drift S3 archival — also offline today.
-    try:
-        from ..providers.drift_s3 import DriftS3Provider
-        provider = DriftS3Provider()
-        try:
-            candles = provider.fetch_candles(market, 3600, from_ts, to_ts)
-        finally:
-            provider.close()
-        if candles:
-            stored = store.upsert_candles(candles)
-            logger.info(
-                "Backfilled %d candles for %s via Drift S3 (%d->%d)",
-                stored, market, from_ts, to_ts,
-            )
-            return stored
-    except Exception as e:
-        logger.warning(
-            "All backfill sources failed for %s: %s", market, e,
-        )
-
+    # 2. DuckDB cache — no action needed; the caller already queries
+    #    the store after this function returns.
+    logger.warning("Backfill failed for %s: no live source returned data", market)
     return 0
 
 

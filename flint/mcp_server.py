@@ -585,8 +585,8 @@ def download_market_data(
     if "-PERP" in market:
         venue_list = [v.strip() for v in funding_venues.split(",") if v.strip()]
         try:
-            from flint.api.routes.data import _download_funding_all_venues
-            funding_fetched = _download_funding_all_venues(
+            from flint.services.data import download_funding_all_venues
+            funding_fetched = download_funding_all_venues(
                 store, market, start_ts, end_ts, logger, venues=venue_list
             )
         except Exception as e:
