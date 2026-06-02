@@ -6,7 +6,7 @@ Flint is a backtesting and research platform, not a crystal ball. Every backtest
 
 **Close-price fills overstate performance.** By default, Flint fills market orders at the candle close price. In live trading, market orders move the price -- you pay slippage proportional to your size relative to available liquidity. Close-price fills assume zero impact. Use `FillPipeline` with sqrt-impact or orderbook fill models for final validation.
 
-**vAMM model uses static liquidity depth.** Drift's actual AMM adjusts K dynamically based on oracle price and inventory skew. Flint uses a fixed per-market `sqrt_k` for impact estimation. This means impact estimates can be too optimistic during low-liquidity periods and too conservative during high-liquidity periods.
+**vAMM model uses static liquidity depth (dormant).** The vAMM fill path was built for Drift, which is dropped post-hack; it is retained for reference and off by default. It uses a fixed per-market `sqrt_k` for impact estimation rather than a dynamically-adjusted K, so impact estimates can be too optimistic during low-liquidity periods and too conservative during high-liquidity periods. Hyperliquid uses the CLOB fill model instead.
 
 **Orderbook snapshots are point-in-time.** The `OrderbookFillModel` walks a stored L2 snapshot to compute volume-weighted fill prices. Between snapshots, the book can change significantly. This matters most for strategies that trade frequently or in thin markets.
 
@@ -14,11 +14,11 @@ Flint is a backtesting and research platform, not a crystal ball. Every backtest
 
 ## Funding Rates
 
-**Bar-boundary funding.** Flint applies funding payments at candle boundaries. Real funding settles at venue-specific times (Drift: every hour on the hour, Hyperliquid: every 8 hours). For hourly candles the approximation is close. For daily candles, timing error grows because a full day of funding is applied at a single point rather than distributed.
+**Bar-boundary funding.** Flint applies funding payments at candle boundaries. Real funding settles at venue-specific times (Hyperliquid: every 8 hours; OKX: every 8 hours). For hourly candles the approximation is close. For daily candles, timing error grows because a full day of funding is applied at a single point rather than distributed.
 
 **Close price as mark proxy.** Some venues do not provide historical mark/index prices per funding record. Flint uses candle close as a proxy, which can differ from the actual mark price by 1-10 bps during volatile periods. This affects PnL attribution between "trading PnL" and "funding PnL" but not total PnL.
 
-**Drift funding data gaps.** Historical Drift funding data is only available approximately 30 days back from the current date. Backtests before that window use interpolated or zero funding, which can materially affect strategies that depend on funding income (e.g., funding harvest, basis trade).
+**Funding data depth varies by venue.** Some venues publish only shallow funding history. Backtests before a venue's available window use interpolated or zero funding, which can materially affect strategies that depend on funding income (e.g., funding harvest, basis trade). Cross-check coverage via `/api/v1/data/funding` and pick venues with complete history for your window.
 
 ## Margin and Liquidation
 

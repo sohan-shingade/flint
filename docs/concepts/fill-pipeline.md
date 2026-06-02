@@ -18,8 +18,7 @@ Typical latencies:
 
 - Binance ≈ 0.2 s — next-bar fill on high-res data
 - Hyperliquid ≈ 1 s
-- Drift ≈ 8 s — you will straddle candle boundaries
-- Jupiter ≈ 12 s
+- Jupiter ≈ 12 s — you will straddle candle boundaries
 
 ### ImpactStage — 4 tiers
 
@@ -27,7 +26,7 @@ Chooses the best-available fill model **per order**, **per bar**:
 
 | Tier | Model | Fires when |
 |---|---|---|
-| 0 | `VammCurve` (constant-product) | `vamm_enabled=true` and the market has a configured vAMM (Drift, primarily) |
+| 0 | `VammCurve` (constant-product) | `vamm_enabled=true` and the market has a configured vAMM — dormant (built for Drift, which is dropped post-hack; off by default) |
 | 1 | `OrderbookFillModel` (book walk) | L2 snapshot present in `orderbook_snapshots` for that bar |
 | 2 | Sqrt participation impact | Volume known, no book snapshot |
 | 3 | Flat bps fallback | No depth data; uses `slippage_bps` |
@@ -42,7 +41,7 @@ impact_bps = k · sqrt( order_notional / bar_notional )
 
 **Tier 1:** walk bid/ask levels until `size` is filled, compute volume-weighted average price.
 
-**Tier 0:** Drift's vAMM uses constant-product with peg multiplier and oracle anchoring; reserve depth comes from per-market `sqrt_k` values.
+**Tier 0 (dormant):** the vAMM uses constant-product with peg multiplier and oracle anchoring; reserve depth comes from per-market `sqrt_k` values. This path was built for Drift and is retained for reference only — Hyperliquid uses the CLOB walk (Tier 1).
 
 ### PartialFillStage
 
@@ -50,18 +49,18 @@ Probabilistically reduces fill size when the order exceeds a participation thres
 
 ## Per-venue pipelines
 
-Venue-specific fill logic lives in `fill_drift.py`, `fill_hyperliquid.py`, `fill_cex.py`, `fill_jupiter.py`. The `fill_registry.py` dispatches based on `order.venue`:
+Venue-specific fill logic lives in `fill_hyperliquid.py`, `fill_cex.py`, `fill_jupiter.py` (plus a dormant `fill_drift.py`). The `fill_registry.py` dispatches based on `order.venue`:
 
-- **Drift.** vAMM model → orderbook walk fallback (Drift DLOB) → sqrt impact.
-- **Hyperliquid.** CLOB orderbook walk → HLP backstop for residual size.
+- **Hyperliquid.** CLOB orderbook walk → HLP backstop for residual size. This is the live fill model.
 - **CEX (CCXT).** Orderbook walk → sqrt impact.
 - **Jupiter.** Swap simulation using pool state; routes through the aggregator.
+- **Drift (dormant).** vAMM model → DLOB walk → sqrt impact. Retained for reference; Drift is dropped post-hack.
 
 The Rust engine mirrors this in `engine/venue_fills.rs`.
 
 ## Costs applied after fill
 
-- **Fees.** `taker_fee_bps` / `maker_fee_bps` from `VenueConfig`. Maker rebates (Drift's −2 bps) feed back into PnL.
+- **Fees.** `taker_fee_bps` / `maker_fee_bps` from `VenueConfig`. Maker rebates feed back into PnL.
 - **Funding.** Hourly from real multi-venue funding rates, per holding position.
 - **Transaction costs.** Solana priority fee + Jito tip in lamports → USD via config; negligible for HL / CEX.
 

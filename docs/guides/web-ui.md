@@ -28,7 +28,7 @@ The primary workspace. Write strategies, run backtests, optimize, validate, and 
 
 **Right panel -- Configuration:**
 - Market selector (SOL-PERP, BTC-PERP, ETH-PERP, etc.)
-- Venue preset (Drift, Hyperliquid, Binance, OKX, Bybit) -- sets default fee rates
+- Venue preset (Hyperliquid, Binance, OKX, Bybit) -- sets default fee rates
 - Date range with presets (1M, 3M, 6M, 1Y, 3Y) or custom dates
 - Capital and fee rate inputs
 - Advanced settings: fill model, slippage, latency, margin tracking, capital allocation
@@ -100,8 +100,8 @@ Browse and download market data.
 - Date range picker for filtering
 
 **Download panel:**
-- Download OHLCV candles from Drift
-- Download funding rates from 7 venues simultaneously
+- Download OHLCV candles from Hyperliquid
+- Download funding rates from multiple venues simultaneously
 - Progress indicator during download
 - Data coverage visualization showing gaps
 
@@ -135,7 +135,7 @@ Manage paper trading sessions.
 
 ### LiveMonitor
 
-Monitor live trading sessions on Drift and Hyperliquid.
+Monitor live trading sessions on Hyperliquid.
 
 - Session selector for multi-venue trading
 - Real-time equity curve
@@ -171,7 +171,7 @@ MEV opportunity detection and monitoring.
 Initial configuration wizard.
 
 - API key setup (Birdeye, Helius)
-- Venue configuration (Drift keypair, Hyperliquid key, CCXT credentials)
+- Venue configuration (Hyperliquid key, CCXT credentials)
 - Data preset selection (Starter: SOL-PERP, Full: all markets)
 - Risk configuration defaults
 

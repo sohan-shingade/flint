@@ -83,7 +83,7 @@ transactions to any venue.
 **How to enable:**
 
 ```bash
-flint live --strategy my_strategy.py --venue drift --dry-run
+flint live --strategy my_strategy.py --venue hyperliquid --dry-run
 ```
 
 Or in `flint.yaml`:

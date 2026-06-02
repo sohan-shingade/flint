@@ -27,7 +27,7 @@ Alternative installs: pip (`pip install flint-trading`), Docker (`docker compose
 
 The `flint init` sample is enough for one demo backtest. For real work, pull 90–180 days.
 
-**UI:** Data Explorer → select `SOL-PERP` → pick a date range → **Download**. Fetches candles from Drift and funding rates from all enabled venues. No API keys needed.
+**UI:** Data Explorer → select `SOL-PERP` → pick a date range → **Download**. Fetches candles from Hyperliquid (with Pyth oracle prices) and funding rates from all enabled venues. No API keys needed.
 
 **CLI:**
 

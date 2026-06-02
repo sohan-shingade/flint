@@ -69,7 +69,7 @@ On any backtest result, click **Deploy to Paper** (UI) or:
 ```bash
 curl -sX POST localhost:8000/api/v1/paper/start \
   -d '{"strategy":"momentum","market":"SOL-PERP",
-       "initial_capital":10000,"venue":"drift",
+       "initial_capital":10000,"venue":"hyperliquid",
        "risk_config":{"max_drawdown_pct":0.15}}'
 ```
 
@@ -87,7 +87,7 @@ claude mcp add flint -- python -m flint.mcp_server
 
 - **Author a custom strategy** → [Tutorial 2](../tutorials/02-author-a-strategy.md)
 - **Understand the architecture** → [concepts/architecture.md](../concepts/architecture.md)
-- **Go live on Drift / Hyperliquid** → [Tutorial 4](../tutorials/04-paper-to-live.md) + [validation/devnet-testing-guide.md](../validation/devnet-testing-guide.md)
+- **Go live on Hyperliquid** → [Tutorial 4](../tutorials/04-paper-to-live.md) + [validation/devnet-testing-guide.md](../validation/devnet-testing-guide.md)
 - **Full docs index** → [docs/README.md](../README.md)
 
 ## CLI cheat sheet
@@ -102,7 +102,7 @@ flint data download --market SOL-PERP   # download data
 flint data status                       # coverage inventory
 flint new my_strategy                   # scaffold strategy file
 flint parity momentum --start ... --end ...     # backtest ↔ paper parity
-flint calibrate drift --market SOL-PERP         # fit impact from live fills
+flint calibrate hyperliquid --market SOL-PERP   # fit impact from live fills
 flint live <strategy.py> --real         # real trading (devnet by default)
 ```
 

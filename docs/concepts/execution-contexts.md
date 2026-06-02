@@ -9,7 +9,6 @@ ExecutionContext (ABC)
 ├── BacktestContext              replay candles, fills via FillPipeline
 ├── PaperBroker                  same fill models, live WebSocket ticks
 └── LiveExecutionContext (ABC)
-    ├── LiveDriftContext           driftpy + Solana RPC
     ├── LiveHyperliquidContext     REST + EIP-712
     ├── LiveCCXTContext            Binance, OKX, Bybit, etc.
     └── MultiVenueLiveContext      routes by venue=
@@ -66,7 +65,7 @@ or `POST /api/v1/backtest/parity`. Pass threshold: `<2%` PnL divergence. Diverge
 
 ## Venue routing
 
-`ctx.market_order(..., venue="drift")` vs `venue="hyperliquid"`. In backtest each venue uses its own `VenueConfig`. In live, `MultiVenueLiveContext` dispatches to the right connector. This is what makes cross-venue funding arb strategies one code path.
+`ctx.market_order(..., venue="hyperliquid")` vs `venue="okx"`. In backtest each venue uses its own `VenueConfig`. In live, `MultiVenueLiveContext` dispatches to the right connector. This is what makes cross-venue funding arb strategies one code path.
 
 ## Not in this doc
 

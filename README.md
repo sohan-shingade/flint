@@ -5,7 +5,7 @@
     <img alt="Flint" src="https://img.shields.io/badge/FLINT-Solana_Trading_Lab-e8a849?style=for-the-badge&labelColor=09090b">
   </picture>
   <br/><br/>
-  <strong>Local backtester and paper-trading lab for Drift + Hyperliquid perp strategies.</strong>
+  <strong>Local backtester and paper-trading lab for Solana DEX &amp; perp strategies.</strong>
   <br/>
   <em>Reproducible fills · funding-aware margin · CI-gated parity · MIT</em>
   <br/><br/>
@@ -18,13 +18,13 @@
 
 ---
 
-> ⚠️ **Drift Status (2026-04+):** Drift Protocol is offline post-hack. Flint backtester + paper trader run on **Hyperliquid + Pyth live data**. Drift devnet remains available for code paths; mainnet support is suspended pending recovery. The fallback chain (HL → Drift → DuckDB cache) auto-recovers when Drift returns.
+> **Venues:** Flint is **DEX & perp native** — venue-agnostic by design. **Hyperliquid** is the live execution + data venue today (with **Pyth** oracle prices). **Phoenix**, **Jupiter** spot, and **batch / bulk** order routing are on the roadmap.
 
 ---
 
 ## What this is
 
-Flint is a **local power-user lab** for Drift + Hyperliquid perp strategy work. Three workflows, in order of trust:
+Flint is a **local power-user lab** for Solana DEX + perp strategy work — venue-agnostic, with Hyperliquid live today and more DEXs coming. Three workflows, in order of trust:
 
 1. **Backtest** a strategy against real on-chain candles + funding rates with venue-accurate fills and per-venue margin.
 2. **Paper trade** the same strategy against live WebSocket data.
@@ -142,9 +142,9 @@ Optimization (Optuna), walk-forward analysis, regime-conditioned reports, and Mo
 
 ## Paper Trading
 
-Deploy any strategy to paper mode. The same code path that backtests now consumes live WebSocket candles from Hyperliquid (Drift WS resumes when the venue is back online). Full risk guards (max drawdown, daily loss, position size, simulated liquidation), position persistence, resume-on-crash, and live equity stream over WebSocket.
+Deploy any strategy to paper mode. The same code path that backtests now consumes live WebSocket candles from Hyperliquid. Full risk guards (max drawdown, daily loss, position size, simulated liquidation), position persistence, resume-on-crash, and live equity stream over WebSocket.
 
-Multi-venue: positions are keyed by `(venue, market)` so a Drift-long + HL-short on the same market track as two distinct legs with their own funding ledgers (the v1.5.0 D-2.1.d correctness fix).
+Multi-venue: positions are keyed by `(venue, market)` so a long on one venue + a short on another on the same market track as two distinct legs with their own funding ledgers (the v1.5.0 D-2.1.d correctness fix). The model is venue-agnostic — adding Phoenix / Jupiter is a connector, not an engine rewrite.
 
 ---
 
@@ -156,7 +156,6 @@ Core data is free — no API keys, no signup.
 |---|---|
 | **Hyperliquid** | OHLCV + funding history (back to 2023-06-08 hourly) — primary live source |
 | **Pyth Network** | Real-time oracle prices for 20 pairs |
-| **Drift Data API** | OHLCV + funding + L2/L3 orderbook (offline post-hack; resumes when Drift returns) |
 | **CoinGecko / GeckoTerminal** | Spot candles + DEX pool candles for non-perp comparisons |
 | **Jupiter / Raydium / Orca** | Swap quotes + AMM pool data |
 
@@ -168,7 +167,7 @@ Everything caches to a local DuckDB file (`./data/flint.duckdb`). Nothing leaves
 
 ## Execution Fidelity
 
-Fills go through a 4-tier pipeline: deterministic close → slippage layer → orderbook walk (when depth data is present) → latency + impact + partial-fill simulation. Drift uses the vAMM model with peg multiplier and oracle anchoring. Hyperliquid walks the CLOB with HLP backstop. Both have parity tests against historical data.
+Fills go through a 4-tier pipeline: deterministic close → slippage layer → orderbook walk (when depth data is present) → latency + impact + partial-fill simulation. Fill models are venue-specific: Hyperliquid walks the CLOB with HLP backstop, and the pipeline accommodates vAMM/CLOB/AMM venues as connectors are added. Parity tests run against historical data.
 
 Slippage parameters are calibrated from real fills you upload via `flint calibrate`. The reconciliation tool (`scripts/reconcile_fills.py`) compares engine fills against venue executions and emits a markdown report with p50/p95/p99 price + timestamp deltas. CI gates this at 10 bps p95.
 
@@ -195,7 +194,7 @@ Full reference: [docs/reference/cli.md](docs/reference/cli.md) (or `flint --help
 ## Limitations
 
 - **Single-machine.** DuckDB is single-writer; one Flint instance per database file. By design.
-- **Drift mainnet experimental.** Pending hack recovery. Devnet works for code paths.
+- **Hyperliquid is the live venue.** Phoenix, Jupiter spot, and batch / bulk order routing are planned, not shipped. The engine is venue-agnostic, so they land as connectors.
 - **Fills are approximations** of venue execution. The reconciliation tool quantifies the gap; calibration shrinks it. Treat backtest PnL as a strategy-comparison signal, not a forward forecast.
 - **Optional providers need keys.** Birdeye, Helius. Free tiers exist but Flint does not bundle them.
 - **No CEX live trading.** Backtest-only against CCXT-sourced candles for spot reference; live execution is out of scope.

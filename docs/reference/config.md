@@ -208,7 +208,9 @@ Public RPCs rate-limit hard. For anything beyond `flint init`, use Helius / Trit
 | `tx_cost_jito_tip_lamports` | int | 10000 |
 | `tx_cost_sol_price_usd` | float | 150.0 |
 
-### vAMM fill model (Drift)
+### vAMM fill model (dormant)
+
+The vAMM (constant-product) fill path was built for Drift. Drift is dropped post-hack, so this path is dormant and disabled by default; it's retained for reference. Hyperliquid uses the CLOB fill model.
 
 | Field | Type | Default |
 |---|---|---|
@@ -254,10 +256,10 @@ Venue-specific fee / margin / latency presets live in `flint/execution/venue_con
 
 ```yaml
 venues:
-  drift:
-    impact_coefficient: 0.00042    # set by `flint calibrate`
   hyperliquid:
-    impact_coefficient: 0.00018
+    impact_coefficient: 0.00018    # set by `flint calibrate`
+  okx:
+    impact_coefficient: 0.00030
 ```
 
 Built-in venues + their defaults are documented in [reference/venue-configs.md](venue-configs.md).

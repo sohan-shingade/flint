@@ -1,6 +1,6 @@
 # Tutorial 4 — Paper to Live
 
-End state: your validated strategy runs on paper for 2–4 weeks with risk limits, passes a parity test, and you know the checklist before going live on Drift devnet → mainnet.
+End state: your validated strategy runs on paper for 2–4 weeks with risk limits, passes a parity test, and you know the checklist before going live on Hyperliquid testnet → mainnet.
 
 Prereq: Tutorials 2 and 3 finished — you have an optimized strategy with an overfitting ratio ≥ 0.5.
 
@@ -46,7 +46,7 @@ curl -X POST localhost:8000/api/v1/paper/start \
     "code": "<your optimized source>",
     "market": "SOL-PERP",
     "initial_capital": 10000,
-    "venue": "drift",
+    "venue": "hyperliquid",
     "risk_config": {
       "max_drawdown_pct": 0.15,
       "daily_loss_limit": 500,
@@ -88,27 +88,27 @@ Less than 2 weeks of paper isn't enough to draw conclusions. More than 8 weeks m
 Paper fills are stored. After 2+ weeks of meaningful trading, run:
 
 ```bash
-flint calibrate drift --market SOL-PERP --lookback 14
+flint calibrate hyperliquid --market SOL-PERP --lookback 14
 ```
 
 Writes a calibrated `impact_coefficient` back to `flint.yaml`. Re-run paper or a backtest on the calibrated config and compare PnL delta. Recipe: [how-to/calibrate-slippage.md](../how-to/calibrate-slippage.md).
 
-## Step 6 — Devnet first
+## Step 6 — Testnet first
 
-Drift and Hyperliquid both have testnets. This is the first real-money-shaped test.
+Hyperliquid has a testnet. This is the first real-money-shaped test.
 
-**Drift devnet:**
+**Hyperliquid testnet:**
 
 ```bash
-export FLINT_PRIVATE_KEY=<devnet_keypair>
-export FLINT_LIVE_NETWORK=devnet
+export FLINT_PRIVATE_KEY=<testnet_wallet_key>
+export FLINT_LIVE_NETWORK=testnet
 
 flint live strategies/user/my_strat.py --market SOL-PERP --real
 ```
 
-Get devnet SOL from [faucet.solana.com](https://faucet.solana.com). Run 3–5 days minimum. Verify that fills match expectations.
+Fund the testnet wallet from the Hyperliquid testnet faucet. Run 3–5 days minimum. Verify that fills match expectations.
 
-**Hyperliquid testnet:** similar flow, set `live_hyperliquid_network: testnet`.
+Set `live_hyperliquid_network: testnet` in `flint.yaml` to point the connector at the testnet endpoint.
 
 Detailed flow: [validation/devnet-testing-guide.md](../validation/devnet-testing-guide.md).
 

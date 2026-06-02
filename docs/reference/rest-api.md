@@ -91,7 +91,7 @@ Submit a backtest job. Returns an ID to poll.
 | `fee_rate` | float | 0.0005 | `[0, 0.5]` |
 | `params` | dict? | — | Strategy params (override defaults) |
 | `margin_tracking` | bool | false | Enable per-venue margin engine |
-| `capital_allocation` | dict[str, float]? | — | e.g. `{"drift": 5000, "hyperliquid": 5000}` |
+| `capital_allocation` | dict[str, float]? | — | e.g. `{"hyperliquid": 5000, "okx": 5000}` |
 | `fill_model` | str | `"pipeline"` | `pipeline` / `slippage` / `close` / `next_bar_open` |
 | `slippage_bps` | float | 10.0 | Used when `fill_model="slippage"` |
 | `latency_enabled` | bool | true | Add venue-specific latency in pipeline |
@@ -179,7 +179,7 @@ Run a single strategy across multiple regimes in parallel.
 
 Calibrate slippage impact coefficients from live fill data. Read-only — does not mutate config.
 
-**Request:** `{ "venue": "drift", "market": "SOL-PERP", "lookback_days": 30 }`
+**Request:** `{ "venue": "hyperliquid", "market": "SOL-PERP", "lookback_days": 30 }`
 
 **Response:** Calibration report with power-law and sqrt-impact fits and a recommended coefficient. See [how-to/calibrate-slippage.md](../how-to/calibrate-slippage.md) for the workflow.
 
@@ -207,7 +207,7 @@ Run backtest vs paper engines on the same time window and report divergence.
 ```json
 { "strategies": [ { "name": "ma_crossover", "display_name": "MA Crossover", "description": "...",
   "params": { "fast_period": {...}, "slow_period": {...} }, "markets": ["SOL-PERP", ...],
-  "type": "trend", "venues": ["drift"], "needs_funding": false } ] }
+  "type": "trend", "venues": ["hyperliquid"], "needs_funding": false } ] }
 ```
 
 ### `GET /{name}`
@@ -252,7 +252,7 @@ Start a paper trading session.
 | `resolution_s` | int | 3600 |
 | `initial_capital` | float | 10000 |
 | `params` | dict? | — |
-| `venue` | str | `"drift"` |
+| `venue` | str | `"hyperliquid"` |
 | `risk_config` | dict? | — See schema below |
 
 `risk_config` shape:
@@ -298,7 +298,7 @@ Detailed session status including margin and equity curve (last 200 points).
 List all sessions (active + stopped).
 
 ```json
-{ "sessions": [ { "session_id": "...", "strategy": "...", "market": "...", "venue": "drift", "status": "running", "equity": 10234, "realized_pnl": 120, "unrealized_pnl": 114, "total_trades": 12, "initial_capital": 10000 } ] }
+{ "sessions": [ { "session_id": "...", "strategy": "...", "market": "...", "venue": "hyperliquid", "status": "running", "equity": 10234, "realized_pnl": 120, "unrealized_pnl": 114, "total_trades": 12, "initial_capital": 10000 } ] }
 ```
 
 ### `GET /portfolio`
@@ -319,7 +319,7 @@ Replay-forward deploy from BacktestLab. Replays up to 30d of history then transi
 ```json
 { "strategy_code": "...", "strategy_params": {}, "market": "SOL-PERP",
   "initial_capital": 10000, "replay_start_ts": 1700000000, "resolution_s": 3600,
-  "risk_config": {}, "capital_allocation": {}, "venue": "drift" }
+  "risk_config": {}, "capital_allocation": {}, "venue": "hyperliquid" }
 ```
 
 **Response:** `{ "session_id": str, "status": "deployed" }`
@@ -341,7 +341,7 @@ Redeploy every active session from the same start date.
 All fills recorded for a session.
 
 ```json
-{ "trades": [ { "ts": ..., "side": "long", "price": 142, "size": 10, "fee": 0.07, "pnl": 55.2, "venue": "drift" } ] }
+{ "trades": [ { "ts": ..., "side": "long", "price": 142, "size": 10, "fee": 0.07, "pnl": 55.2, "venue": "hyperliquid" } ] }
 ```
 
 ### `GET /{session_id}/equity-history`
@@ -391,7 +391,7 @@ Update risk config on a running session. Same `risk_config` schema as `/start`.
 | `GET` | `/dex-volume/{market}` | — | DEX trading volume per venue |
 | `GET` | `/check` | `market` or `markets`, `resolution_s`, `start_ts`, `end_ts` | Coverage + funding/OB/OI availability for a date range |
 | `POST` | `/check-markets` | body: `{markets: [...], resolution_s, start_ts, end_ts}` | Same as `/check` for multiple markets; returns `ready` flag + `missing` list |
-| `GET` | `/available-markets` | — | Catalog of downloadable markets (Drift perps + CoinGecko spot) |
+| `GET` | `/available-markets` | — | Catalog of downloadable markets (Hyperliquid perps + CoinGecko spot) |
 | `GET` | `/providers` | — | Provider registration + availability status |
 
 #### Sample response — `/ohlcv`
@@ -399,7 +399,7 @@ Update risk config on a running session. Same `risk_config` schema as `/start`.
 ```json
 {
   "market": "SOL-PERP", "resolution_s": 3600, "venue": "all", "count": 2160,
-  "candles": [ { "ts": 1700000000, "open": 142.0, "high": 143.1, "low": 141.8, "close": 142.9, "volume": 320450.0, "venue": "drift" } ]
+  "candles": [ { "ts": 1700000000, "open": 142.0, "high": 143.1, "low": 141.8, "close": 142.9, "volume": 320450.0, "venue": "hyperliquid" } ]
 }
 ```
 
@@ -409,8 +409,8 @@ Update risk config on a running session. Same `risk_config` schema as `/start`.
 {
   "market": "SOL-PERP", "count": 720,
   "venues": {
-    "drift":        [{"ts": ..., "rate": 0.00003, "rate_bps": 0.3}],
-    "hyperliquid":  [{"ts": ..., "rate": 0.00012, "rate_bps": 1.2}]
+    "hyperliquid":  [{"ts": ..., "rate": 0.00012, "rate_bps": 1.2}],
+    "okx":          [{"ts": ..., "rate": 0.00003, "rate_bps": 0.3}]
   }
 }
 ```
@@ -429,9 +429,9 @@ Purge all data for a market across `candles`, `venue_funding_rates`, `oracle_pri
 
 Synchronous download. Blocks until complete or 503 on timeout. **Prefer `/download-async` for ranges >30 days.**
 
-**Request:** `{ "market": "SOL-PERP", "start_ts": ..., "end_ts": ..., "venues": ["drift","hyperliquid"]? }`
+**Request:** `{ "market": "SOL-PERP", "start_ts": ..., "end_ts": ..., "venues": ["hyperliquid","okx"]? }`
 
-**Response:** `{ "market": ..., "candles_downloaded": ..., "funding_venues": [...], "source": "drift_s3" }`
+**Response:** `{ "market": ..., "candles_downloaded": ..., "funding_venues": [...], "source": "hyperliquid" }`
 
 #### `POST /download-async`
 
@@ -567,18 +567,18 @@ Find profitable DEX arbitrage routes across Solana AMM pools.
 
 ### `POST /scan/liquidations`
 
-Find positions nearing liquidation on Drift/Mango given oracle prices.
+Find perp positions nearing liquidation given oracle prices. `protocol` is a free-form label for the source venue/program.
 
 **Request:**
 
 ```json
 {
-  "positions": [ { "user_account": "...", "market": "SOL-PERP", "size": 10, "collateral": 1000, "protocol": "drift" } ],
+  "positions": [ { "user_account": "...", "market": "SOL-PERP", "size": 10, "collateral": 1000, "protocol": "hyperliquid" } ],
   "oracle_prices": { "SOL-PERP": 142.5 }
 }
 ```
 
-**Response:** `{ "opportunities": [ { "protocol": "drift", "user_account": "...", "market": "SOL-PERP",
+**Response:** `{ "opportunities": [ { "protocol": "hyperliquid", "user_account": "...", "market": "SOL-PERP",
   "side": "long", "liquidation_price": 130.1, "oracle_price": 142.5, "margin_ratio": 0.03, "estimated_profit": 18.2 } ] }`
 
 ---

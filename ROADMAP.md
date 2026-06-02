@@ -5,8 +5,10 @@ Short index. Operational detail lives in
 [`DEFERRED.md`](DEFERRED.md) (open backlog) +
 `docs/specs/phase-*.md` (executable specs).
 
-**Wedge:** the best local backtester + paper-trading lab for Drift +
-Hyperliquid perp strategies.
+**Wedge:** the best local backtester + paper-trading lab for Solana
+DEX + perp strategies. Venue-agnostic by design — **Hyperliquid** is
+the live venue today; **Phoenix**, **Jupiter** spot, and **batch /
+bulk** order routing are the planned expansion path.
 
 Trust first, depth second, breadth last.
 
@@ -33,11 +35,11 @@ Per-release notes: [`CHANGELOG.md`](CHANGELOG.md).
 ## Rules of engagement
 
 1. No feature without a proof artifact (notebook or checked-in report).
-2. Every PR: does this sharpen the Drift + HL perp wedge, or dilute it? Dilution blocks merge.
+2. Every PR: does this sharpen the DEX + perp lab wedge, or dilute it? Dilution blocks merge.
 3. No silent network calls, no telemetry, no `curl | bash` required.
 4. Rust engine must declare its capabilities; silent fallback is banned.
 5. Single source of truth for docs (all guides under `docs/`).
-6. **Drift is offline post-hack** — new code must not introduce Drift dependencies; any code that touches Drift needs a Hyperliquid / Pyth / DuckDB-cache fallback.
+6. **Drift is dropped** (offline post-hack) — not a supported venue. New code must not introduce Drift dependencies; legacy Drift code paths stay dormant. Hyperliquid + Pyth are the live sources; Phoenix / Jupiter / bulk land as new connectors.
 
 ---
 
@@ -48,7 +50,7 @@ Per-release notes: [`CHANGELOG.md`](CHANGELOG.md).
 - Options, structured products, spot-only strategies
 - MEV bots (sandwich, sniping) — research only
 - Data marketplace / resale / hosted data service
-- Chains beyond Solana + Hyperliquid
+- Venues outside the Solana-DEX + perp roadmap (Hyperliquid live; Phoenix, Jupiter, bulk planned)
 
 ---
 

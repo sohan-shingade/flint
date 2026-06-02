@@ -2,14 +2,14 @@ name: Live-Venue Smoke
 
 # Phase 5 T5.6 — manual-trigger only. Never runs on push.
 #
-# Places + cancels a $0.01 SOL-PERP limit order on Drift devnet and
-# Hyperliquid testnet. Proves the live code paths actually work end-to-end
-# before Phase 6 ships UI-driven deployment.
+# Places + cancels a $0.01 SOL-PERP limit order on Hyperliquid testnet.
+# Proves the live code paths actually work end-to-end before Phase 6
+# ships UI-driven deployment. (Drift dropped post-hack — no longer smoke-tested.)
 #
 # Guard rails in tests/integration/test_live_smoke.py:
 #   - max notional 0.01 SOL
 #   - refuse to run if wallet balance > $20
-#   - testnet / devnet only (mainnet env vars ignored)
+#   - testnet only (mainnet env vars ignored)
 #   - auto-cancel after 10s
 
 on:
@@ -18,19 +18,17 @@ on:
       venue:
         description: "Which venue to smoke test"
         type: choice
-        options: [both, drift, hyperliquid]
-        default: both
+        options: [hyperliquid]
+        default: hyperliquid
 
 jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Env secrets must be configured in repo settings:
-    #   DRIFT_DEVNET_KEYPAIR  — base58 or path to keypair JSON
     #   HL_TESTNET_KEY        — Hyperliquid API wallet private key
     env:
       FLINT_LIVE_SMOKE: "1"
-      DRIFT_DEVNET_KEYPAIR: ${{ secrets.DRIFT_DEVNET_KEYPAIR }}
       HL_TESTNET_KEY: ${{ secrets.HL_TESTNET_KEY }}
 
     steps:
@@ -47,12 +45,6 @@ jobs:
           pip install --upgrade pip
           pip install -e ".[dev,hyperliquid]" solders
 
-      - name: Smoke test — Drift devnet
-        if: github.event.inputs.venue == 'drift' || github.event.inputs.venue == 'both'
-        run: |
-          pytest tests/integration/test_live_smoke.py::TestDriftDevnetSmoke -v
-
       - name: Smoke test — Hyperliquid testnet
-        if: github.event.inputs.venue == 'hyperliquid' || github.event.inputs.venue == 'both'
         run: |
           pytest tests/integration/test_live_smoke.py::TestHyperliquidTestnetSmoke -v

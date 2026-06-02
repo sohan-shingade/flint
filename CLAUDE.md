@@ -28,7 +28,7 @@ Read the relevant guide when working on that area. These same files power the we
 | Architecture | [docs/guides/architecture.md](docs/guides/architecture.md) | Module layout, execution hierarchy, Rust engine, regimes |
 | Strategies | [docs/guides/strategy-authoring.md](docs/guides/strategy-authoring.md) | v1/v2 APIs, 20 built-in templates, optimization params, security |
 | Data | [docs/guides/data-providers.md](docs/guides/data-providers.md) | 15 providers, 7 funding venues, downloading, custom providers |
-| Live/Paper | [docs/guides/live-deployment.md](docs/guides/live-deployment.md) | Paper trading, Drift/HL/CEX setup, risk guards, parity testing |
+| Live/Paper | [docs/guides/live-deployment.md](docs/guides/live-deployment.md) | Paper trading, Hyperliquid/CEX setup, risk guards, parity testing |
 | Web UI | [docs/guides/web-ui.md](docs/guides/web-ui.md) | All 10 UI pages, features, keyboard shortcuts |
 | MCP | [docs/guides/mcp-integration.md](docs/guides/mcp-integration.md) | 17 MCP tools, setup, AI workflow |
 | Fills | [docs/guides/slippage-models.md](docs/guides/slippage-models.md) | 4-tier fill pipeline, vAMM, calibration |
@@ -74,7 +74,7 @@ Service layer in `flint/services/`: `strategies.py` (single builder source), `ba
 
 ## Rules
 
-- **DRIFT IS DOWN — DO NOT USE.** Drift Protocol is offline following a security incident. Treat every Drift surface as unavailable: `dlob.drift.trade` (DLOB), `data.api.drift.trade` (Data API), the Drift WebSocket feed, and any `flint/connectors/drift/` paths. New code must not introduce Drift dependencies; any code that today touches Drift needs a Hyperliquid / Pyth / DuckDB-cache fallback before it can run. Hyperliquid + Pyth are the live data sources right now.
+- **DRIFT IS DROPPED — DO NOT USE.** Drift Protocol is offline post-hack and is no longer a supported venue. Flint is **DEX & perp native / venue-agnostic** — Hyperliquid is the live execution + data venue today (with Pyth oracle prices); **Phoenix, Jupiter spot, and batch/bulk order routing are the planned expansion** (land as new connectors). Treat every Drift surface as unavailable: `dlob.drift.trade` (DLOB), `data.api.drift.trade` (Data API), the Drift WebSocket feed, and any `flint/connectors/drift/` paths. Legacy Drift code stays dormant — do not extend it, do not surface it in docs/UI/MCP narrative, and never introduce new Drift dependencies.
 - Always use the shared `FlintStore` from `app.state.store` -- never create a new DuckDB connection
 - Every store method must wrap `self._conn.execute()` in `with self._lock:` -- DuckDB is not thread-safe
 - Never access `store._conn` or `store._lock` from API routes -- add a method to `FlintStore` instead

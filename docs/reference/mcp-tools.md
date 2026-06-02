@@ -24,7 +24,7 @@ All tools return JSON strings. Errors come back as `{"error": "..."}`.
 
 #### `run_backtest`
 
-Run a backtest against local data. Auto-downloads from Drift if missing.
+Run a backtest against local data. Auto-downloads from Hyperliquid (with Pyth oracle prices) if missing.
 
 | Arg | Type | Default | Purpose |
 |---|---|---|---|
@@ -33,7 +33,7 @@ Run a backtest against local data. Auto-downloads from Drift if missing.
 | `start_date` | str | `2025-01-01` | `YYYY-MM-DD` |
 | `end_date` | str | `2025-06-01` | `YYYY-MM-DD` |
 | `initial_capital` | float | 10000 | USD |
-| `fee_rate` | float | 0.001 | 10 bps default (Drift taker) |
+| `fee_rate` | float | 0.001 | 10 bps default (typical perp taker) |
 | `resolution_s` | int | 3600 | Candle width |
 | `fast_period` | int | 10 | For MA/EMA-like strategies |
 | `slow_period` | int | 30 | For MA/EMA-like strategies |
@@ -118,7 +118,7 @@ Returns `{market, resolution, count, first, last, current_price, candles: [{ts, 
 | `market` | str | `SOL-PERP` |
 | `days` | int | 90 |
 | `resolution_s` | int | 3600 |
-| `funding_venues` | str | `drift,hyperliquid,okx,bybit,dydx,gateio,bitget` |
+| `funding_venues` | str | `hyperliquid,okx,bybit,dydx,gateio,bitget` |
 
 Skips the download if range is already covered (`store.is_range_synced`). Returns `{downloaded, cached, previously_existing, total, funding_fetched, funding_venues, source}`.
 

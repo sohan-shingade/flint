@@ -391,7 +391,7 @@ If walk-forward validation passes, deploy the strategy to paper trading.
 
 ### Via the UI
 
-Click **Deploy to Paper** on the backtest result page. The strategy starts running against live Drift prices immediately.
+Click **Deploy to Paper** on the backtest result page. The strategy starts running against live Hyperliquid prices immediately.
 
 ### Via the API
 
@@ -410,7 +410,7 @@ curl -s -X POST http://localhost:8000/api/v1/paper/start \
       "rsi_oversold": 25,
       "rsi_overbought": 72
     },
-    "venue": "drift"
+    "venue": "hyperliquid"
   }' | python3 -m json.tool
 ```
 

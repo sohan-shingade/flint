@@ -1,6 +1,6 @@
 # How to: Add API keys
 
-Most providers (Drift, Hyperliquid, Pyth, Raydium, Orca, GeckoTerminal, Jupiter, CoinGecko, CCXT public) need **no keys**. These do:
+Most providers (Hyperliquid, Pyth, Raydium, Orca, GeckoTerminal, Jupiter, CoinGecko, CCXT public) need **no keys**. Core data (Hyperliquid + Pyth) is free — no API keys needed. These do:
 
 | Provider | Env var | Free tier | Sign-up |
 |---|---|---|---|

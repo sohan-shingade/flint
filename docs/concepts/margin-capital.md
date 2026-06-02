@@ -4,9 +4,9 @@ How Flint tracks leverage, liquidation, and cross-venue cash. Off by default; en
 
 ## Position key
 
-Positions are keyed by `(venue, market)`. A long on Drift and a short on Hyperliquid for the same market are **two positions**, not a hedge — they consume margin independently on each venue.
+Positions are keyed by `(venue, market)`. A long on Hyperliquid and a short on OKX for the same market are **two positions**, not a hedge — they consume margin independently on each venue.
 
-This matches reality: you can't cross-margin a Drift position with collateral held on Hyperliquid unless you move it there first.
+This matches reality: you can't cross-margin a Hyperliquid position with collateral held on OKX unless you move it there first.
 
 ## `MarginEngine`
 
@@ -20,8 +20,8 @@ Initial margin, maintenance margin, and liquidation penalty come from `VenueConf
 
 | Venue | Init | Maint | Max lev | Liq penalty |
 |---|---:|---:|---:|---:|
-| drift | 10% | 5% | 10× | 1% |
 | hyperliquid | 5% | 2.5% | 20× | 1% |
+| okx | 2% | 1% | 50× | 1% |
 | binance | 2% | 1% | 50× | 1% |
 | jupiter | 1% | 0.2% | 100× | 0% |
 
@@ -32,18 +32,18 @@ Full table: [reference/venue-configs.md](../reference/venue-configs.md).
 `flint/execution/capital.py`. When `capital_allocation` is set on a backtest, cash is partitioned:
 
 ```json
-{ "capital_allocation": { "drift": 5000, "hyperliquid": 3000, "binance": 2000 } }
+{ "capital_allocation": { "hyperliquid": 5000, "okx": 3000, "binance": 2000 } }
 ```
 
-Each venue has its own cash balance. Strategies spend the per-venue balance via orders; `ctx.venue_balance("drift")` reports what's available.
+Each venue has its own cash balance. Strategies spend the per-venue balance via orders; `ctx.venue_balance("hyperliquid")` reports what's available.
 
 ### Transfers
 
 ```python
-ctx.transfer("drift", "hyperliquid", 1000.0)
+ctx.transfer("hyperliquid", "okx", 1000.0)
 ```
 
-Transfers are **not instant**. Each venue pair has a configured delay (Solana → EVM bridge time, etc.). `ctx.pending_transfers()` shows in-flight capital. This is why naive "rebalance every bar" logic underperforms in multi-venue backtests — capital gets stuck in flight.
+Transfers are **not instant**. Each venue pair has a configured delay (bridge/withdrawal time, etc.). `ctx.pending_transfers()` shows in-flight capital. This is why naive "rebalance every bar" logic underperforms in multi-venue backtests — capital gets stuck in flight.
 
 ### Fragmentation metrics
 
@@ -64,7 +64,7 @@ When a position hits maintenance margin:
 3. Subtract `notional · liquidation_penalty` from cash.
 4. Emit a warning into `BacktestResult.strategy_warnings`.
 
-In live, `LiveDriftContext.poll_fills()` detects on-chain liquidations via the Drift program and reconciles local state.
+In live, `LiveHyperliquidContext.poll_fills()` detects liquidations from the venue and reconciles local state.
 
 ## Per-venue PnL
 
@@ -73,7 +73,7 @@ In live, `LiveDriftContext.poll_fills()` detects on-chain liquidations via the D
 ## When to enable
 
 - **Leave margin tracking off** for simple single-market strategies where leverage stays ≤1× and drawdowns are bounded by strategy logic.
-- **Enable margin tracking** whenever the strategy can use more than 1× leverage, especially on Drift (low liquidity → real liquidation risk) or Jupiter (100× max leverage).
+- **Enable margin tracking** whenever the strategy can use more than 1× leverage, especially on thin-book markets (low liquidity → real liquidation risk) or Jupiter (100× max leverage).
 - **Enable capital allocation** for any cross-venue strategy — otherwise Flint pools cash and underestimates how often capital is stuck in-flight.
 
 ## Not in this doc

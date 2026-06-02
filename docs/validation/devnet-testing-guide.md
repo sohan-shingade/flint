@@ -1,51 +1,36 @@
-# Devnet Testing Guide
+# Testnet Testing Guide
 
-How to validate Flint's execution pipeline against Drift devnet before going live.
+How to validate Flint's execution pipeline against **Hyperliquid testnet** before going live.
 
-## 1. Getting a Devnet Wallet
+> Drift devnet validation is deprecated — Drift is dropped as a supported venue post-hack. The legacy `examples/devnet_validation.py` script (Solana keypair + `driftpy` + `app.drift.trade`) is kept only for historical reference and is not maintained. Hyperliquid testnet is the live-shaped validation path today.
 
-Generate a new Solana keypair dedicated to devnet testing:
+## 1. Getting a Testnet Wallet
 
-```bash
-solana-keygen new --outfile ~/.config/solana/devnet.json
-solana config set --url devnet --keypair ~/.config/solana/devnet.json
-```
+Hyperliquid uses an Ethereum-style key (hex string), not a Solana keypair. Generate a dedicated wallet for testnet, then fund it from the Hyperliquid testnet faucet:
 
-Fund it with devnet SOL:
+<https://app.hyperliquid-testnet.xyz/>
 
-```bash
-solana airdrop 2 --url devnet
-```
-
-Deposit devnet USDC into your Drift account via the Drift devnet UI:
-<https://app.drift.trade/?env=devnet>
-
-You need at least 100 USDC deposited as collateral to run the validation script.
+You need testnet USDC deposited as collateral to run the validation. Use a fresh key reserved for testing — never reuse a mainnet key.
 
 ## 2. Setting Up Environment
 
 Export the required environment variables:
 
 ```bash
-# Required: your base58-encoded private key
-export FLINT_PRIVATE_KEY=$(solana-keygen pubkey ~/.config/solana/devnet.json --outfile /dev/stdout 2>/dev/null)
-# For the private key specifically, extract from your keypair JSON:
-export FLINT_PRIVATE_KEY=$(python3 -c "
-import json, base58
-with open('$HOME/.config/solana/devnet.json') as f:
-    key_bytes = bytes(json.load(f))
-print(base58.b58encode(key_bytes).decode())
-")
+# Required: your hex-encoded Ethereum private key (testnet wallet)
+export FLINT_HYPERLIQUID_PRIVATE_KEY=0x<your_testnet_key>
 
-# Required: RPC endpoint
-export FLINT_RPC_URL=https://api.devnet.solana.com
+# Point the connector at testnet
+export FLINT_LIVE_NETWORK=testnet
 ```
+
+`LiveHyperliquidContext` defaults to `network="testnet"` and the `https://api.hyperliquid-testnet.xyz` endpoint, so testnet is the safe default. Set `FLINT_LIVE_NETWORK=mainnet` (and configure `live_network: mainnet` in `flint.yaml`) only when you are ready for real funds.
 
 Optional overrides (with their defaults):
 
 | Variable | Default | Description |
 |---|---|---|
-| `FLINT_MARKET` | `SOL-PERP` | Drift market to trade |
+| `FLINT_MARKET` | `SOL-PERP` | Hyperliquid market to trade |
 | `FLINT_NUM_BARS` | `30` | Number of ticks to run |
 | `FLINT_CAPITAL` | `100.0` | Starting capital (USDC) |
 | `FLINT_TICK_INTERVAL` | `60` | Seconds between ticks |
@@ -55,33 +40,32 @@ Install dependencies if you haven't already:
 
 ```bash
 pip install -e .
-pip install driftpy
 ```
 
 ## 3. Running the Validation
 
+Run your strategy against testnet with `--real` (which submits real testnet orders) and `FLINT_LIVE_NETWORK=testnet`:
+
 ```bash
-python examples/devnet_validation.py
+flint live strategies/user/my_strat.py --market SOL-PERP --real
 ```
 
-The script runs six steps:
+The validation flow has the same shape as before:
 
-1. **Initialize** -- Creates a DuckDB store and configures the strategy (momentum breakout).
-2. **Connect** -- Connects to Drift devnet via driftpy, checks collateral balance.
-3. **Execute** -- Runs the strategy tick loop for `NUM_BARS` ticks, submitting real orders to devnet.
-4. **Collect** -- Queries all fill data from the store (prices, sizes, fees, tx signatures).
+1. **Initialize** -- Creates a DuckDB store and configures the strategy (e.g. momentum breakout).
+2. **Connect** -- `LiveHyperliquidContext` connects to Hyperliquid testnet, checks collateral balance.
+3. **Execute** -- Runs the strategy tick loop for `NUM_BARS` ticks, submitting real orders to testnet.
+4. **Collect** -- Queries all fill data from the store (prices, sizes, fees, order IDs).
 5. **Calibrate** -- Fits a market impact model (`impact_bps = a * sigma * (Q/ADV)^b`) from the fills, if enough data.
 6. **Parity test** -- Replays the same candle data through the backtest engine and paper broker, comparing PnL and fill prices against the live results.
 
-Progress is logged to stdout. The full report is saved to `reports/devnet_validation_<timestamp>.json`.
-
-Estimated runtime: `NUM_BARS * TICK_INTERVAL` seconds (default: ~30 minutes).
+Progress is logged to stdout. Estimated runtime: `NUM_BARS * TICK_INTERVAL` seconds (default: ~30 minutes).
 
 ## 4. Reading the Report
 
-The JSON report contains a `steps` object. Key metrics to check:
+Key metrics to check:
 
-**Calibration** (`steps.calibration.report`):
+**Calibration:**
 
 | Metric | Good | Concerning |
 |---|---|---|
@@ -90,7 +74,7 @@ The JSON report contains a `steps` object. Key metrics to check:
 | `cv_r_squared` | > 0.4 | < 0.2 |
 | `recommended_impact_coeff` | Within 2x of current | > 5x divergence |
 
-**Parity test** (`steps.parity.report`):
+**Parity test:**
 
 | Metric | Good | Concerning |
 |---|---|---|
@@ -101,24 +85,10 @@ The JSON report contains a `steps` object. Key metrics to check:
 
 ## 5. Calibrating from Results
 
-If the calibration step produced a `recommended_impact_coeff`, apply it:
+Once you have testnet fills, calibrate the impact coefficient for Hyperliquid:
 
 ```bash
-# View the recommendation
-python -c "
-import json
-with open('reports/devnet_validation_<timestamp>.json') as f:
-    r = json.load(f)
-cal = r['steps']['calibration']['report']
-print(f'Current:     {cal[\"current_impact_coeff\"]:.6f}')
-print(f'Recommended: {cal[\"recommended_impact_coeff\"]:.6f}')
-"
-```
-
-Then update your `flint.yaml` or use the CLI:
-
-```bash
-flint calibrate --venue drift --market SOL-PERP --lookback-days 30
+flint calibrate hyperliquid --market SOL-PERP --lookback-days 30
 ```
 
 Re-run backtests with the updated coefficient to confirm improvement. Compare backtest results before and after via `/api/v1/backtest/compare`.
@@ -128,20 +98,14 @@ Re-run backtests with the updated coefficient to confirm improvement. Compare ba
 Complete this checklist before deploying with real funds:
 
 - [ ] Parity test passes (< 2% PnL divergence)
-- [ ] Kill switch tested (triggered and recovered on devnet)
-- [ ] Dry-run on mainnet shows expected behavior (`dry_run=True` in LiveDriftContext)
-- [ ] Impact coefficients calibrated from devnet fills (not just defaults)
+- [ ] Kill switch tested (triggered and recovered on testnet)
+- [ ] Dry-run on mainnet shows expected behavior (`dry_run=True` on `LiveHyperliquidContext`)
+- [ ] Impact coefficients calibrated from testnet fills (not just defaults)
 - [ ] At least 50 fills collected for statistical significance
 - [ ] Risk guards configured and tested (max drawdown, position limits, daily loss cap)
 - [ ] Notification channels working (fills, errors, risk events)
 - [ ] Wallet funded with only the intended capital (no excess)
 
-To do a mainnet dry-run (logs orders but does not submit them):
-
-```bash
-export FLINT_RPC_URL=https://api.mainnet-beta.solana.com
-export FLINT_ALLOW_MAINNET=true
-# Then in your strategy runner, pass dry_run=True to LiveDriftContext
-```
+To do a mainnet dry-run (logs orders but does not submit them), set `live.network: mainnet` and `live.dry_run: true` in `flint.yaml`, or pass `dry_run=True` to `LiveHyperliquidContext` in your strategy runner.
 
 Only proceed to live mainnet execution after all checklist items are confirmed.

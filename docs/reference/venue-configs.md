@@ -21,7 +21,6 @@ Per-venue fee / margin / latency presets used by the backtest engine, paper brok
 
 | Venue | Taker | Maker | Init margin | Maint margin | Max lev | Impact k | Latency |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| **drift** | 10 bps | −2 bps | 10% | 5% | 10× | 0.010 | 8.0 ± 5.0 s |
 | **hyperliquid** | 3.5 bps | 1 bp | 5% | 2.5% | 20× | 0.005 | 1.0 ± 0.5 s |
 | **binance** | 4.5 bps | 2 bps | 2% | 1% | 50× | 0.002 | 0.2 ± 0.1 s |
 | **okx** | 5 bps | 2 bps | 2% | 1% | 50× | 0.003 | 0.3 ± 0.15 s |
@@ -37,7 +36,9 @@ Per-venue fee / margin / latency presets used by the backtest engine, paper brok
 | **htx** | 5 bps | 2 bps | 2% | 1% | 50× | 0.005 | 0.3 ± 0.15 s |
 | **default** | 5 bps | 0 bps | 10% | 5% | 10× | 0.005 | 1.0 ± 0.5 s |
 
-Cross-venue cost example: a $10k SOL-PERP taker trade costs ~$10 on Drift, ~$3.50 on Hyperliquid, ~$4.50 on Binance. Backtests reflect this automatically when `venue=` is set on orders.
+A `drift` preset still ships in `VENUE_DEFAULTS` but is dormant — Drift is dropped post-hack and is not a live venue. Hyperliquid is the live execution venue (Phoenix & Jupiter spot planned).
+
+Cross-venue cost example: a $10k SOL-PERP taker trade costs ~$3.50 on Hyperliquid, ~$4.50 on Binance, ~$5 on OKX. Backtests reflect this automatically when `venue=` is set on orders.
 
 ## Overriding
 
@@ -45,10 +46,9 @@ In `flint.yaml`:
 
 ```yaml
 venues:
-  drift:
-    impact_coefficient: 0.00042    # post-calibration
-    taker_fee_bps: 8.0             # different fee tier
   hyperliquid:
+    impact_coefficient: 0.00042    # post-calibration
+    taker_fee_bps: 3.0             # different fee tier
     base_latency_s: 1.5
 ```
 
@@ -59,8 +59,8 @@ Overrides merge into the defaults at load time (`load_venue_configs(yaml_config)
 ```python
 from flint.execution.venue_config import get_venue_config, VENUE_DEFAULTS
 
-cfg = get_venue_config("drift")    # falls back to "default" if unknown
-print(cfg.taker_fee_rate)           # = 0.001 = 10bps
+cfg = get_venue_config("hyperliquid")    # falls back to "default" if unknown
+print(cfg.taker_fee_rate)                 # = 0.00035 = 3.5bps
 
 for venue, c in VENUE_DEFAULTS.items():
     print(venue, c.max_leverage)
@@ -71,10 +71,10 @@ for venue, c in VENUE_DEFAULTS.items():
 Impact coefficients are approximations. After accumulating live fills you can fit a venue-specific `k`:
 
 ```bash
-flint calibrate drift --market SOL-PERP --lookback 30
+flint calibrate hyperliquid --market SOL-PERP --lookback 30
 ```
 
-Writes the result to `flint.yaml` under `venues.drift.impact_coefficient`. See [how-to/calibrate-slippage.md](../how-to/calibrate-slippage.md).
+Writes the result to `flint.yaml` under `venues.hyperliquid.impact_coefficient`. See [how-to/calibrate-slippage.md](../how-to/calibrate-slippage.md).
 
 ## See also
 

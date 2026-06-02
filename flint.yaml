@@ -32,14 +32,21 @@ risk:
 # API keys can also be set via environment variables (FLINT_ prefix).
 
 providers:
-  # Drift — always available, no API key needed
-  drift:
+  # Pyth — real-time oracle feeds, sub-second updates (no key required).
+  # Live oracle source alongside Hyperliquid.
+  pyth:
     enabled: true
-    # Data types to collect from Drift
-    candles: true
-    funding_rates: true
-    orderbook: true
-    oracle_prices: true
+    # feed_ids:    # Pyth price feed IDs to subscribe to
+    #   - "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"  # SOL/USD
+
+  # Drift — DROPPED (offline post-hack). Disabled by default; code dormant.
+  # Do not re-enable — Drift APIs are offline and unsupported.
+  drift:
+    enabled: false
+    candles: false
+    funding_rates: false
+    orderbook: false
+    oracle_prices: false
 
   # Birdeye — OHLCV for any Solana SPL token (requires free API key)
   birdeye:
@@ -57,12 +64,6 @@ providers:
     #   liquidations: true
     #   whale_transfers: true
     #   token_unlocks: false
-
-  # Pyth — real-time oracle feeds, sub-second updates (no key required)
-  pyth:
-    enabled: false
-    # feed_ids:    # Pyth price feed IDs to subscribe to
-    #   - "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"  # SOL/USD
 
   # GeckoTerminal — DEX pool OHLCV data (no key required)
   gecko:
@@ -84,14 +85,16 @@ providers:
 
   # Cross-venue funding rates
   funding:
-    drift: true
-    hyperliquid: true
+    hyperliquid: true  # primary live perp venue
     okx: true
+    drift: false       # DROPPED — offline post-hack, unsupported
     binance: false     # geo-blocked from US IPs
     bybit: false       # may return 403 from some regions
 
 # ─── DEX Connectors ─────────────────────────────────────────────
 # Enable/disable DEX integrations for execution and pool data.
+# Hyperliquid is the live execution venue today. Phoenix, Jupiter spot,
+# and batch/bulk order routing are on the roadmap (land as connectors here).
 dex:
   raydium:
     enabled: false
@@ -99,6 +102,10 @@ dex:
   orca:
     enabled: false
     # whirlpools: true   # track concentrated liquidity positions
+  # phoenix:             # planned — Solana CLOB perps
+  #   enabled: false
+  # jupiter:             # planned — spot routing / aggregated execution
+  #   enabled: false
 
 # notifications:
 #   telegram_bot_token: ""

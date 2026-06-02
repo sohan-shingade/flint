@@ -104,9 +104,10 @@ from flint import indicators
 class MultiMarketFundingArb(Strategy):
     """Cross-venue funding rate arbitrage.
 
-    Compares funding between Drift and Hyperliquid. When the spread is
-    wide enough, goes long on the venue paying less funding and short
-    on the venue paying more.
+    Compares funding between Hyperliquid (DEX perp) and OKX (CEX perp).
+    When the spread is wide enough, goes long on the venue paying less
+    funding and short on the venue paying more. Backtest/research example —
+    live CEX execution is out of scope; live legs run on Hyperliquid.
     """
 
     def __init__(self, entry_threshold: float = 0.0005, size: float = 0.1):
@@ -126,24 +127,24 @@ class MultiMarketFundingArb(Strategy):
 
         # Compare funding rates across venues
         funding = ctx.get_funding_by_venue("SOL-PERP", lookback=1)
-        drift_rates = funding.get("drift", [])
+        okx_rates = funding.get("okx", [])
         hyper_rates = funding.get("hyperliquid", [])
 
-        if not drift_rates or not hyper_rates:
+        if not okx_rates or not hyper_rates:
             return Signal.HOLD
 
-        drift_rate = drift_rates[-1][1]
+        okx_rate = okx_rates[-1][1]
         hyper_rate = hyper_rates[-1][1]
-        spread = hyper_rate - drift_rate
+        spread = hyper_rate - okx_rate
 
         if spread > self.entry_threshold:
-            # Hyperliquid paying more: long Drift, short Hyperliquid
-            ctx.market_order("SOL-PERP", Side.LONG, self.size, venue="drift")
+            # Hyperliquid paying more: long OKX, short Hyperliquid
+            ctx.market_order("SOL-PERP", Side.LONG, self.size, venue="okx")
             ctx.market_order("SOL-PERP", Side.SHORT, self.size, venue="hyperliquid")
         elif spread < -self.entry_threshold:
-            # Drift paying more: long Hyperliquid, short Drift
+            # OKX paying more: long Hyperliquid, short OKX
             ctx.market_order("SOL-PERP", Side.LONG, self.size, venue="hyperliquid")
-            ctx.market_order("SOL-PERP", Side.SHORT, self.size, venue="drift")
+            ctx.market_order("SOL-PERP", Side.SHORT, self.size, venue="okx")
 
         return Signal.HOLD
 
@@ -161,7 +162,7 @@ Multi-venue backtests require `capital_allocation` in the request:
 {
   "strategy": "funding_arb",
   "market": "SOL-PERP",
-  "capital_allocation": {"drift": 5000, "hyperliquid": 5000},
+  "capital_allocation": {"hyperliquid": 5000, "okx": 5000},
   "margin_tracking": true
 }
 ```
@@ -170,7 +171,7 @@ Multi-venue backtests require `capital_allocation` in the request:
 
 ## ExecutionContext API
 
-The `ctx` parameter is an instance of `ExecutionContext` (defined in `flint/execution/context.py`). All implementations -- `BacktestContext`, `PaperContext`, `LiveDriftContext`, `LiveHyperliquidContext`, `MultiVenueLiveContext` -- share the same interface. Strategies deploy to any execution environment without modification.
+The `ctx` parameter is an instance of `ExecutionContext` (defined in `flint/execution/context.py`). All implementations -- `BacktestContext`, `PaperContext`, `LiveHyperliquidContext`, `MultiVenueLiveContext` -- share the same interface. Strategies deploy to any execution environment without modification.
 
 ### State Properties
 

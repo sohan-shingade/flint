@@ -6,10 +6,13 @@ Toggle providers in `flint.yaml`:
 
 ```yaml
 providers:
-  drift: { enabled: true }
+  hyperliquid: { enabled: true }
+  pyth: { enabled: true }
   birdeye: { enabled: false }
   helius: { enabled: false, api_key: "" }
 ```
+
+Core data (Hyperliquid + Pyth) is free — no API keys needed. The Drift provider classes still ship but are dormant: Drift is dropped post-hack and disabled by default.
 
 Or via CLI: `flint data provider enable birdeye --api-key $KEY`.
 
@@ -19,21 +22,18 @@ Or via CLI: `flint data provider enable birdeye --api-key $KEY`.
 
 | Class | Venue | Resolutions | Auth | Notes |
 |---|---|---|---|---|
-| `DriftCandleProvider` | drift | 1m 5m 15m 1h 4h 1d | none | Live Drift Data API; recent windows |
-| `DriftS3Provider` | drift | 1m 5m 15m 1h 4h 1d | none | Drift S3 archive; best for historical |
-| `DriftDataProvider` | drift | configurable | none | Drift historical API; funding + orderbook |
+| `HyperliquidCandleProvider` | hyperliquid | 1m 5m 15m 1h | none | Hyperliquid REST; primary perp source |
 | `PythCandleProvider` | pyth | 1h 1d | none | Oracle-derived candles for 20+ pairs |
-| `HyperliquidCandleProvider` | hyperliquid | 1m 5m 15m 1h | none | Hyperliquid REST |
 | `CCXTProvider` | 100+ CEX | 1m – 1d | none (pub) | Binance, Bybit, OKX, Kraken, etc. Requires `pip install flint-trading[ccxt]` |
-| `CoinGeckoProvider` | coingecko | 1h 1d | none | BTC, ETH, SOL spot; fills gaps for non-Drift assets |
+| `CoinGeckoProvider` | coingecko | 1h 1d | none | BTC, ETH, SOL spot; fills gaps for spot assets |
 | `BirdeyeProvider` | birdeye | 1m 5m 1h 1d | `FLINT_BIRDEYE_API_KEY` | Any Solana SPL token OHLCV |
 | `GeckoProvider` | coingecko-terminal | varies | none | DEX pool OHLCV for any Solana pool |
 
 ### Using a candle provider directly
 
 ```python
-from flint.providers.drift_s3 import DriftS3Provider
-p = DriftS3Provider()
+from flint.providers.hyperliquid_candles import HyperliquidCandleProvider
+p = HyperliquidCandleProvider()
 try:
     candles = p.fetch_candles("SOL-PERP", 3600, start_ts, end_ts)
 finally:
@@ -63,10 +63,9 @@ All normalize to **hourly** rates by forward-filling 8-hour venue schedules. Out
 
 | Class | Venue | Auth | Symbol format |
 |---|---|---|---|
-| `DriftFundingProvider` | drift | none | `SOL-PERP` |
+| `HyperliquidFundingProvider` | hyperliquid | none | `SOL` |
 | `BinanceFundingProvider` | binance | none | `SOLUSDT` |
 | `BybitFundingProvider` | bybit | none | `SOLUSDT` |
-| `HyperliquidFundingProvider` | hyperliquid | none | `SOL` |
 | `OKXFundingProvider` | okx | none | `SOL-USDT-SWAP` |
 | `DYdXFundingProvider` | dydx | none | `SOL-USD` |
 | `BitgetFundingProvider` | bitget | none | `SOLUSDT` |
@@ -81,7 +80,6 @@ Aggregator that fans out to all enabled per-venue providers and merges into a si
 
 | Class | Data | Auth |
 |---|---|---|
-| `DriftOpenInterestProvider` | Long/short OI snapshots for Drift perps | none |
 | `JupiterProvider` | DEX swap quotes, pricing | none |
 | `JupiterBorrowProvider` | Borrow-rate snapshots | none |
 | `JupiterBorrowCollector` | Periodic borrow-rate collector | none |
@@ -109,7 +107,6 @@ Live feeds for paper and live trading. All inherit `WebSocketFeed` in `flint/pro
 
 | Class | Stream |
 |---|---|
-| `DriftWebSocketFeed` | Drift trade stream → `CandleAggregator` builds OHLCV |
 | `HyperliquidWebSocketFeed` | Pre-built OHLCV + L2 orderbook |
 | `PythWebSocketFeed` | Oracle prices |
 
@@ -138,7 +135,7 @@ curl -s localhost:8000/api/v1/data/providers           # API
 Response:
 
 ```json
-{ "providers": [ { "name": "drift", "requires_api_key": false, "available": true } ] }
+{ "providers": [ { "name": "hyperliquid", "requires_api_key": false, "available": true } ] }
 ```
 
 ---

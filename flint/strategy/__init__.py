@@ -19,6 +19,7 @@ from .momentum_breakout import MomentumBreakoutStrategy
 from .funding_mean_reversion import FundingMeanReversionStrategy
 from .mev_arb_monitor import MevArbMonitor
 from .basis_trade import BasisTradeStrategy
+from .crypto_evo import CryptoEvoStrategy
 
 __all__ = [
     "Strategy",
@@ -42,6 +43,7 @@ __all__ = [
     "FundingMeanReversionStrategy",
     "MevArbMonitor",
     "BasisTradeStrategy",
+    "CryptoEvoStrategy",
 ]
 
 # Re-export ExecutionContext for convenience

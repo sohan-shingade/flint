@@ -46,7 +46,7 @@ Equity curve corr:     0.998
 
 - PnL divergence < **2%**
 - Trade count difference = 0
-- Fill price MAE < $0.10 (market-dependent — Drift OK up to $0.50 due to vAMM)
+- Fill price MAE < $0.10 (market-dependent — thin-book markets can run higher due to orderbook impact)
 - Equity correlation > 0.99
 
 ## What to do when it fails

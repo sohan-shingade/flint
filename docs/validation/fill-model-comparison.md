@@ -1,10 +1,12 @@
 # Fill Model Comparison
 
+> **Note on Drift.** Drift is dropped as a supported venue post-hack. The `DriftFillModel` (JIT + DLOB + vAMM) below documents real engine behavior and is retained for reference, but the vAMM path is **dormant** — it is off by default and not exercised in live trading. **Hyperliquid's CLOB is the live fill model.** The Drift comparison data is left intact because it remains a useful illustration of how DEX vAMM mechanics differ from CLOB and CEX fills.
+
 ## Why Fill Models Matter
 
 Most backtesting frameworks fill market orders at the candle close price. This is convenient but dangerously optimistic -- in live trading, your order moves the market. The gap between close-price fills and realistic fills is where most backtest overfitting hides. A strategy that shows 30% annual return with close-price fills might show 15% with realistic impact modeling, or go negative entirely on large position sizes.
 
-This matters even more on DeFi perps than on centralized exchanges. Drift's vAMM has fundamentally different liquidity characteristics than a Binance CLOB -- a $50k market order on Drift moves the price through a constant-product curve, while the same order on Binance walks a discrete orderbook. Flint models each venue natively rather than applying a single generic slippage estimate.
+This matters even more on DeFi perps than on centralized exchanges. A vAMM (as on the now-dormant Drift path) has fundamentally different liquidity characteristics than a CLOB -- a $50k market order against a constant-product curve moves price differently than the same order walking a discrete orderbook (Hyperliquid's CLOB, or a Binance book). Flint models each venue natively rather than applying a single generic slippage estimate.
 
 The question is not "which fill model is correct" -- it's "how sensitive is my strategy to fill assumptions?" If your strategy only works with close-price fills, it will not survive live trading.
 
@@ -200,12 +202,12 @@ Both adjustments apply only to the synthetic fallback. When a real orderbook sna
 
 | Venue | Execution model | Book depth (1%) | Spread | Taker fee | Latency | Fill model class |
 |-------|----------------|-----------------|--------|-----------|---------|-----------------|
-| Drift | JIT + DLOB + vAMM | ~$2M | 3 bps | 10 bps | 8s | `DriftFillModel` |
+| Hyperliquid (live) | CLOB + HLP vault | ~$5M | 1.5 bps | 3.5 bps | 1s | `HyperliquidFillModel` |
 | Jupiter | Pool + keeper delay | N/A (no book) | N/A | 6 bps | 12s | `JupiterFillModel` |
-| Hyperliquid | CLOB + HLP vault | ~$5M | 1.5 bps | 3.5 bps | 1s | `HyperliquidFillModel` |
 | Binance | Pure CLOB | ~$20M | 0.5 bps | 5 bps | 0.2s | `BinanceFillModel` |
 | OKX | Pure CLOB | ~$10M | 1 bps | 5 bps | 0.3s | `OkxFillModel` |
 | Bybit | CLOB + IOC band | ~$8M | 1 bps | 5.5 bps | 0.3s | `BybitFillModel` |
+| Drift (dormant) | JIT + DLOB + vAMM | ~$2M | 3 bps | 10 bps | 8s | `DriftFillModel` |
 
 ## How Each Model Captures Live Behavior
 
@@ -328,5 +330,6 @@ engine = BacktestEngine(
 | Final validation before paper trading | Venue-specific model | Most accurate available simulation |
 | Large position sizes (>$50k notional) | Venue-specific with real L2 data | Impact is material; close-price is misleading |
 | Cross-venue comparison | Per-venue models via `create_venue_fill_models()` | Each venue has different impact characteristics |
-| Drift strategies | `DriftFillModel` | Only model that captures JIT + vAMM mechanics |
+| Hyperliquid strategies (live) | `HyperliquidFillModel` | CLOB walk + HLP backstop; the live fill model |
 | Jupiter strategies | `JupiterFillModel` | Only model that captures keeper delay |
+| Drift strategies (dormant) | `DriftFillModel` | Reference only — captures JIT + vAMM mechanics; Drift is dropped post-hack |

@@ -30,7 +30,7 @@ Full field list: [reference/config.md](../reference/config.md).
   "strategy": "momentum",
   "market": "SOL-PERP",
   "initial_capital": 10000,
-  "venue": "drift",
+  "venue": "hyperliquid",
   "risk_config": {
     "max_drawdown_pct": 0.10,
     "daily_loss_limit": 300,

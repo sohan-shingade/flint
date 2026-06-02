@@ -1,3 +1,6 @@
+# Graphify
+graphify-out/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -78,3 +81,4 @@ ui/dist/
 db_info/
 test_client/
 .playwright-mcp/
+.understand-anything/

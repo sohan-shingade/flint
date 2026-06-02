@@ -41,7 +41,7 @@ Async avoids the 30s sync timeout and shows per-market progress.
 
 ```json
 { "market": "SOL-PERP", "start_ts": ..., "end_ts": ...,
-  "venues": ["drift", "hyperliquid"] }
+  "venues": ["hyperliquid", "okx"] }
 ```
 
 ## Verify coverage
@@ -78,7 +78,7 @@ Deletes candles, funding, OI, orderbook, liquidations, and `sync_metadata`. Next
 
 ## Gotchas
 
-- **Drift S3 archive** has records going back years but is slower than the live API. S3 is used for ranges >30 days old; newer data comes from Drift's live API.
+- **Hyperliquid + Pyth** are the core candle sources — free, no API keys. Pyth oracle candles fill gaps where Hyperliquid history is thin.
 - **CoinGecko** fills spot-only gaps (BTC, ETH). Don't expect hourly granularity — daily at best for most tokens.
 - **Funding gaps** — not all venues publish continuous funding history. Gate.io and Bitget sometimes return sparse results; cross-check via `/api/v1/data/funding?market=...` and pick venues with complete coverage for your window.
 - **Jupiter historical data is not really available.** `perps-api.jup.ag` exposes *current* borrow rates and pool state only — no historical OHLCV, no historical borrow-rate series, no historical notional volume. `JupiterBorrowCollector` can accumulate rates going forward, but you can't backfill. Treat Jupiter strategies as forward-only: no honest backtest exists before your collection start date. For price history on a Jupiter-traded token, substitute Pyth oracle candles or a spot source like Birdeye.

@@ -238,7 +238,6 @@ Transfers are **not instant** — capital arrives after venue-configured delays.
 |---|---|---|
 | `BacktestContext` | `execution/backtest_context.py` | Candle-replay backtests |
 | `PaperBroker` | `execution/paper_broker.py` | Paper trading (same fill models, live data) |
-| `LiveDriftContext` | `execution/drift_live.py` | Drift via `driftpy` + Solana RPC |
 | `LiveHyperliquidContext` | `execution/hyperliquid_live.py` | Hyperliquid via REST + EIP-712 |
 | `LiveCCXTContext` | `execution/ccxt_live.py` | Any CCXT exchange |
 | `MultiVenueLiveContext` | `execution/multi_venue_live.py` | Routes to multiple live contexts by `venue=` |
@@ -399,7 +398,7 @@ Or use as a context manager (via `contextlib.closing`).
 | `MarketInfo` | Protocol metadata (tick size, fees, oracle) |
 | `PoolState` | AMM pool snapshot for arb detection |
 | `ArbRoute` | Profitable arb path (pools, tokens, profit, hops) |
-| `LiquidationOpportunity` | Drift/Mango position near liquidation |
+| `LiquidationOpportunity` | Perp position near liquidation |
 | `OraclePrice`, `OpenInterest`, `Liquidation`, `WhaleTransfer`, `DexVolume`, `TokenUnlock` | Collector record types |
 | `LegGroup`, `LegGroupResult` | Cross-venue paired orders |
 
@@ -446,10 +445,10 @@ See [reference/config.md](config.md) for the full schema.
 `flint.providers.registry.ProviderRegistry` + concrete classes in `flint.providers.*`. All inherit `DataProvider`.
 
 ```python
-from flint.providers.drift_candles import DriftCandleProvider
+from flint.providers.hyperliquid_candles import HyperliquidCandleProvider
 from flint.providers.funding_rates import BinanceFundingProvider
 
-p = DriftCandleProvider()
+p = HyperliquidCandleProvider()
 candles = p.fetch_candles("SOL-PERP", 3600, start_ts, end_ts)
 p.close()
 ```

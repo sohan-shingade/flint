@@ -18,7 +18,7 @@ Don't add one for:
 
 - Another CEX — `CCXTProvider` already covers 100+
 - A different Solana token — `BirdeyeProvider` + `CoinGeckoProvider` cover most
-- A different Drift market — `DriftCandleProvider` already has all 48
+- A different Hyperliquid market — `HyperliquidCandleProvider` already covers the listed perps
 
 ## The contract
 

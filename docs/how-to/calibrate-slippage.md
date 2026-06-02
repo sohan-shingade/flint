@@ -12,15 +12,15 @@ curl -s "localhost:8000/api/v1/live/fills?session_id=<paper_or_live_session>" | 
 ## Run calibration
 
 ```bash
-flint calibrate drift --market SOL-PERP --lookback 30
+flint calibrate hyperliquid --market SOL-PERP --lookback 30
 ```
 
-Reads fills from the last 30 days, fits power-law and sqrt-impact models via 5-fold cross-validation, and writes `venues.drift.impact_coefficient` to `flint.yaml`.
+Reads fills from the last 30 days, fits power-law and sqrt-impact models via 5-fold cross-validation, and writes `venues.hyperliquid.impact_coefficient` to `flint.yaml`.
 
 Dry-run (don't write):
 
 ```bash
-flint calibrate drift --lookback 30 --dry-run
+flint calibrate hyperliquid --lookback 30 --dry-run
 ```
 
 API: `POST /api/v1/backtest/calibrate` — read-only variant, returns the report without writing.
@@ -28,7 +28,7 @@ API: `POST /api/v1/backtest/calibrate` — read-only variant, returns the report
 ## Read the report
 
 ```
-Calibration Report — drift / SOL-PERP
+Calibration Report — hyperliquid / SOL-PERP
 ──────────────────────────────────────
 Fills used:                        347
 Lookback window:                   30d

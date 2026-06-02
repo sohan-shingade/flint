@@ -32,7 +32,7 @@ labels: strategy
 <!-- Which markets does this target? Which venues? -->
 
 - Markets: <!-- e.g. SOL-PERP, BTC-PERP -->
-- Venues: <!-- e.g. Drift, Hyperliquid, both -->
+- Venues: <!-- e.g. Hyperliquid (live); Phoenix / Jupiter (planned) -->
 
 ## Expected Edge / Why It Should Work
 

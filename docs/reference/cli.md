@@ -33,7 +33,7 @@ flint init [--days 90] [--market SOL-PERP] [--skip-demo]
 
 Idempotent — re-running does not clobber existing config, and skips downloads if coverage is ≥80%.
 
-Source order for candles: **Pyth → Drift → 2024 fallback range**. If all fail, `init` exits cleanly with guidance to run `flint data download` manually.
+Source order for candles: **Pyth → Hyperliquid → 2024 fallback range**. If all fail, `init` exits cleanly with guidance to run `flint data download` manually.
 
 ---
 
@@ -61,7 +61,7 @@ Date handling:
 Execution mode:
 
 - If a Flint server is running at `localhost:8000`, the CLI submits via API and tails progress.
-- Otherwise, runs in-process against `./data/flint.duckdb`. Missing data is auto-fetched from Drift S3.
+- Otherwise, runs in-process against `./data/flint.duckdb`. Missing data is auto-fetched from Hyperliquid (with Pyth oracle prices).
 
 Output: Rich table with PnL, Sharpe, drawdown, trades, fees, funding, plus an ASCII equity sparkline.
 
@@ -160,9 +160,9 @@ flint live <strategy.py>
 | `--key` | env `FLINT_PRIVATE_KEY` | Base58 Solana keypair |
 | `--rpc` | config `solana_rpc_url` | Override RPC URL |
 
-In `--real` mode this connects via `driftpy` and reports open positions. For the full live deployment flow see [how-to/go-live-on-drift.md](../how-to/go-live-on-drift.md) and [concepts/risk-model.md](../concepts/risk-model.md).
+In `--real` mode this connects to Hyperliquid and reports open positions. For the full live deployment flow see [tutorials/04-paper-to-live.md](../tutorials/04-paper-to-live.md) and [concepts/risk-model.md](../concepts/risk-model.md).
 
-`--real` requires `FLINT_LIVE_NETWORK` to match the intended network. Default is `devnet`; set `live_network: mainnet` in `flint.yaml` or pass through env.
+`--real` requires `FLINT_LIVE_NETWORK` to match the intended network. Default is `testnet`; set `live_network: mainnet` in `flint.yaml` or pass through env.
 
 ---
 
@@ -196,7 +196,7 @@ flint calibrate <venue>
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `venue` | **required** | `drift`, `hyperliquid`, etc. |
+| `venue` | **required** | `hyperliquid`, `okx`, etc. |
 | `--market` | `SOL-PERP` | Market to calibrate |
 | `--lookback` | 30 | Days of live fill data |
 | `--dry-run` | false | Print report without writing to `flint.yaml` |
@@ -213,7 +213,7 @@ Data management commands.
 
 ### `flint data download`
 
-Download historical candles from Drift S3.
+Download historical candles from Hyperliquid (with Pyth oracle prices).
 
 ```
 flint data download
@@ -267,7 +267,7 @@ Manage data providers in `flint.yaml`.
 | `flint data provider enable <name> [--api-key <key>]` | Enable provider; optionally append `FLINT_<NAME>_API_KEY` to `.env` |
 | `flint data provider disable <name>` | Disable provider |
 
-Provider names: `drift`, `pyth`, `hyperliquid`, `ccxt`, `birdeye`, `helius`, `raydium`, `orca`, `jupiter`, `coingecko`, `gecko`, `drift_oi`. See [reference/data-providers.md](data-providers.md).
+Provider names: `hyperliquid`, `pyth`, `ccxt`, `birdeye`, `helius`, `raydium`, `orca`, `jupiter`, `coingecko`, `gecko`. See [reference/data-providers.md](data-providers.md).
 
 ---
 

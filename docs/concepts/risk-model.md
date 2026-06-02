@@ -96,7 +96,7 @@ This is a deliberate two-step gate. If you only set one, the session refuses to 
 
 - **Logical bugs.** If your strategy wants to open infinite positions at the same price, guards can slow it but can't "fix" it. Write tests.
 - **Venue rejections.** Leverage hit, insufficient collateral, self-trade prevention — the venue enforces these. Guards are a client-side courtesy.
-- **Counterparty risk.** Drift insolvency, HL vault drain, CEX collapse. Nothing here prevents you from losing everything on a venue failure.
+- **Counterparty risk.** HL vault drain, CEX collapse, venue insolvency. Nothing here prevents you from losing everything on a venue failure.
 - **Correlation risk across markets.** `MaxOpenPositions=5` doesn't protect you from 5 highly-correlated positions. Add your own correlation guard if you trade many markets.
 
 ## See also

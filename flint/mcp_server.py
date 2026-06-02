@@ -7,7 +7,7 @@ Provides tools for:
 - Running backtests with 20 built-in or custom strategies
 - Paper trading (start, stop, monitor sessions)
 - Querying market data (OHLCV, funding, OI, correlation)
-- Downloading market data from Drift + 7 funding venues
+- Downloading market data from Hyperliquid + multi-venue funding rates
 - Hyperparameter optimization (Optuna) and walk-forward validation
 - Journal: browse and compare past backtest runs
 - Checking data freshness and provider status
@@ -66,8 +66,10 @@ mcp = FastMCP(
         "Flint is a local-first algorithmic trading, backtesting, and MEV research "
         "platform for Solana. Use these tools to run backtests, manage paper trading "
         "sessions, query market data, download historical prices, optimize strategy "
-        "parameters, and explore Drift/Hyperliquid/CEX markets. "
-        "All data is free from Drift Protocol — no API keys needed for data."
+        "parameters, and explore Hyperliquid/CEX markets. "
+        "Flint is DEX & perp native — Hyperliquid is the live venue today; "
+        "Phoenix, Jupiter spot, and batch/bulk routing are on the roadmap. "
+        "Core data (Hyperliquid + Pyth) is free — no API keys needed."
     ),
 )
 
@@ -126,7 +128,7 @@ def run_backtest(
         start_date: Start date YYYY-MM-DD
         end_date: End date YYYY-MM-DD
         initial_capital: Starting capital in USD
-        fee_rate: Trading fee rate (0.001 = 10 bps, Drift taker default)
+        fee_rate: Trading fee rate (0.001 = 10 bps, typical perp taker default)
         resolution_s: Candle resolution in seconds (3600=1h, 86400=1d)
         fast_period: Fast moving average period (for MA/EMA strategies)
         slow_period: Slow moving average period (for MA/EMA strategies)
@@ -232,7 +234,7 @@ def start_paper_trading(
     """
     import requests
     try:
-        body = {"market": market, "initial_capital": initial_capital, "resolution_s": 3600, "venue": "drift",
+        body = {"market": market, "initial_capital": initial_capital, "resolution_s": 3600, "venue": "hyperliquid",
                 "risk_config": {"max_drawdown_pct": max_drawdown_pct}}
         if code and code.strip():
             body["code"] = code
@@ -502,7 +504,7 @@ def get_candles(
 
     if not candles:
         return json.dumps({"market": market, "candles": [], "count": 0,
-                           "hint": "No local data. Use download_market_data to fetch from Drift."})
+                           "hint": "No local data. Use download_market_data to fetch from Hyperliquid."})
 
     data = [{"ts": c.ts, "date": datetime.fromtimestamp(c.ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
              "open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": round(c.volume, 2)}
@@ -524,12 +526,12 @@ def download_market_data(
     market: str = "SOL-PERP",
     days: int = 90,
     resolution_s: int = 3600,
-    funding_venues: str = "drift,hyperliquid,okx,bybit,dydx,gateio,bitget",
+    funding_venues: str = "hyperliquid,okx,bybit,dydx,gateio,bitget",
 ) -> str:
-    """Download historical market data from Drift and funding rates from multiple venues.
+    """Download historical market data from Hyperliquid and funding rates from multiple venues.
 
-    For perp markets, also downloads funding rates from 7 venues:
-    Drift, Hyperliquid, OKX, Bybit, dYdX, Gate.io, Bitget.
+    For perp markets, also downloads funding rates from multiple venues:
+    Hyperliquid, OKX, Bybit, dYdX, Gate.io, Bitget.
     All 8h funding rates are forward-filled to hourly resolution.
 
     Args:
@@ -604,7 +606,7 @@ def download_market_data(
 
 @mcp.tool()
 def list_available_markets() -> str:
-    """List all markets available for download — Drift perpetuals, Drift spot, and CoinGecko spot."""
+    """List all markets available for download — Solana perpetuals, spot, and CoinGecko spot."""
     from flint.collector.tasks import MARKET_INDEX, SPOT_WITH_CANDLES
 
     perps = sorted(MARKET_INDEX.keys())
@@ -619,7 +621,7 @@ def list_available_markets() -> str:
         "spot_all": all_spots,
         "spot_count": len(all_spots),
         "total": len(perps) + len(all_spots),
-        "note": "All data is free. Drift for perps + most spot. CoinGecko for BTC/ETH spot.",
+        "note": "All data is free. Hyperliquid for perps; CoinGecko for BTC/ETH spot.",
     })
 
 
@@ -655,7 +657,7 @@ def get_funding_rates(
 ) -> str:
     """Get funding rate history for a perpetual market, grouped by venue.
 
-    Flint stores funding from 7 venues: drift, hyperliquid, okx, bybit, dydx, gateio, bitget.
+    Flint stores funding from multiple venues: hyperliquid, okx, bybit, dydx, gateio, bitget.
 
     Args:
         market: Perp market (e.g. SOL-PERP, BTC-PERP)
@@ -702,7 +704,7 @@ def get_funding_rates(
 
 @mcp.tool()
 def get_open_interest(market: str = "SOL-PERP") -> str:
-    """Get open interest data for a Drift perpetual market.
+    """Get open interest data for a perpetual market.
 
     Args:
         market: Perp market (e.g. SOL-PERP)

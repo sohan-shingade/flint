@@ -49,7 +49,7 @@ Tables are documented in [reference/data-providers.md §Storage](../reference/da
 
 ### `ExecutionContext`
 
-An abstract base class with a uniform API (`market_order`, `limit_order`, `stop_order`, state accessors, data queries). The strategy never knows whether it's running on historical candles, a paper broker, or driftpy — it calls the same methods either way. This is why "deploy to paper" is one click in the UI, and why a strategy that works in backtest actually runs against Drift without code changes.
+An abstract base class with a uniform API (`market_order`, `limit_order`, `stop_order`, state accessors, data queries). The strategy never knows whether it's running on historical candles, a paper broker, or a live venue connector — it calls the same methods either way. This is why "deploy to paper" is one click in the UI, and why a strategy that works in backtest actually runs against Hyperliquid without code changes.
 
 See [concepts/execution-contexts.md](execution-contexts.md) for the semantic differences between the three.
 
@@ -106,7 +106,7 @@ The Rust code mirrors the Python layout: `runner.rs` orchestrates, `engine/fills
 
 - **Local-first.** DuckDB on disk, FastAPI on loopback. Your data, your machine. No cloud lock-in.
 - **Same code, three engines.** Backtest ↔ paper ↔ live symmetry is the core feature. Everything else composes on top.
-- **Per-venue honesty.** Drift's vAMM and Hyperliquid's CLOB behave differently. Flint models each natively rather than through a lowest-common-denominator adapter. See [fill-pipeline.md](fill-pipeline.md).
+- **Per-venue honesty.** A DEX CLOB (Hyperliquid) and a CEX orderbook behave differently. Flint models each natively rather than through a lowest-common-denominator adapter. See [fill-pipeline.md](fill-pipeline.md).
 - **Explicit safety.** Risk lives as a separate layer, enforced in all three engines. The kill switch is the same code path in paper and live.
 
 ## Not in this doc
