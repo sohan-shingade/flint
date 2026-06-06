@@ -26,7 +26,7 @@ classifiers = [
 ]
 dependencies = [
     "duckdb>=0.9",
-    "httpx>=0.25",
+    "httpx>=0.28.1",
     "numpy>=1.24",
     "fastapi>=0.100",
     "uvicorn[standard]>=0.20",
