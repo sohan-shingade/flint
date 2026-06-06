@@ -38,7 +38,7 @@ dependencies = [
     "websockets>=12.0",
     "typer[all]>=0.9",
     "rich>=13.0",
-    "ccxt>=4.0",
+    "ccxt>=4.5.56",
 ]
 
 [project.urls]
@@ -59,7 +59,7 @@ dev = [
 ]
 all = [
     "mcp>=1.0",
-    "ccxt>=4.0",
+    "ccxt>=4.5.56",
 ]
 
 [tool.setuptools.packages.find]
