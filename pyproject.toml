@@ -54,7 +54,7 @@ flint = "flint.cli:main"
 mcp = ["mcp>=1.0"]
 hyperliquid = ["eth-account>=0.10", "msgpack>=1.0"]
 dev = [
-    "pytest>=7.0",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.21",
 ]
 all = [
