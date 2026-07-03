@@ -11,11 +11,60 @@ one tenant never streams another's run (§2.7).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from flint.ports import TenantContext, UserDataPort
 
-from .errors import NotFoundError
+from .errors import NotFoundError, ValidationError
+
+if TYPE_CHECKING:
+    from flint.live import PaperSession
+
+
+def start_paper(
+    tenant: TenantContext,
+    *,
+    user_data: UserDataPort,
+    run_id: str,
+    strategy: str,
+    market: str,
+    resolution_s: int = 3600,
+    initial_capital: str = "100000",
+    seed: int = 0,
+    overrides: dict[str, Any] | None = None,
+) -> "PaperSession":
+    """Start (and persist the head of) a fresh paper session for ``tenant`` (§6.7).
+
+    The paper session is the *same* engine fed live rather than by historical replay
+    (the parity promise) — this is the front door the SDK/CLI use to create one. The
+    returned :class:`~flint.live.PaperSession` is fed a live-feed connection by the
+    caller's run loop; its monitor head is streamed by :func:`paper_snapshot`. Raises
+    :class:`ValidationError` for an unknown template (user error), mirroring the
+    backtest front door.
+    """
+    from flint.live import PaperSession
+    from flint.strategy.templates.registry import TemplateNotFound, get_template
+
+    try:
+        get_template(strategy)
+    except TemplateNotFound:
+        raise ValidationError(
+            f"unknown strategy template {strategy!r}",
+            detail="strategy must be a registered template name",
+            hint="call list_templates for valid names",
+        ) from None
+
+    return PaperSession.create(
+        tenant=tenant,
+        store=user_data,
+        run_id=run_id,
+        template=strategy,
+        market=market,
+        resolution_s=resolution_s,
+        initial_capital=initial_capital,
+        seed=seed,
+        overrides=overrides,
+    )
 
 
 def paper_snapshot(

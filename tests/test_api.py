@@ -106,6 +106,20 @@ def test_submit_status_result_flow():
     assert len(summary["equity_curve"]) == N
 
 
+def test_result_carries_the_per_run_timing_breakdown():
+    # §19.2: the backtest result exposes a phase timing breakdown through the API so
+    # "why is my backtest slow" is answerable from the output the surface returns.
+    client = _client()
+    run_id = client.post("/api/v1/backtests", json=_body(), headers=_auth()).json()["run_id"]
+    summary = client.get(f"/api/v1/backtests/{run_id}", headers=_auth()).json()
+    assert set(summary["timing"]) == {
+        "data_fetch_ms",
+        "input_build_ms",
+        "engine_run_ms",
+        "report_ms",
+    }
+
+
 def test_result_is_404_for_unknown_run():
     client = _client()
     resp = client.get("/api/v1/backtests/nope", headers=_auth())

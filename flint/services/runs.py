@@ -15,7 +15,10 @@ from typing import Any
 
 from flint.ports import TenantContext, UserDataPort
 from flint.research import compare as _compare
+from flint.research import export_bundle as _export_bundle
 from flint.research import list_runs as _list_runs
+
+from .errors import NotFoundError
 
 
 def list_runs(
@@ -41,6 +44,43 @@ def compare_runs(
         "warnings": list(cmp.warnings),
         "metrics": cmp.metric_table(),
     }
+
+
+def export_run(
+    tenant: TenantContext,
+    run_id: str,
+    *,
+    user_data: UserDataPort,
+) -> str:
+    """The reproducibility bundle for ``tenant``'s run ``run_id`` as JSON (§11.2).
+
+    Packs the run's manifest head + recorded event stream into a self-contained
+    :class:`~flint.research.ReproBundle` (``flint export --run-id``); re-running it
+    reproduces the event stream bit-for-bit (§2.10). Raises :class:`NotFoundError`
+    when the tenant has no such run (absent or another tenant's — §2.7).
+    """
+    try:
+        bundle = _export_bundle(tenant, user_data, run_id)
+    except KeyError:
+        raise NotFoundError(f"unknown run {run_id!r}") from None
+    return bundle.to_json()
+
+
+def import_legacy_runs(
+    tenant: TenantContext,
+    *,
+    user_data: UserDataPort,
+    path: str,
+) -> list[str]:
+    """Import legacy DuckDB run metadata into ``tenant``'s Run Library (§19.6, (g)).
+
+    Read-only on the legacy file; idempotent on ``legacy:<name>`` so re-running is a
+    no-op. Returns the imported run_ids. The DuckDB bridge is imported lazily — the
+    services import graph never pulls it until an operator actually runs the import.
+    """
+    from flint.data.migrate import import_legacy_runs_from_duckdb
+
+    return import_legacy_runs_from_duckdb(tenant, user_data, path)
 
 
 def _row(manifest: Any) -> dict[str, Any]:

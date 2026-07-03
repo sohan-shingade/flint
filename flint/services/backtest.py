@@ -23,8 +23,10 @@ the authoritative per-bar/per-fill history is the event log, folded on read.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Any
 
 from flint.adapters import InMemoryUserData
@@ -209,20 +211,28 @@ def _execute(
 ) -> _Run:
     """Resolve data (funding-gated), run the engine, fold the trust report.
 
-    Import-local to keep this module's import graph shallow at load time.
+    Import-local to keep this module's import graph shallow at load time. Each
+    phase is wall-clock timed so the tearsheet can answer "why is my backtest
+    slow" (§19.2). The split is at the granularity the front door can observe:
+    ``engine_run`` is the whole per-bar loop (fills + strategy + funding +
+    liquidation), which is one opaque call into the engine — a finer fill/funding
+    split awaits engine-internal counters and is not fabricated here (D26).
     """
     from ._engine_inputs import build_engine_inputs
 
+    timing: dict[str, float] = {}
     executable = set(request.venues)
-    prepared = data.prepare(
-        request.universe,
-        request.venues,
-        _KINDS,
-        request.range,
-        mode=CoverageMode.STRICT,  # funding hard gate (§6.4); raises on a gap
-        signal_venues=request.signal_venues,
-    )
-    inputs = build_engine_inputs(prepared.tables, executable)
+    with _timed(timing, "data_fetch_ms"):
+        prepared = data.prepare(
+            request.universe,
+            request.venues,
+            _KINDS,
+            request.range,
+            mode=CoverageMode.STRICT,  # funding hard gate (§6.4); raises on a gap
+            signal_venues=request.signal_venues,
+        )
+    with _timed(timing, "input_build_ms"):
+        inputs = build_engine_inputs(prepared.tables, executable)
 
     adapter = build_adapter(
         request.strategy,
@@ -238,16 +248,28 @@ def _execute(
     engine = BacktestEngine(
         log, config=EngineConfig(), state=state, venue_spec=HYPERLIQUID
     )
-    engine.run(inputs.candles, strategy=adapter, **inputs.run_kwargs())
+    with _timed(timing, "engine_run_ms"):
+        engine.run(inputs.candles, strategy=adapter, **inputs.run_kwargs())
 
     rejections = adapter.drain_rejections()
     notes = adapter.tearsheet_notes()
-    events = log.read()
-    equity = equity_series_from_events(events)
-    report = build_report(equity, resolution_s=request.resolution_s, events=events)
+    with _timed(timing, "report_ms"):
+        events = log.read()
+        equity = equity_series_from_events(events)
+        report = build_report(equity, resolution_s=request.resolution_s, events=events)
 
-    summary = _summary(request, prepared, report, equity, rejections, notes)
+    summary = _summary(request, prepared, report, equity, rejections, notes, timing)
     return _Run(summary=summary, equity=equity)
+
+
+@contextmanager
+def _timed(sink: dict[str, float], key: str) -> Iterator[None]:
+    """Record the wall-clock ms a phase takes into ``sink[key]`` (§19.2)."""
+    start = perf_counter()
+    try:
+        yield
+    finally:
+        sink[key] = round((perf_counter() - start) * 1000.0, 3)
 
 
 def _summary(
@@ -257,6 +279,7 @@ def _summary(
     equity: list[float],
     rejections: list[StrategyRejection],
     notes: list[str],
+    timing: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     m = report.metrics
     cost = report.cost
@@ -291,6 +314,9 @@ def _summary(
         "rejections": [_rej(r) for r in rejections],
         "fidelity_lines": prepared.fidelity.lines(),
         "notes": list(notes),
+        # Per-run timing breakdown (§19.2): data fetch / input build / the engine
+        # per-bar loop / trust-report fold — the phases the front door can observe.
+        "timing": dict(timing or {}),
     }
 
 

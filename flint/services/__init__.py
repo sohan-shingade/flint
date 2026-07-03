@@ -26,8 +26,9 @@ from .errors import (
     VenueUnavailableError,
 )
 from .jobs import BacktestJobs, JobRecord, new_run_id
-from .paper import paper_snapshot
-from .runs import compare_runs, list_runs
+from .optimize import OptimizeOutcome, OptimizeRequest, run_optimization
+from .paper import paper_snapshot, start_paper
+from .runs import compare_runs, export_run, import_legacy_runs, list_runs
 
 __all__ = [
     # backtest front door
@@ -35,6 +36,10 @@ __all__ = [
     "make_backtest_runner",
     "BacktestRequest",
     "BacktestOutcome",
+    # optimize front door
+    "run_optimization",
+    "OptimizeRequest",
+    "OptimizeOutcome",
     # job lifecycle
     "BacktestJobs",
     "JobRecord",
@@ -45,10 +50,13 @@ __all__ = [
     # run library
     "list_runs",
     "compare_runs",
+    "export_run",
+    "import_legacy_runs",
     # alerts
     "AlertConfigStore",
     # paper monitor
     "paper_snapshot",
+    "start_paper",
     # error taxonomy
     "ServiceError",
     "ValidationError",
