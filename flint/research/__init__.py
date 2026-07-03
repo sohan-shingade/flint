@@ -11,6 +11,21 @@ from .deflated import (
     skewness,
     trial_sharpes,
 )
+from .lookahead import (
+    BLIND_SPOTS,
+    DEGENERATE_LABEL_HORIZON,
+    FUTURE_INDEX,
+    FUTURE_SHIFT,
+    TRUNCATION_DIVERGENCE,
+    UNBOUNDED_AGGREGATE,
+    UNIVERSE_LOOKAHEAD,
+    LeakFinding,
+    LookaheadResult,
+    analyze,
+    check_label_horizon,
+    lint_source,
+    truncation_probe,
+)
 from .tearsheet import (
     MetricSummary,
     PerformanceReport,
@@ -48,6 +63,20 @@ __all__ = [
     "WindowResult",
     "plan_windows",
     "run_walk_forward",
+    # look-ahead / leakage linter (6.3, §8.5/§11/D27)
+    "analyze",
+    "lint_source",
+    "truncation_probe",
+    "check_label_horizon",
+    "LeakFinding",
+    "LookaheadResult",
+    "BLIND_SPOTS",
+    "FUTURE_SHIFT",
+    "FUTURE_INDEX",
+    "UNBOUNDED_AGGREGATE",
+    "DEGENERATE_LABEL_HORIZON",
+    "UNIVERSE_LOOKAHEAD",
+    "TRUNCATION_DIVERGENCE",
     # metrics + performance report (6.2, §11.1)
     "MetricSummary",
     "PerformanceReport",
