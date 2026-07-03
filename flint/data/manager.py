@@ -9,10 +9,17 @@ writes every fetched range through to the local cache.
 
 Two gates decide what happens at a coverage gap (§2.11):
 
-* **Funding is hard.** A perp's PnL is wrong without funding, so a funding gap
-  *rejects* the run — in ``strict`` mode with the exact missing ranges and the
-  fix (``--from`` / ``--clip-to-coverage``); never silently degraded, never
-  filled with synthetic data (D26).
+* **Funding is hard — but only where the run can execute.** A perp's PnL is
+  wrong without funding, so a funding gap on an **executable** venue (the run's
+  ``venues=`` set — positions settle there) *rejects* the run: in ``strict`` mode
+  with the exact missing ranges and the fix (``--from`` / ``--clip-to-coverage``);
+  never silently degraded, never filled with synthetic data (D26). Funding read
+  purely as a **signal** from a read-only lab venue (``signal_venues=`` — the
+  cross-venue funding/basis lab's Binance/Bybit/OKX in v1, D28) instead follows
+  the §8.2 soft contract: a gap yields ``None`` + a fidelity flag, never a
+  rejection — "a wrong number there can't fill an order" (D28), and §8.2 prefers
+  ``None`` over stale. This keeps the HL-native cross-venue-signal workflow (§3.2)
+  usable even when a lab venue's rate history has holes.
 * **Depth is soft.** Missing recorded depth drops the fill fidelity tier and is
   flagged in the summary, not rejected.
 
@@ -182,17 +189,32 @@ class DataManager:
         requested: TimeRange,
         *,
         mode: CoverageMode = CoverageMode.STRICT,
+        signal_venues: Sequence[str] = (),
     ) -> PreparedData:
         """Resolve every leg × kind over ``requested`` and apply the gates.
 
-        Legs are the product of ``venues × universe`` — every ``(venue, market)``
-        a signal may target, so the funding gate checks them all (§3.2).
+        ``venues`` are the **executable** venues (the run's ``venues=`` — positions
+        settle there), so their legs are the only ones the funding hard gate can
+        reject over (§2.11, D28). ``signal_venues`` are read-only lab venues (the
+        cross-venue funding/basis lab's Binance/Bybit/OKX in v1): their legs are
+        resolved for the same ``kinds`` but are **never** funding-gated — a gap
+        degrades per the §8.2 soft contract (``None`` + a fidelity flag), it never
+        rejects the run. A venue named in both sets is treated as executable (the
+        stronger contract wins).
         """
-        legs = [Leg(venue=v, market=m) for v in venues for m in universe]
+        exec_legs = [Leg(venue=v, market=m) for v in venues for m in universe]
+        exec_venues = set(venues)
+        signal_legs = [
+            Leg(venue=v, market=m)
+            for v in signal_venues
+            if v not in exec_venues
+            for m in universe
+        ]
 
-        # 1. Funding hard gate up front, over the requested range (§2.11).
+        # 1. Funding hard gate up front, over the requested range — EXECUTABLE
+        #    legs only (§2.11, D28). Signal-only lab legs degrade below, never gate.
         funding_avail = {
-            leg: self.coverage(leg, Kind.FUNDING, requested) for leg in legs
+            leg: self.coverage(leg, Kind.FUNDING, requested) for leg in exec_legs
         }
         gaps = {
             leg: RangeSet((requested,)).subtract(avail)
@@ -205,16 +227,25 @@ class DataManager:
                 raise FundingCoverageError(gaps, funding_avail, requested)
             effective = requested
         else:
-            effective = self._clip_range(legs, funding_avail, requested)
+            effective = self._clip_range(exec_legs, funding_avail, requested)
 
         # 2. Resolve every leg × kind over the effective range + build fidelity.
+        #    Executable legs first; then signal legs, flagged so their funding
+        #    gaps read as the §8.2 soft contract, not an executable-venue gap.
         tables: dict[tuple[str, str, Kind], pa.Table] = {}
         entries: list[FidelityEntry] = []
-        for leg in legs:
+        for leg in exec_legs:
             for kind in kinds:
                 table, covered = self._resolve(leg, kind, effective)
                 tables[(leg.venue, leg.market, kind)] = table
                 entries.append(self._fidelity(leg, kind, effective, covered))
+        for leg in signal_legs:
+            for kind in kinds:
+                table, covered = self._resolve(leg, kind, effective)
+                tables[(leg.venue, leg.market, kind)] = table
+                entries.append(
+                    self._fidelity(leg, kind, effective, covered, signal=True)
+                )
 
         return PreparedData(
             requested=requested,
@@ -281,7 +312,12 @@ class DataManager:
 
     @staticmethod
     def _fidelity(
-        leg: Leg, kind: Kind, want: TimeRange, covered: RangeSet
+        leg: Leg,
+        kind: Kind,
+        want: TimeRange,
+        covered: RangeSet,
+        *,
+        signal: bool = False,
     ) -> FidelityEntry:
         full = covered.covers(want)
         if full:
@@ -293,6 +329,17 @@ class DataManager:
                 full=False,
                 source="none",
                 note="no recorded book for this range — using spread/impact model",
+            )
+        if signal and kind is Kind.FUNDING:
+            # Read-only lab venue: a funding gap is the §8.2 soft contract (None +
+            # flag at the ctx accessor), never a rejection (D28). The executable
+            # venue's funding is what the hard gate protects.
+            return FidelityEntry(
+                leg=leg,
+                kind=kind,
+                full=False,
+                source="none",
+                note="signal-only venue — funding gap returns None + flag (§8.2), not a rejection",
             )
         # A non-degradable, non-funding kind (candles/OI) with a gap: flagged so
         # the caller sees it, but not a hard reject (funding is gated separately).

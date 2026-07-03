@@ -158,6 +158,102 @@ def test_clip_with_no_common_window_still_rejects():
         )
 
 
+# --- signal-only lab venues: funding degrades, never gates (D28, §8.2) ------
+
+BINANCE_SOL = Leg("binance", "SOL-PERP")
+
+
+def test_signal_venue_funding_gap_degrades_instead_of_rejecting():
+    # Executable HL funding is fully covered; the read-only lab venue (binance)
+    # has a funding gap. The run must NOT reject — the lab gap degrades (§8.2).
+    cache = _loaded(
+        {
+            (SOL.venue, SOL.market, Kind.FUNDING): _rows([0, 99], "rate"),  # full
+            (BINANCE_SOL.venue, BINANCE_SOL.market, Kind.FUNDING): _rows(
+                [0, 50], "rate"
+            ),  # [0,51) — gap [51,100)
+        }
+    )
+    dm = DataManager(sources=[cache])
+
+    prepared = dm.prepare(
+        [SOL.market], [SOL.venue], [Kind.FUNDING], TimeRange(0, 100),
+        signal_venues=[BINANCE_SOL.venue],
+    )
+
+    assert not prepared.fidelity.all_full
+    degraded = prepared.fidelity.degraded()
+    assert len(degraded) == 1
+    assert degraded[0].leg == BINANCE_SOL and degraded[0].kind is Kind.FUNDING
+    assert "signal-only venue" in degraded[0].note and "§8.2" in degraded[0].note
+    # The executable leg's funding is untouched — still full.
+    assert all(e.full for e in prepared.fidelity.entries if e.leg == SOL)
+    # The lab table carries exactly the rows that exist — nothing fabricated (D26).
+    assert prepared.tables[
+        (BINANCE_SOL.venue, BINANCE_SOL.market, Kind.FUNDING)
+    ].column("ts").to_pylist() == [0, 50]
+
+
+def test_signal_venue_fully_covered_is_full_fidelity():
+    cache = _loaded(
+        {
+            (SOL.venue, SOL.market, Kind.FUNDING): _rows([0, 99], "rate"),
+            (BINANCE_SOL.venue, BINANCE_SOL.market, Kind.FUNDING): _rows([0, 99], "rate"),
+        }
+    )
+    dm = DataManager(sources=[cache])
+    prepared = dm.prepare(
+        [SOL.market], [SOL.venue], [Kind.FUNDING], TimeRange(0, 100),
+        signal_venues=[BINANCE_SOL.venue],
+    )
+    assert prepared.fidelity.all_full
+    assert (
+        BINANCE_SOL.venue,
+        BINANCE_SOL.market,
+        Kind.FUNDING,
+    ) in prepared.tables
+
+
+def test_venue_in_both_sets_is_treated_as_executable_and_gates():
+    # A venue named in both venues= and signal_venues= keeps the STRONGER
+    # (executable) contract, so its funding gap still rejects.
+    cache = _loaded(
+        {(SOL.venue, SOL.market, Kind.FUNDING): _rows([0, 50], "rate")}  # gap [51,100)
+    )
+    dm = DataManager(sources=[cache])
+    with pytest.raises(FundingCoverageError):
+        dm.prepare(
+            [SOL.market], [SOL.venue], [Kind.FUNDING], TimeRange(0, 100),
+            signal_venues=[SOL.venue],
+        )
+
+
+def test_clip_ignores_signal_venue_coverage():
+    # Clip is driven by the executable legs only: HL funding [Feb, Aug) clips to
+    # [Feb, Aug) even though the signal venue's funding is the narrower [Mar, Jul).
+    requested = TimeRange(_ms(2025, 1, 1), _ms(2025, 8, 1))
+    cache = _loaded(
+        {
+            (SOL.venue, SOL.market, Kind.FUNDING): _rows(
+                [_ms(2025, 2, 1), _ms(2025, 8, 1) - 1], "rate"
+            ),
+            (BINANCE_SOL.venue, BINANCE_SOL.market, Kind.FUNDING): _rows(
+                [_ms(2025, 3, 1), _ms(2025, 7, 1) - 1], "rate"
+            ),
+        }
+    )
+    dm = DataManager(sources=[cache])
+    prepared = dm.prepare(
+        [SOL.market], [SOL.venue], [Kind.FUNDING], requested,
+        mode=CoverageMode.CLIP_TO_COVERAGE,
+        signal_venues=[BINANCE_SOL.venue],
+    )
+    # Clipped to the executable venue's window, not the narrower signal window.
+    assert prepared.effective_range == TimeRange(_ms(2025, 2, 1), _ms(2025, 8, 1))
+    degraded = prepared.fidelity.degraded()
+    assert [e.leg for e in degraded] == [BINANCE_SOL]
+
+
 # --- fidelity summary: depth degrades, it does not reject ------------------
 
 
