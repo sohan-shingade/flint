@@ -16,6 +16,16 @@ from .sources import (
     FreeVenueProvider,
     InMemoryCacheSource,
 )
+from .universe import (
+    UNIVERSE_SNAPSHOT,
+    DynamicUniverse,
+    ExitBehavior,
+    InMemoryRankingData,
+    Membership,
+    RankingData,
+    StaticUniverse,
+    UniverseResolver,
+)
 
 __all__ = [
     "CoverageMode",
@@ -32,4 +42,12 @@ __all__ = [
     "FlintDataAPIClient",
     "FreeVenueProvider",
     "InMemoryCacheSource",
+    "UNIVERSE_SNAPSHOT",
+    "DynamicUniverse",
+    "ExitBehavior",
+    "InMemoryRankingData",
+    "Membership",
+    "RankingData",
+    "StaticUniverse",
+    "UniverseResolver",
 ]
