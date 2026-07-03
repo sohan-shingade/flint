@@ -25,6 +25,7 @@ from flint.core.models import (
 )
 from flint.engine import BacktestEngine, EngineConfig, PortfolioState
 from flint.engine.fills import NaiveFillModel, TradePrint
+from flint.engine.funding.settlement import FundingCoverageError
 from flint.engine.portfolio import FILL, FUNDING, LIQUIDATION, EventLog
 from flint.ports import TenantContext
 
@@ -165,6 +166,146 @@ def test_funding_is_priced_on_the_oracle_not_the_mark():
     funding_ev = _first(log, FUNDING)
     assert funding_ev.payload["oracle_price"] == 100.0
     assert funding_ev.ts == SETTLE_TS  # charged at the settlement second
+
+
+# --- §6.4 funding engine: worked example, predicted/final, cap, coverage ---
+
+
+def _quiet_bar() -> Candle:
+    """A bar with the mark pinned to entry — no liquidation pressure, so a test
+    isolates the funding payment."""
+    return _bar(high=101.0, low=99.0, close=100.0)
+
+
+def test_funding_6_4_golden_long_pays_at_plus_one_bp():
+    # §6.4 worked example: long 10 SOL, settlement oracle 100.00, final +0.01%/hr.
+    # Payment = size × oracle × rate = 10 × 100 × 0.0001 = $0.10; rate positive →
+    # long PAYS → −$0.10. NOTE: the spec's prose states "$1.00", but that is a 10×
+    # arithmetic slip (0.01% = 0.0001, and 10 × 100 × 0.0001 = 0.10). The engine
+    # implements the stated formula on the stated inputs and is correct at $0.10;
+    # the spec number is flagged to team-lead (D14 — verify the arithmetic, don't
+    # propagate a mis-stated result).
+    state = _long_10_at_100("1000")
+    engine, log = _engine(state=state)
+    engine.run(
+        [_quiet_bar()],
+        marks={MARKET: [_mark(mark_price=100.0, index_price=100.0)]},
+        funding={MARKET: [_funding(rate_hourly=0.0001)]},
+    )
+    ev = _first(log, FUNDING)
+    assert Decimal(ev.payload["amount"]) == Decimal("-0.10")
+    assert state.account(VENUE).cash == Decimal("999.90")
+    assert state.account(VENUE).funding_paid == Decimal("-0.10")
+
+
+class _FundingProbe:
+    """Records what ``ctx.funding_rate`` returns on the bar it runs."""
+
+    def __init__(self) -> None:
+        self.seen = None
+
+    def on_candle(self, candle, ctx):
+        self.seen = ctx.funding_rate(MARKET)
+        return []
+
+
+def test_settlement_uses_final_while_strategy_sees_only_predicted():
+    # The predicted/final split (§6.4): a predicted rate published BEFORE the bar
+    # (+2%/hr) and a materially different final rate that settles IN the bar
+    # (+0.01%/hr). The strategy must see PREDICTED; the payment must use FINAL —
+    # leaking the settled rate would inflate a funding-arb backtest.
+    predicted = FundingRate(
+        market=MARKET,
+        ts=T0 - 30 * 60 * 1000,  # published half an hour before bar start
+        rate_hourly=0.02,
+        interval_s=HOUR_S,
+        price_basis="oracle",
+        rate_type="predicted",
+        venue=VENUE,
+    )
+    state = _long_10_at_100("1000")
+    engine, log = _engine(state=state)
+    probe = _FundingProbe()
+    engine.run(
+        [_quiet_bar()],
+        marks={MARKET: [_mark(mark_price=100.0, index_price=100.0)]},
+        funding={MARKET: [predicted, _funding(rate_hourly=0.0001)]},
+        strategy=probe,
+    )
+    # Strategy knew only the predicted rate.
+    assert probe.seen is not None
+    assert probe.seen.rate_type == "predicted"
+    assert probe.seen.rate_hourly == 0.02
+    # The payment used the FINAL rate (−$0.10 = 10×100×0.0001), not predicted 2%.
+    ev = _first(log, FUNDING)
+    assert ev.payload["rate_type"] == "final"
+    assert Decimal(ev.payload["amount"]) == Decimal("-0.10")
+
+
+def test_predicted_rate_in_the_bar_is_never_settled():
+    # A predicted rate whose ts lands inside the bar must not move cash — only
+    # final rates settle (§6.4). No final row → no FUNDING event, no cash change.
+    state = _long_10_at_100("1000")
+    engine, log = _engine(state=state)
+    engine.run(
+        [_quiet_bar()],
+        marks={MARKET: [_mark(mark_price=100.0, index_price=100.0)]},
+        funding={MARKET: [_funding(rate_hourly=0.02, rate_type="predicted")]},
+    )
+    assert FUNDING not in _kinds(log)
+    assert state.account(VENUE).cash == Decimal("1000")
+
+
+def test_funding_rate_is_clamped_to_the_venue_cap():
+    # A fixture final rate of +10%/hr exceeds HL's 4%/hr cap; the settlement clamps
+    # to 0.04, flags it, and pays 10 × 100 × 0.04 = −$40 (not −$100).
+    state = _long_10_at_100("1000")
+    engine, log = _engine(state=state)
+    engine.run(
+        [_quiet_bar()],
+        marks={MARKET: [_mark(mark_price=100.0, index_price=100.0)]},
+        funding={MARKET: [_funding(rate_hourly=0.10)]},
+    )
+    ev = _first(log, FUNDING)
+    assert ev.payload["rate_capped"] is True
+    assert ev.payload["settled_rate_hourly"] == 0.04
+    assert Decimal(ev.payload["amount"]) == Decimal("-40")
+
+
+def test_mark_basis_8h_funding_prices_on_mark_and_scales_by_interval():
+    # A Binance-style row: price_basis="mark", 8h interval. The payment prices on
+    # the MARK (not the index) and scales the hourly-normalized rate by 8h/1h = 8.
+    mark = MarkSnapshot(
+        market=MARKET, ts=SETTLE_TS, mark_price=100.0, index_price=90.0, venue=VENUE
+    )
+    rate = FundingRate(
+        market=MARKET,
+        ts=SETTLE_TS,
+        rate_hourly=0.001,
+        interval_s=8 * HOUR_S,
+        price_basis="mark",
+        rate_type="final",
+        venue=VENUE,
+    )
+    state = _long_10_at_100("100000")
+    engine, log = _engine(state=state)
+    engine.run([_quiet_bar()], marks={MARKET: [mark]}, funding={MARKET: [rate]})
+    ev = _first(log, FUNDING)
+    assert ev.payload["oracle_price"] == 100.0  # priced on mark 100, not index 90
+    assert ev.payload["interval_s"] == 8 * HOUR_S
+    assert Decimal(ev.payload["amount"]) == Decimal("-8.00")  # 10×100×0.001×8
+
+
+def test_missing_oracle_snapshot_hard_gates_instead_of_pricing_on_close():
+    # §6.4/§16: an oracle-priced settlement with no mark snapshot to read must fail
+    # loud, not silently price on the bar close (which can differ by percent).
+    state = _long_10_at_100("1000")
+    engine, _ = _engine(state=state)
+    with pytest.raises(FundingCoverageError):
+        engine.run(
+            [_quiet_bar()],  # no marks supplied
+            funding={MARKET: [_funding(rate_hourly=0.0001)]},
+        )
 
 
 # --- T+1 execution --------------------------------------------------------

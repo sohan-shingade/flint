@@ -35,7 +35,7 @@ sequence above is the contract.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from random import Random
 from typing import Protocol
 
@@ -71,7 +71,11 @@ from .fills import (
     TradePrint,
     fill_model_for,
 )
-from .funding.settlement import settlement_payment
+from .funding.settlement import (
+    clamp_funding_rate,
+    settlement_payment,
+    settlement_price_for,
+)
 from .liquidation.check import (
     bankruptcy_price,
     is_liquidated,
@@ -128,10 +132,27 @@ class EngineContext:
     default_venue: str
     now: int
     rng: Random
+    funding: dict[str, list[FundingRate]] = field(default_factory=dict)
 
     def position(self, market: str, venue: str | None = None) -> Position | None:
         """The open position on ``(venue or default, market)``, or ``None``."""
         return self.state.position(venue or self.default_venue, market)
+
+    def funding_rate(
+        self, market: str, venue: str | None = None
+    ) -> FundingRate | None:
+        """Last **published predicted** funding rate knowable at bar start (§6.4).
+
+        Returns the most recent ``predicted`` row with ``ts < now`` (``now`` is the
+        bar start) — what a trader actually knew when deciding this bar. It **never**
+        returns the ``final`` rate that settles later in the bar: leaking the settled
+        rate inflates funding-arb backtests dramatically, and blocking that leak
+        here (where a look-ahead linter can't see it) is the whole point of the
+        predicted/final split. ``None`` if no predicted rate has been published yet.
+        """
+        rows = self.funding.get(market, [])
+        predicted = [r for r in rows if r.rate_type == "predicted"]
+        return last_before(predicted, self.now, key=lambda r: r.ts)
 
 
 class BacktestEngine:
@@ -222,7 +243,11 @@ class BacktestEngine:
         self._process_resting(candle, bar_marks, market_marks)
         # (6) Strategy sees a read-only ctx, returns signals; route them.
         ctx = EngineContext(
-            state=self.state, default_venue=venue, now=start, rng=self._rng
+            state=self.state,
+            default_venue=venue,
+            now=start,
+            rng=self._rng,
+            funding=funding,
         )
         signals = strategy.on_candle(candle, ctx)
         self._route(signals, venue)
@@ -255,17 +280,33 @@ class BacktestEngine:
         market_marks: list[MarkSnapshot],
         end: int,
     ) -> None:
-        """Settle each funding row whose ts falls in [bar_start, bar_end), in order."""
+        """Settle each *final* funding row whose ts falls in [bar_start, bar_end).
+
+        Only ``final`` rates settle — the ``predicted`` series is what the strategy
+        saw when deciding (``ctx.funding_rate``) and never becomes a payment (§6.4
+        predicted/final contract). Each settlement in the bar applies individually
+        in ts order (a wide bar over hourly funding is never one lumped payment).
+        The rate is clamped to the venue cap, priced on the ``price_basis`` price
+        at the settlement second, and scaled by the settlement's own ``interval_s``.
+        """
         key = (candle.venue, candle.market)
         settlements = sorted(
-            (r for r in rates if candle.ts <= r.ts < end), key=lambda r: r.ts
+            (
+                r
+                for r in rates
+                if candle.ts <= r.ts < end and r.rate_type == "final"
+            ),
+            key=lambda r: r.ts,
         )
         for rate in settlements:
             pos = self.state.positions.get(key)
             if pos is None:
                 continue  # only positions open at the settlement ts are charged
-            oracle = self._oracle_at(market_marks, rate.ts, candle.close)
-            amount = settlement_payment(pos, rate.rate_hourly, oracle)
+            price = settlement_price_for(rate, market_marks)  # hard-gate: no silent close
+            capped_rate, was_capped = clamp_funding_rate(
+                rate.rate_hourly, self._spec.rate_cap_hourly
+            )
+            amount = settlement_payment(pos, capped_rate, price, rate.interval_s)
             acct = self.state.account(candle.venue)
             acct.credit(amount)
             acct.funding_paid += amount
@@ -275,22 +316,17 @@ class BacktestEngine:
                     "market": candle.market,
                     "venue": candle.venue,
                     "rate_hourly": rate.rate_hourly,
+                    "settled_rate_hourly": capped_rate,
+                    "rate_capped": was_capped,
+                    "interval_s": rate.interval_s,
                     "price_basis": rate.price_basis,
                     "rate_type": rate.rate_type,
-                    "oracle_price": oracle,
+                    "oracle_price": price,
                     "size": pos.size,
                     "amount": str(amount),
                 },
                 ts=rate.ts,
             )
-
-    @staticmethod
-    def _oracle_at(
-        marks: list[MarkSnapshot], settlement_ts: int, fallback: float
-    ) -> float:
-        """Oracle/index price at-or-before the settlement second (§6.4)."""
-        snap = last_before(marks, settlement_ts + 1, key=lambda m: m.ts)
-        return snap.index_price if snap is not None else fallback
 
     # -- (4) liquidation -------------------------------------------------------
 

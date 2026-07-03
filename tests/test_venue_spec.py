@@ -38,6 +38,14 @@ def test_hyperliquid_price_rounding_is_five_significant_figures():
     assert HYPERLIQUID.price_sig_figs == 5
 
 
+def test_hyperliquid_funding_rate_cap_is_four_percent_hourly():
+    # Source: https://hyperliquid.gitbook.io/hyperliquid-docs/trading/funding
+    # "Funding on Hyperliquid is capped at 4%/hour" and is paid hourly (1/8 of the
+    # 8h rate). The cap does not depend on the asset. Verified 2026-07 (D14).
+    assert HYPERLIQUID.rate_cap_hourly == 0.04
+    assert "funding" in HYPERLIQUID.sources
+
+
 def test_oracle_band_is_flagged_unverified():
     # The oracle price band width could NOT be fetched from primary docs at
     # coding time (order-book/robust-price pages unreachable, 2026-07). It is a

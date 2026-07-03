@@ -8,9 +8,10 @@ against primary docs at coding time is marked ``UNVERIFIED`` so it is impossible
 to mistake a guess for a checked fact.
 
 Slice 3.2 populates the fill-relevant fields (fees, oracle band, latency, tick,
-Tier-C parametric defaults). Slice 3.3 adds the funding cap; slice 3.4 adds the
-``LiquidationSpec`` (maintenance tiers, liquidation fee, ADL rank). The shape is
-additive — later slices add fields, never restructure.
+Tier-C parametric defaults); slice 3.3 adds ``rate_cap_hourly`` (the funding
+clamp); slice 3.4 adds the ``LiquidationSpec`` (maintenance tiers, liquidation
+fee, ADL rank). The shape is additive — later slices add fields, never
+restructure.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ class VenueSpec:
     structure: MarketStructure
     taker_fee_rate: float  # fraction of notional
     maker_fee_rate: float  # fraction of notional
+    rate_cap_hourly: float  # funding rate clamp per hour (HL: 4%/hr, cited D14)
     oracle_band_bps: float  # market-order clip / limit-reject band vs oracle
     oracle_band_verified: bool  # False → the band width is a placeholder (D14)
     book_staleness_s: float  # book older than this at effective time → treat absent
@@ -72,6 +74,7 @@ class VenueSpec:
 _HL_SOURCES = {
     "fees": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees",
     "margining": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/margining",
+    "funding": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/funding",
     "oracle_band": "UNVERIFIED — docs page unreachable at coding (2026-07); 1% is the §6.3 placeholder",
     "block_time": "https://hyperliquid.gitbook.io/hyperliquid-docs (HyperBFT ~70-500ms; latency is a Flint default)",
 }
@@ -81,6 +84,7 @@ HYPERLIQUID = VenueSpec(
     structure=MarketStructure.CLOB,
     taker_fee_rate=0.00045,  # 0.045% — HL Tier 0 (fetched 2026-07)
     maker_fee_rate=0.00015,  # 0.015% — HL Tier 0 (fetched 2026-07)
+    rate_cap_hourly=0.04,  # 4%/hr — HL funding cap, paid hourly (verified 2026-07, see sources[funding])
     oracle_band_bps=100.0,  # 1% — UNVERIFIED placeholder (§6.3), see sources
     oracle_band_verified=False,
     book_staleness_s=30.0,  # Flint recorder-cadence default (§6.3)

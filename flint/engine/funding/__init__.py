@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
-from .settlement import settlement_payment
+from .settlement import (
+    FundingCoverageError,
+    clamp_funding_rate,
+    settlement_payment,
+    settlement_price_for,
+)
 
 __all__ = [
+    "FundingCoverageError",
+    "clamp_funding_rate",
     "settlement_payment",
+    "settlement_price_for",
 ]
