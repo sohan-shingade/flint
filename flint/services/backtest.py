@@ -44,7 +44,11 @@ from flint.research import (
     equity_series_from_events,
 )
 from flint.strategy.base import StrategyRejection
-from flint.strategy.templates.registry import TemplateNotFound, get_template
+from flint.strategy.templates.registry import (
+    TemplateNotFound,
+    TemplateSpec,
+    get_template,
+)
 from flint.venues import HYPERLIQUID
 
 from .errors import Rejection, ValidationError
@@ -208,6 +212,7 @@ def _execute(
     *,
     data: DataManager,
     event_store: UserDataPort,
+    adapter_spec: "TemplateSpec | None" = None,
 ) -> _Run:
     """Resolve data (funding-gated), run the engine, fold the trust report.
 
@@ -234,8 +239,12 @@ def _execute(
     with _timed(timing, "input_build_ms"):
         inputs = build_engine_inputs(prepared.tables, executable)
 
+    # A prebuilt spec (a compiled *user* strategy, §13.2) resolves directly;
+    # otherwise ``request.strategy`` is a trusted template registry name. Either
+    # way ``build_adapter`` applies the runner contract (§8.4) — the untrusted
+    # path's boundary is the sandbox screen run *before* we ever reach here.
     adapter = build_adapter(
-        request.strategy,
+        adapter_spec if adapter_spec is not None else request.strategy,
         tenant,
         seed=request.seed,
         strategy_id=request.run_id,
@@ -347,6 +356,7 @@ def _manifest(
     metrics: Mapping[str, Any] | None = None,
     fidelity_lines: Sequence[str] = (),
     note: str = "",
+    source: str = "",
 ) -> RunManifest:
     """Build the §11.2 Run-Library head so GET /runs (runlib) can list + compare it.
 
@@ -370,7 +380,7 @@ def _manifest(
     return RunManifest(
         run_id=request.run_id,
         strategy_name=request.strategy,
-        strategy_source="",
+        strategy_source=source,
         params=dict(request.overrides),
         effective_start_ts=effective["start_ms"] if effective else None,
         effective_end_ts=effective["end_ms"] if effective else None,

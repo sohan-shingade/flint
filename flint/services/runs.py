@@ -83,6 +83,74 @@ def import_legacy_runs(
     return import_legacy_runs_from_duckdb(tenant, user_data, path)
 
 
+def run_results(
+    tenant: TenantContext,
+    run_id: str,
+    *,
+    user_data: UserDataPort,
+) -> dict[str, Any]:
+    """The structured result of ``tenant``'s run for an agent to act on (§13.2/§13.3).
+
+    Returns the persisted summary (metrics, equity curve, cost attribution,
+    per-segment fill-fidelity lines, in-run rejections, verdict) plus a
+    **per-trade log** folded from the run's FILL event stream — the machine-
+    readable block §13.3 requires so an agent can see *why* PnL happened (funding
+    vs trading vs fees vs slippage) and at what fill-fidelity tier. Raises
+    :class:`NotFoundError` when the tenant has no such run (absent or another's).
+    """
+    from flint.engine.portfolio import FILL, EventLog
+
+    try:
+        record = user_data.load_run(tenant, run_id)
+    except KeyError:
+        raise NotFoundError(f"unknown run {run_id!r}") from None
+    summary = dict(record.summary or {})
+
+    trades: list[dict[str, Any]] = []
+    fidelity_by_tier: dict[str, int] = {}
+    for event in EventLog(user_data, tenant, run_id).read():
+        if event.kind != FILL:
+            continue
+        p = event.payload
+        tier = p.get("fidelity_tier", "?")
+        fidelity_by_tier[tier] = fidelity_by_tier.get(tier, 0) + 1
+        trades.append(
+            {
+                "ts": event.ts,
+                "market": p.get("market"),
+                "venue": p.get("venue"),
+                "side": p.get("side"),
+                "price": p.get("price"),
+                "size": p.get("size"),
+                "fee": p.get("fee"),
+                "realized_pnl": p.get("realized_pnl"),
+                "fidelity_tier": tier,
+                "slippage_bps": p.get("slippage_bps"),
+                "liquidity": p.get("liquidity"),
+            }
+        )
+
+    return {
+        "run_id": run_id,
+        "verdict": summary.get("verdict", "ok"),
+        "status": record.status,
+        "metrics": summary.get("metrics"),
+        "deflated_sharpe": summary.get("deflated_sharpe"),
+        "n_trials": summary.get("n_trials"),
+        "win_rate": summary.get("win_rate"),
+        "cost_attribution": summary.get("cost"),
+        "equity_curve": summary.get("equity_curve", []),
+        "per_segment_fidelity": summary.get("fidelity_lines", []),
+        "fills_by_fidelity_tier": fidelity_by_tier,
+        "trades": trades,
+        "rejections": summary.get("rejections", []),
+        "notes": summary.get("notes", []),
+        "effective_range": summary.get("effective_range"),
+        "rejected": summary.get("rejected"),
+        "validation": summary.get("validation"),
+    }
+
+
 def _row(manifest: Any) -> dict[str, Any]:
     return {
         "run_id": manifest.run_id,

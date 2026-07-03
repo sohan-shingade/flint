@@ -1,0 +1,428 @@
+"""User-strategy-source services — validate + backtest submitted code (§13, D25).
+
+This is the front door for the agent loop (§13.1): an agent authors Python
+strategy *source* (untrusted), Flint validates it, backtests it, and hands back
+structured results the agent reasons over. Templates (7.1's ``run_backtest``) are
+trusted built-ins keyed by registry name; this module adds the **user-source**
+path carry-forward (n) requires — its own services entry that sandboxes and
+lint-screens submitted code *before* any engine run.
+
+The boundary (D25, §8.3): every user-source run is gated by
+:func:`validate_strategy`, which runs the OS-isolated sandbox
+(``run_strategy_sandboxed(..., screen=True)``) plus the static leak lint
+(``research.lookahead.analyze``) and returns **structured, line-precise errors
+before a backtest ever starts**. The static AST screen is lint-grade UX; the
+subprocess is the actual containment. A validated strategy is then compiled and
+walked by the honest engine (§6) — reusing 7.1's ``_execute`` via a prebuilt
+``TemplateSpec`` so the user path and the template path share one engine wiring.
+The truncation probe's ``feature_fn`` runs **inside** the sandbox (carry-forward
+(d)), so a look-ahead re-run never executes untrusted code in-process.
+"""
+
+from __future__ import annotations
+
+import ast
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from flint.data import DataManager, FundingCoverageError
+from flint.ports import RunRecord, TenantContext, UserDataPort
+from flint.research import analyze
+from flint.strategy import MLStrategy, Strategy
+from flint.strategy.sandbox import (
+    SandboxError,
+    SandboxTimeout,
+    SandboxViolation,
+    StrategyError,
+    StrategyScreenError,
+    run_strategy_sandboxed,
+    screen_source,
+)
+from flint.strategy.templates.registry import TemplateSpec
+
+from .backtest import (
+    BacktestOutcome,
+    BacktestRequest,
+    _execute,
+    _manifest,
+    _persist,
+    _rejection_from_gate,
+)
+from .errors import ValidationError
+
+# A tiny, hand-authored candle frame (D26 — a fixed unit input, never generated
+# market-like data). Four bars with distinct closes so a full-window
+# normalization leak actually diverges when the last bar is truncated (§8.5).
+_PROBE_CLOSES = (100.0, 103.0, 99.0, 102.0)
+_PROBE_MARKET = "SOL-PERP"
+_PROBE_VENUE = "hyperliquid"
+_PROBE_H = 3_600_000
+
+
+def _probe_frame() -> list[dict[str, Any]]:
+    """The hand-authored candle rows the validation sandbox probe runs over."""
+    return [
+        {
+            "ts": i * _PROBE_H,
+            "open": c,
+            "high": c + 1.0,
+            "low": c - 1.0,
+            "close": c,
+            "volume": 1000.0,
+            "market": _PROBE_MARKET,
+            "resolution_s": 3600,
+            "venue": _PROBE_VENUE,
+        }
+        for i, c in enumerate(_PROBE_CLOSES)
+    ]
+
+
+# The validation harness appended to user source before the sandbox runs it. It
+# exposes one stable entry, ``_flint_features(frame)``, dispatching to the
+# author's ``features`` seam (the leak-prone §8.5 surface the truncation probe
+# targets) or, failing that, a ``Strategy`` subclass walked causally. Everything
+# here stays inside the sandbox allowlist (flint imports, safe builtins) so the
+# combined source still passes ``screen=True``.
+_HARNESS_TEMPLATE = '''
+
+def _flint_net_signal(_sigs):
+    if _sigs is None:
+        return 0.0
+    if not isinstance(_sigs, list):
+        _sigs = [_sigs]
+    _net = 0.0
+    for _s in _sigs:
+        _sz = float(getattr(_s, "size_usd", 0.0)) or float(getattr(_s, "size", 0.0))
+        _act = getattr(_s, "action", "")
+        if _act == "long":
+            _net += _sz
+        elif _act == "short":
+            _net -= _sz
+    return _net
+
+
+class _FlintProbeCtx:
+    """A read-only ctx stub for the validation probe — carries no engine state."""
+
+    now = 0
+
+    def position(self, *args, **kwargs):
+        return None
+
+    def equity(self, *args, **kwargs):
+        return 0.0
+
+
+def _flint_features(_frame):
+    from flint.core.models import Candle
+
+    _rows = [Candle(**_r) for _r in _frame]
+{dispatch}
+'''
+
+_DISPATCH_FEATURES = "    return list(features(_rows))\n"
+
+_DISPATCH_STRATEGY = """    _strat = {name}()
+    _ctx = _FlintProbeCtx()
+    _out = []
+    for _i in range(len(_rows)):
+        _out.append(_flint_net_signal(_strat.on_candle(_rows[_i], _rows[: _i + 1], _ctx)))
+    return _out
+"""
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    """The structured verdict of :func:`validate_strategy` (§13.2/§13.3).
+
+    ``valid`` means the source passed the static screen and ran cleanly in the
+    sandbox — it is safe to backtest. ``leak_detected`` is reported separately: a
+    look-ahead finding is a warning an agent should act on, not a reason the run
+    cannot execute. Every field is JSON-safe so an agent never parses prose.
+    """
+
+    valid: bool
+    stage: str  # "ok" | "screen" | "sandbox"
+    screen_violations: tuple[dict[str, Any], ...] = ()
+    sandbox_error: dict[str, Any] | None = None
+    leak_detected: bool = False
+    lookahead_summary: str = ""
+    lookahead_findings: tuple[dict[str, Any], ...] = ()
+    checks_run: tuple[str, ...] = ()
+    blind_spots: tuple[str, ...] = ()
+    dynamic_ran: bool = False
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "valid": self.valid,
+            "stage": self.stage,
+            "screen_violations": list(self.screen_violations),
+            "sandbox_error": self.sandbox_error,
+            "leak_detected": self.leak_detected,
+            "lookahead": {
+                "summary": self.lookahead_summary,
+                "findings": list(self.lookahead_findings),
+                "checks_run": list(self.checks_run),
+                "blind_spots": list(self.blind_spots),
+                "dynamic_probe_ran": self.dynamic_ran,
+            },
+        }
+
+
+def validate_strategy(source: str) -> ValidationReport:
+    """Sandbox + static-lint a user strategy — structured errors *before* a run.
+
+    Order (fail-fast): (1) the static AST/import screen returns line-precise
+    violations; if any, we stop — nothing runs. (2) the OS-isolated sandbox runs
+    the strategy over a hand-authored probe frame (``screen=True``), surfacing a
+    runtime error as a structured ``sandbox_error`` rather than a stack trace. (3)
+    the look-ahead lint (static AST pass + the truncation probe, whose
+    ``feature_fn`` executes *inside* the sandbox) reports leaks with the honest
+    "no leak detected" wording and its blind spots (carry-forwards (c)/(d)/(n)).
+    """
+    violations = screen_source(source)
+    if violations:
+        return ValidationReport(
+            valid=False,
+            stage="screen",
+            screen_violations=tuple(_violation(v) for v in violations),
+        )
+
+    entry = _dispatch_for(source)
+    if entry is None:
+        # Nothing runnable to sandbox — static lint only, said plainly (§13.3).
+        result = analyze(source=source)
+        return ValidationReport(
+            valid=True,
+            stage="ok",
+            leak_detected=result.leak_detected,
+            lookahead_summary=result.summary(),
+            lookahead_findings=tuple(_finding(f) for f in result.findings),
+            checks_run=result.checks_run,
+            blind_spots=result.blind_spots,
+            dynamic_ran=False,
+        )
+
+    combined = source + _HARNESS_TEMPLATE.format(dispatch=entry)
+    frame = _probe_frame()
+
+    def _sandboxed_features(rows: Sequence) -> Sequence:
+        return run_strategy_sandboxed(
+            combined, "_flint_features", list(rows), screen=True
+        )
+
+    # Liveness first: one full-frame run in the sandbox catches import/runtime
+    # errors deterministically before the truncation probe re-runs it.
+    try:
+        _sandboxed_features(frame)
+    except (
+        StrategyError,
+        SandboxTimeout,
+        SandboxViolation,
+        StrategyScreenError,
+        SandboxError,
+    ) as exc:
+        return ValidationReport(
+            valid=False, stage="sandbox", sandbox_error=_sandbox_error(exc)
+        )
+
+    result = analyze(source=source, feature_fn=_sandboxed_features, frame=frame)
+    return ValidationReport(
+        valid=True,
+        stage="ok",
+        leak_detected=result.leak_detected,
+        lookahead_summary=result.summary(),
+        lookahead_findings=tuple(_finding(f) for f in result.findings),
+        checks_run=result.checks_run,
+        blind_spots=result.blind_spots,
+        dynamic_ran=True,
+    )
+
+
+def compile_strategy(source: str, *, name: str = "user_strategy") -> type[Strategy]:
+    """Compile validated ``source`` and return its single ``Strategy`` subclass.
+
+    Runs the screen defensively (the surface has already validated), then execs
+    in a fresh namespace. Raises :class:`ValidationError` if the source defines no
+    ``Strategy`` subclass or more than one (an agent needs one unambiguous entry).
+    """
+    violations = screen_source(source)
+    if violations:
+        raise ValidationError(
+            "strategy source failed the sandbox screen",
+            detail="; ".join(str(_violation(v)["message"]) for v in violations),
+            hint="call validate_strategy to see line-precise issues",
+        )
+    class_name = _strategy_class_name(source)
+    if class_name is None:
+        raise ValidationError(
+            "strategy source defines no Strategy subclass",
+            detail="the engine runs a subclass of flint.strategy.Strategy",
+            hint="define `class MyStrategy(Strategy): ...` with an on_candle method",
+        )
+    namespace: dict[str, Any] = {}
+    exec(compile(source, f"<{name}>", "exec"), namespace)  # noqa: S102 — gated by validate
+    cls = namespace.get(class_name)
+    if not (isinstance(cls, type) and issubclass(cls, Strategy)):
+        raise ValidationError(
+            f"could not resolve Strategy subclass {class_name!r} from source",
+        )
+    return cls
+
+
+def run_backtest_source(
+    tenant: TenantContext,
+    *,
+    source: str,
+    run_id: str,
+    universe: Sequence[str] = ("SOL-PERP",),
+    venues: Sequence[str] = ("hyperliquid",),
+    start_ms: int = 0,
+    end_ms: int = 0,
+    resolution_s: int = 3600,
+    fill_mode: str = "auto",
+    seed: int = 0,
+    initial_capital: str = "100000",
+    overrides: Mapping[str, Any] | None = None,
+    signal_venues: Sequence[str] = (),
+    user_data: UserDataPort,
+    data: DataManager,
+    now_ms: int = 0,
+) -> BacktestOutcome:
+    """Validate + backtest submitted user ``source`` end-to-end (§13.2, carry (n)).
+
+    The sandbox/lint gate runs first; an invalid strategy returns a
+    ``verdict="invalid"`` outcome carrying the :class:`ValidationReport` — data
+    the agent revises against, never an exception. A funding hard-gate gap returns
+    ``verdict="rejected"`` (data, §19.1). Otherwise the validated strategy is
+    compiled and walked by the real engine, and the run is persisted like any
+    other (its Run-Library head carries the actual source for reproduction).
+    """
+    report = validate_strategy(source)
+    if not report.valid:
+        summary = {
+            "verdict": "invalid",
+            "run_id": run_id,
+            "validation": report.to_payload(),
+        }
+        return BacktestOutcome(run_id, "invalid", summary)
+
+    cls = compile_strategy(source, name=run_id)
+    spec = TemplateSpec(
+        name=cls.__name__,
+        strategy_cls=cls,
+        summary="user-submitted strategy",
+        category="user",
+        is_ml=issubclass(cls, MLStrategy),
+    )
+    request = BacktestRequest(
+        run_id=run_id,
+        strategy=cls.__name__,
+        universe=tuple(universe),
+        venues=tuple(venues),
+        start_ms=start_ms,
+        end_ms=end_ms,
+        resolution_s=resolution_s,
+        fill_mode=fill_mode,
+        seed=seed,
+        initial_capital=initial_capital,
+        overrides=dict(overrides or {}),
+        signal_venues=tuple(signal_venues),
+    )
+
+    user_data.save_run(
+        tenant,
+        RunRecord(run_id=run_id, kind="backtest", status="running", created_ts=now_ms),
+    )
+    try:
+        run = _execute(
+            tenant, request, data=data, event_store=user_data, adapter_spec=spec
+        )
+    except FundingCoverageError as exc:
+        rejection = _rejection_from_gate(exc)
+        manifest = _manifest(
+            request, now_ms=now_ms, note=f"rejected: {rejection.code}", source=source
+        )
+        summary = {
+            **manifest.to_summary(),
+            "verdict": "rejected",
+            "validation": report.to_payload(),
+            **rejection.to_payload(),
+        }
+        _persist(user_data, tenant, run_id, now_ms, summary)
+        return BacktestOutcome(run_id, "rejected", summary, rejection)
+
+    manifest = _manifest(
+        request,
+        now_ms=now_ms,
+        effective=run.summary["effective_range"],
+        metrics=run.summary["metrics"],
+        fidelity_lines=run.summary["fidelity_lines"],
+        source=source,
+    )
+    summary = {
+        **manifest.to_summary(),
+        **run.summary,
+        "validation": report.to_payload(),
+    }
+    _persist(user_data, tenant, run_id, now_ms, summary)
+    return BacktestOutcome(run_id, "ok", summary)
+
+
+# -- internals ---------------------------------------------------------------
+
+
+def _dispatch_for(source: str) -> str | None:
+    """The harness dispatch body for ``source``, or ``None`` if nothing runnable.
+
+    Prefers a module-level ``features`` function (the §8.5 leak seam); else a
+    ``Strategy`` subclass walked bar-by-bar. Both are referenced by name so the
+    harness never needs ``globals()`` (a forbidden sandbox builtin).
+    """
+    if _has_features(source):
+        return _DISPATCH_FEATURES
+    name = _strategy_class_name(source)
+    if name is not None:
+        return _DISPATCH_STRATEGY.format(name=name)
+    return None
+
+
+def _has_features(source: str) -> bool:
+    tree = ast.parse(source)
+    return any(
+        isinstance(node, ast.FunctionDef) and node.name == "features"
+        for node in tree.body
+    )
+
+
+def _strategy_class_name(source: str) -> str | None:
+    """The name of the last module-level class whose bases name ``Strategy``."""
+    tree = ast.parse(source)
+    found: str | None = None
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and any(
+            _base_names_strategy(base) for base in node.bases
+        ):
+            found = node.name
+    return found
+
+
+def _base_names_strategy(base: ast.expr) -> bool:
+    if isinstance(base, ast.Name):
+        return base.id.endswith("Strategy")
+    if isinstance(base, ast.Attribute):
+        return base.attr.endswith("Strategy")
+    return False
+
+
+def _violation(v: Any) -> dict[str, Any]:
+    return {"line": v.line, "col": v.col, "code": v.code, "message": v.message}
+
+
+def _finding(f: Any) -> dict[str, Any]:
+    return {"category": f.category, "message": f.message, "line": f.line}
+
+
+def _sandbox_error(exc: Exception) -> dict[str, Any]:
+    return {"type": type(exc).__name__, "message": str(exc)}
