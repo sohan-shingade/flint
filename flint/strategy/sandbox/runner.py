@@ -24,6 +24,7 @@ from flint.ports import ResourceQuota
 from .errors import SandboxTimeout, SandboxViolation, StrategyError
 from .oslayer import wrap_command
 from .protocol import decode_value, encode_value
+from .screen import screen_or_raise
 
 _CHILD_MODULE = "flint.strategy.sandbox._child"
 
@@ -38,13 +39,23 @@ def run_strategy_sandboxed(
     input_value: Any = None,
     *,
     quota: ResourceQuota | None = None,
+    screen: bool = False,
 ) -> Any:
     """Run ``source``'s ``entry(input_value)`` in the sandbox; return its result.
 
     Raises ``StrategyError`` if the strategy raised (incl. a denied import),
     ``SandboxTimeout`` on a CPU/wall limit, ``SandboxViolation`` if the child
     crashed or blew the output cap. Never falls back to in-process execution.
+
+    ``screen=True`` runs the static AST/import screen first (§8.3) and raises
+    ``StrategyScreenError`` with line-precise issues *before* a subprocess is
+    spawned — the fast, lint-grade UX a surface (CLI/API/MCP/optimizer) turns on.
+    It is opt-in, never load-bearing: the boundary contains code the screen would
+    reject, so the security guarantee never depends on it (which is why the
+    escape-suite runs with ``screen=False``).
     """
+    if screen:
+        screen_or_raise(source)
     quota = quota or ResourceQuota.default()
     job = {
         "source": source,
