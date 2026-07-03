@@ -1,0 +1,50 @@
+"""``JobRunnerPort`` — run a job under CPU/memory/wall quotas (§2.7).
+
+The engine hands a unit of work to *some* runner without knowing whether it is
+an in-process thread pool (laptop) or a worker container off a queue (cloud).
+The quota travels with the job so the same call site is safe in both: locally
+the sandbox (§8.3) enforces it via ``RLIMIT`` + a wall-clock kill; in the cloud
+the orchestrator enforces it. A runner that cannot enforce a quota must still
+accept and record it, never silently drop it.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TypeVar
+
+from .tenant import TenantContext
+
+T = TypeVar("T")
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceQuota:
+    """The CPU/memory/wall ceiling a job runs under. Enforced by the runner."""
+
+    cpu_seconds: float  # RLIMIT_CPU ceiling (§8.3)
+    mem_bytes: int  # RLIMIT_AS ceiling
+    wall_seconds: float  # wall-clock kill deadline (catches sleeps/IO stalls)
+
+    @classmethod
+    def default(cls) -> "ResourceQuota":
+        """A conservative single-backtest ceiling (30s CPU, 2 GiB, 60s wall)."""
+        return cls(cpu_seconds=30.0, mem_bytes=2 * 1024**3, wall_seconds=60.0)
+
+
+class JobRunnerPort(ABC):
+    """Run ``fn`` for ``tenant`` under ``quota`` and return its result."""
+
+    @abstractmethod
+    def submit(
+        self, tenant: TenantContext, fn: Callable[[], T], quota: ResourceQuota
+    ) -> T:
+        """Execute ``fn`` under ``quota`` and return its result.
+
+        Raises if the job exceeds a quota or fails. The Phase-1 in-process
+        adapter runs ``fn`` synchronously and records the quota without
+        enforcing it; real enforcement arrives with the sandbox (§8.3).
+        """
+        ...

@@ -1,1 +1,26 @@
-"""adapters — concrete port implementations (v1: all local). marketdata_duckdb, userdata_duckdb (tenant-scoped), eventbus_memory, jobs_inprocess, scheduler, secrets_env, identity_local (§2.7, §17)."""
+"""adapters — concrete port implementations (§2.7, §17).
+
+Phase 1 ships in-memory reference adapters (``local``) that fulfil every port on
+a laptop with no network, proving the seams. The durable DuckDB market/user
+store adapters land with the data layer (task #2).
+"""
+
+from __future__ import annotations
+
+from .local import (
+    EnvSecrets,
+    InMemoryEventBus,
+    InMemoryMarketData,
+    InMemoryUserData,
+    InProcessJobRunner,
+    LocalIdentity,
+)
+
+__all__ = [
+    "InMemoryMarketData",
+    "InMemoryUserData",
+    "InProcessJobRunner",
+    "EnvSecrets",
+    "InMemoryEventBus",
+    "LocalIdentity",
+]
