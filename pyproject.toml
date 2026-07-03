@@ -72,6 +72,9 @@ exclude = ["tests*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "parity: legacy-vs-Nautilus byte-diff parity suite (tests/parity/, §19.4, CI-required from N6)",
+]
 
 # ─── Ruff — real-bug subset (hard-fail); style nits stay advisory ────────────
 [tool.ruff.lint]
