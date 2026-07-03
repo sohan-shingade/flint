@@ -39,6 +39,7 @@ from ._compat import (
 )
 from .execmodels import FlintPriceFillModel, FlintTagFeeModel
 from .funding import build_funding_module
+from .liquidation import build_liquidation_module
 from .shim import BarLaneStrategy
 from .translate import FlintRecorder
 
@@ -101,7 +102,18 @@ class NautilusEngine:
             feed=feed,
             venue_spec=spec.venue_spec,
         )
-        modules = [funding_module] if funding_module is not None else None
+        # Liquidation is registered AFTER funding (§A5, §6.1): the tick lane (N8) runs
+        # modules in registration order, so funding settles before the liquidation
+        # check in the same timestep — a funding receipt can rescue a position. Unlike
+        # funding, liquidation is unconditional (any open position can breach).
+        liquidation_module = build_liquidation_module(
+            recorder=recorder,
+            shadow=shadow,
+            venue_spec=spec.venue_spec,
+        )
+        modules = [
+            m for m in (funding_module, liquidation_module) if m is not None
+        ] or None
 
         engine = BacktestEngine(
             config=BacktestEngineConfig(
@@ -194,6 +206,7 @@ class NautilusEngine:
             instruments=instruments,
             resolution_s=resolution_s,
             funding=funding_module,
+            liquidation=liquidation_module,
         )
         engine.add_actor(recorder)
         engine.add_strategy(shim)

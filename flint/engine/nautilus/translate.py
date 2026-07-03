@@ -38,6 +38,7 @@ from flint.engine.portfolio.events import (
     EQUITY,
     FILL,
     FUNDING,
+    LIQUIDATION,
     ORDER_CANCELLED,
     ORDER_PLACED,
     ORDER_REJECTED,
@@ -181,6 +182,12 @@ class FlintRecorder(Actor):
                 "OrderFilled without a Flint fill tag — native tick-lane fills "
                 "arrive in N8; the bar lane always tags its fills"
             )
+        if p.get("liquidation_close"):
+            # A §6.5 forced-close flatten (liquidation.py): Nautilus closes its own
+            # position off this entry-priced fill, but the shadow book and the
+            # LIQUIDATION event were already written by ``record_liquidation``. Do not
+            # fold it or emit a FILL — the money moved once, in the module.
+            return
         venue = p["venue"]
         market = p["market"]
         side = Side(p["side"])
@@ -272,6 +279,37 @@ class FlintRecorder(Actor):
             },
             ts=ts,
         )
+
+    # -- liquidation (FlintLiquidationModule-driven, §6.5) ---------------------
+
+    def record_liquidation(self, decision) -> None:
+        """Apply one planned liquidation and emit LIQUIDATION — byte-identical to ``loop._apply_liquidation``.
+
+        The realized loss and the full LIQUIDATION payload were computed purely by
+        :func:`~flint.engine.liquidation.cascade.plan_liquidations` (the §6.5
+        economics, backstop clamp and insurance shortfall included). The recorder is
+        the single writer, so it credits the shadow account, accrues ``realized_pnl``,
+        drops the position, and emits the event — the same three effects, in the same
+        order, the legacy inline applier had (§6.5, §19.2). The Nautilus account is
+        moved separately by the module's ``adjust_account`` so both books agree at
+        run end.
+        """
+        venue = decision.key[0]
+        acct = self._flint_shadow.account(venue)
+        acct.credit(money(decision.realized))
+        acct.realized_pnl += money(decision.realized)
+        del self._flint_shadow.positions[decision.key]
+        self._flint_log.emit(LIQUIDATION, decision.payload, ts=decision.ts)
+
+    def carried_marks(self) -> dict[tuple[str, str], float]:
+        """The carried bar-close marks (per venue/market) for cross-pool valuation.
+
+        The shim owns the write (``set_mark`` at step (8), for equity); the
+        liquidation module reads them here to value a venue's *other* cross positions
+        at their carried close mark (§6.5). One writer, no divergence (the N3
+        double-write resolution).
+        """
+        return self._flint_last_mark
 
     # -- per-bar equity (shim-driven) ------------------------------------------
 

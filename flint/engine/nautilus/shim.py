@@ -74,6 +74,7 @@ class BarLaneStrategy(Strategy):
         instruments: dict[str, object],
         resolution_s: int,
         funding: object = None,
+        liquidation: object = None,
     ) -> None:
         super().__init__()
         self._flint_strategy = flint_strategy
@@ -84,6 +85,10 @@ class BarLaneStrategy(Strategy):
         # feed. Bar-lane funding is shim-driven, not process-driven (see funding.py):
         # settlement must land before this bar's EQUITY snapshot for byte-exact parity.
         self._flint_funding = funding
+        # The §6.5 liquidation module (a SimulationModule) — always present. Bar-lane
+        # liquidation is shim-driven at step (4), after funding: the module plans +
+        # applies the money and hands back the Nautilus flattens the shim submits.
+        self._flint_liquidation = liquidation
         self._flint_venue_spec = spec.venue_spec
         self._flint_instruments = instruments
         self._flint_resolution_s = resolution_s
@@ -161,9 +166,15 @@ class BarLaneStrategy(Strategy):
         # (3) Funding: every final settlement in [start, end), each in ts order.
         # Shim-driven (not module.process, which runs after this bar's EQUITY in the
         # Nautilus step) so accrued_funding is byte-exact with the legacy loop (§6.4).
-        # Liquidation (step 4) is N5, registered after funding — same shim-driven order.
         if self._flint_funding is not None:
             self._flint_funding.settle_bar(candle, end)
+        # (4) Liquidation on the mark, AFTER funding (so a funding receipt can rescue a
+        # position, §6.1). Shim-driven, same reason as funding: the module plans + moves
+        # the money, and returns the Nautilus flattens the shim submits (see
+        # liquidation.py — the SimulatedExchange has no force-close API).
+        if self._flint_liquidation is not None:
+            for close in self._flint_liquidation.check_bar(candle, bar_marks):
+                self._submit_liquidation_close(close)
         # (5) Resting stop/limit/TP — adverse-extreme-first on Tier-C.
         self._process_resting(candle, bar_marks, market_marks)
         # (6) Strategy sees a read-only ctx as-of bar start; route its signals.
@@ -367,6 +378,42 @@ class BarLaneStrategy(Strategy):
             time_in_force=TimeInForce.IOC,
             client_order_id=ClientOrderId(f"n{self._flint_submission_seq}"),
             reduce_only=order.reduce_only,
+            tags=[encode_fill_tag(payload)],
+        )
+        self.submit_order(nautilus_order)
+
+    # -- (4) liquidation forced-close (module-planned, shim-submitted) ---------
+
+    def _submit_liquidation_close(self, close) -> None:
+        """Flatten one liquidated position on Nautilus at its entry price (§6.5).
+
+        The money already moved (the module credited the shadow book via the recorder
+        and mirrored it onto the Nautilus account with ``adjust_account``); this only
+        closes the Nautilus position so its book agrees with the shadow at run end.
+        A reduce-only market order pinned to the position's **entry** price
+        (:class:`FlintPriceFillModel`) with zero fee realizes exactly zero on the
+        Nautilus account, so ``adjust_account`` stays the sole money mover. The
+        ``liquidation_close`` tag tells the recorder to ignore the fill — it is
+        bookkeeping, not a FILL event.
+        """
+        instrument = self._flint_instruments[close.market]
+        self._flint_submission_seq += 1
+        payload = {
+            "price": close.price,  # entry → Nautilus realizes zero on the close
+            "fee": 0.0,
+            "market": close.market,
+            "venue": close.venue,
+            "liquidation_close": True,
+        }
+        # Reduce a long by SELLing, a short by BUYing — the opposite of the position.
+        close_side = OrderSide.SELL if close.side is Side.LONG else OrderSide.BUY
+        nautilus_order = self.order_factory.market(
+            instrument_id=instrument.id,
+            order_side=close_side,
+            quantity=Quantity.from_str(f"{close.size:.{instrument.size_precision}f}"),
+            time_in_force=TimeInForce.IOC,
+            client_order_id=ClientOrderId(f"nliq{self._flint_submission_seq}"),
+            reduce_only=True,
             tags=[encode_fill_tag(payload)],
         )
         self.submit_order(nautilus_order)
