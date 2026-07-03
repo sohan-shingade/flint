@@ -34,6 +34,12 @@ from .model_store import (
     ModelNotFound,
     UnsafeModelError,
 )
+from .templates import (
+    TemplateSpec,
+    get_template,
+    list_templates,
+    template_names,
+)
 
 __all__ = [
     "Strategy",
@@ -55,4 +61,9 @@ __all__ = [
     "ModelStoreQuotaError",
     "ModelNotFound",
     "UnsafeModelError",
+    # template registry (§8.4) — the single source of truth surfaces read
+    "TemplateSpec",
+    "get_template",
+    "list_templates",
+    "template_names",
 ]
