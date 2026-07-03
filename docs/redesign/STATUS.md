@@ -157,6 +157,15 @@ Commit hashes are the last commit of each slice on `redesign/greenfield`.
 - **Real dense-day Tier-A spike re-run** — needs HL S3 archive credentials; the
   Arrow fill path is anchored to the canonical recorded baseline instead.
 
+**UI cleanup (v1.x, non-blocking — from the 7.4b close-out):**
+- `ui/package.json` still declares `@monaco-editor/react`, `lightweight-charts`, and
+  `recharts` — unused after the legacy-page purge (D1). The production build
+  tree-shakes them (260KB / 81KB gzip verified); removing the declarations + lockfile
+  entries is deferred cleanup.
+- `ui` eslint reports 5 findings in an accepted-idiom class (the set-state-in-effect
+  fetch/loading pattern + a pre-existing `no-explicit-any` in `test/setup.ts`). The
+  gates are `vitest` / `tsc` / `vite build` (all green); eslint tightening is deferred.
+
 **Cosmetic (non-blocking):**
 - `ui/src/index.css` has a CSS `@import`-order warning (fonts import after
   `@import "tailwindcss"`); build is green.
