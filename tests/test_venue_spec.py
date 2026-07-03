@@ -9,7 +9,9 @@ asserted to be correct.
 
 from __future__ import annotations
 
-from flint.venues import HYPERLIQUID, MarketStructure
+import pytest
+
+from flint.venues import HYPERLIQUID, MaintTier, MarketStructure
 
 
 def test_hyperliquid_is_a_clob_venue():
@@ -36,6 +38,30 @@ def test_hyperliquid_taker_is_three_times_maker():
 def test_hyperliquid_price_rounding_is_five_significant_figures():
     # HL price rule: 5 significant figures. Source: HL tick/lot-size docs.
     assert HYPERLIQUID.price_sig_figs == 5
+
+
+def test_hyperliquid_maintenance_is_half_initial_at_max_leverage():
+    # Source: https://hyperliquid.gitbook.io/hyperliquid-docs/trading/liquidations
+    # "maintenance margin is half the initial margin at max leverage", ranging
+    # 1.25% (40x) to 16.7% (3x). The §6.5 golden asset is 20x → 2.5%. Verified
+    # 2026-07 (D14). Per-asset tier BOUNDARIES are unpublished → tiers_verified False.
+    liq = HYPERLIQUID.liquidation
+    assert liq.maint_frac(1_000.0) == 0.025  # 20x base tier → 2.5%
+    assert MaintTier(0.0, 40.0).maint_frac == 0.0125  # 1.25% at 40x
+    assert MaintTier(0.0, 3.0).maint_frac == pytest.approx(1 / 6)  # 16.7% at 3x
+    assert liq.tiers_verified is False
+    assert "liquidations" in liq.sources
+
+
+def test_hyperliquid_has_no_clearance_fee_and_a_two_thirds_backstop():
+    # Source: liquidations page — "Unlike CEXs there is no clearance fee on
+    # liquidations"; backstop (HLP vault takeover) triggers below 2/3 maintenance.
+    # Verified 2026-07 (D14).
+    liq = HYPERLIQUID.liquidation
+    assert liq.clearance_fee_frac == 0.0
+    assert liq.backstop_maint_frac == pytest.approx(2 / 3)
+    assert liq.adl_rank == "pnl_pct_x_leverage"  # HL ranks by PnL%×lev, not loser
+    assert "no_clearance_fee" in liq.sources
 
 
 def test_hyperliquid_funding_rate_cap_is_four_percent_hourly():

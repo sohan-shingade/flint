@@ -376,6 +376,107 @@ def test_liquidation_with_recorded_marks_is_not_flagged_ambiguous():
     assert liq.payload["intrabar_ambiguous"] is False
 
 
+# --- §6.5 liquidation: tiered maintenance, cross-pool, isolated, backstop ---
+
+ETH = "ETH-PERP"
+
+
+def _candle_for(market: str, ts: int, low: float, close: float) -> Candle:
+    return Candle(ts, 100.0, 101.0, low, close, 1000.0, market, HOUR_S, VENUE)
+
+
+def _mark_for(market: str, ts: int, price: float) -> MarkSnapshot:
+    return MarkSnapshot(
+        market=market, ts=ts, mark_price=price, index_price=price, venue=VENUE
+    )
+
+
+def test_liquidation_6_5_golden_liq_price_is_about_97_5():
+    # §6.5 worked example: long 10 SOL, entry 100, $50 margin (20× → 2.5% maint).
+    # The dive to 97 is past the trigger, so it liquidates; the recorded trigger
+    # price is the HL cross formula (1000−50)/(10×0.975) = 97.44 ≈ 97.5 (the spec's
+    # rounded figure). Not a backstop (equity 20 > 2/3×24.25), so no forfeiture.
+    state = _long_10_at_100("50")
+    engine, log = _engine(state=state)
+    engine.run([_bar(low=97.0)], marks={MARKET: [_mark(mark_price=97.0)]})
+
+    assert state.position(VENUE, MARKET) is None
+    liq = _first(log, LIQUIDATION)
+    assert liq.payload["liq_price"] == pytest.approx(97.4359, abs=1e-3)
+    assert abs(liq.payload["liq_price"] - 97.5) < 0.1  # matches spec's ≈97.5
+    assert liq.payload["margin_mode"] == "cross"
+    assert liq.payload["backstop"] is False
+    assert liq.payload["insurance_fund_solvent"] is True
+    assert liq.payload["adl_rank"] == "pnl_pct_x_leverage"
+
+
+def test_backstop_below_two_thirds_maintenance_forfeits_margin():
+    # A gap far past maintenance (equity −20 < 2/3 × 23.75) → the HLP vault takes
+    # over; under the solvent-fund assumption the loss is capped at the backing
+    # (−$30) and the covered shortfall ($20) is recorded on the event (§6.5).
+    state = _long_10_at_100("30")
+    engine, log = _engine(state=state)
+    engine.run([_bar(low=95.0)], marks={MARKET: [_mark(mark_price=95.0)]})
+
+    liq = _first(log, LIQUIDATION)
+    assert liq.payload["backstop"] is True
+    assert Decimal(liq.payload["realized_pnl"]) == Decimal("-30")  # capped at backing
+    assert Decimal(liq.payload["insurance_shortfall"]) == Decimal("20")
+    assert state.account(VENUE).cash == Decimal("0")  # vault absorbs the rest
+
+
+def test_cross_pool_closes_largest_loss_first_then_stops_when_pool_clears():
+    # Two cross positions share one $30 pool. When SOL craters, the pool breaches;
+    # the engine closes the largest-loss leg (SOL, −$20) first, then re-evaluates —
+    # the pool now clears ($10 ≥ $2.5 maint), so the ETH leg SURVIVES (§6.5).
+    state = PortfolioState()
+    state.fund(VENUE, "30")
+    state.positions[(VENUE, MARKET)] = Position(
+        market=MARKET, venue=VENUE, side=Side.LONG, size=10.0,
+        entry_price=100.0, margin_mode="cross",
+    )
+    state.positions[(VENUE, ETH)] = Position(
+        market=ETH, venue=VENUE, side=Side.LONG, size=1.0,
+        entry_price=100.0, margin_mode="cross",
+    )
+    engine, log = _engine(state=state)
+    # Bar 1: ETH benign → establishes ETH's carried mark. Bar 2: SOL dives to 98.
+    eth_bar = _candle_for(ETH, T0, low=99.0, close=100.0)
+    sol_bar = _candle_for(MARKET, T0 + HOUR_MS, low=98.0, close=98.0)
+    engine.run(
+        [eth_bar, sol_bar],
+        marks={
+            ETH: [_mark_for(ETH, T0 + 12 * 60 * 1000, 100.0)],
+            MARKET: [_mark_for(MARKET, T0 + HOUR_MS + 12 * 60 * 1000, 98.0)],
+        },
+    )
+
+    assert state.position(VENUE, MARKET) is None  # largest loss closed first
+    assert state.position(VENUE, ETH) is not None  # pool cleared → survives
+    liqs = [e for e in log.read() if e.kind == LIQUIDATION]
+    assert len(liqs) == 1
+    assert liqs[0].payload["market"] == MARKET
+    assert state.account(VENUE).cash == Decimal("10")
+
+
+def test_isolated_position_closes_whole_against_its_own_margin():
+    # A perfectly healthy cross pool (huge cash) must NOT shield an isolated
+    # position — it stands alone against its own isolated_margin and closes whole
+    # when that margin is breached (§6.5).
+    state = PortfolioState()
+    state.fund(VENUE, "100000")  # cross pool is fine; irrelevant to isolated
+    state.positions[(VENUE, MARKET)] = Position(
+        market=MARKET, venue=VENUE, side=Side.LONG, size=10.0,
+        entry_price=100.0, margin_mode="isolated", isolated_margin=30.0,
+    )
+    engine, log = _engine(state=state)
+    engine.run([_bar(low=96.0)], marks={MARKET: [_mark(mark_price=96.0)]})
+
+    assert state.position(VENUE, MARKET) is None
+    liq = _first(log, LIQUIDATION)
+    assert liq.payload["margin_mode"] == "isolated"
+
+
 # --- lifecycle + shared fill path ------------------------------------------
 
 

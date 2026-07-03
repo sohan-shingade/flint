@@ -758,7 +758,7 @@ This is why naive backtests make passive / market-making strategies look far bet
 ### 6.4 Funding — worked example + the predicted/final contract
 
 Holding a long 10 SOL on Hyperliquid; the settlement-time oracle price is 100.00; the **final settled** hourly rate for this settlement is `+0.01%`:
-- Payment = `size × oracle_price × final_rate` = `10 × 100.00 × 0.0001` = **$1.00**, and since the rate is positive, **longs pay**, so −$1.00 to this position.
+- Payment = `size × oracle_price × final_rate` = `10 × 100.00 × 0.0001` = **$0.10**, and since the rate is positive, **longs pay**, so −$0.10 to this position. *(Erratum fixed during build: this previously read "$1.00"; the formula is normative and `10 × 100 × 0.0001 = 0.10`.)*
 - The **notional snapshot**: the payment is sized on the oracle price **at the settlement second** (interpolated from the nearest mark snapshots when the settlement falls inside a bar) — not the bar close, which can differ by percent in a fast market.
 - The same on Binance would price on **mark**, not oracle, and settle every 8h not hourly. The engine reads `price_basis` and `interval_s` off the `FundingRate` to do the right thing per venue, and clamps to the venue-spec `rate_cap_hourly` (HL: 4%/hr — primary-source cited in the spec, §2.2).
 - Only positions open *at the settlement timestamp* are charged.

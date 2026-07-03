@@ -78,8 +78,8 @@ from .funding.settlement import (
 )
 from .liquidation.check import (
     bankruptcy_price,
-    is_liquidated,
-    maintenance_requirement,
+    liquidation_price,
+    tiered_maintenance,
 )
 from .money import money
 from .state import PortfolioState
@@ -89,13 +89,15 @@ from .state import PortfolioState
 class EngineConfig:
     """The engine's locked-but-calibratable defaults for a run.
 
-    ``maint_frac`` is the flat maintenance-margin fraction (slice 3.4 replaces it
-    with the venue's size-tiered table). Fees, latency, tick, and the oracle band
-    are venue law and live on the ``VenueSpec`` (D14), not here. ``rng_seed`` seeds
-    ``ctx.rng`` — and the fill-model latency draws — so a run is deterministic.
+    ``maint_frac`` is retained only for back-compat: since slice 3.4 the
+    liquidation check reads the venue's size-tiered maintenance off
+    ``VenueSpec.liquidation`` (§6.5, D14), so this flat fraction is no longer
+    consulted. Fees, latency, tick, and the oracle band are likewise venue law on
+    the ``VenueSpec``, not here. ``rng_seed`` seeds ``ctx.rng`` — and the
+    fill-model latency draws — so a run is deterministic.
     """
 
-    maint_frac: float = 0.025
+    maint_frac: float = 0.025  # superseded by VenueSpec.liquidation tiers (§6.5)
     rng_seed: int = 0
 
 
@@ -185,6 +187,10 @@ class BacktestEngine:
         # run ends (GTC).
         self._resting: list[Order] = []
         self._coid = 0  # client-order-id counter (slice 3.5 makes it idempotent)
+        # Last representative (bar-closing) mark per (venue, market) — lets the
+        # cross-pool liquidation check value positions on markets other than the
+        # one whose candle is being processed this bar (§6.5).
+        self._last_mark: dict[tuple[str, str], float] = {}
 
     # -- public entry point ----------------------------------------------------
 
@@ -333,37 +339,155 @@ class BacktestEngine:
     def _check_liquidations(
         self, candle: Candle, bar_marks: list[MarkSnapshot]
     ) -> None:
-        """Liquidate any position on this market whose equity fell below maintenance."""
-        key = (candle.venue, candle.market)
-        pos = self.state.positions.get(key)
-        if pos is None:
-            return
-        adverse, ambiguous = self._adverse_mark(pos.side, candle, bar_marks)
-        acct = self.state.account(candle.venue)
-        cash_before = float(acct.cash)
-        equity = cash_before + pos.unrealized_pnl(adverse)
-        maintenance = maintenance_requirement(pos, adverse, self._cfg.maint_frac)
-        if not is_liquidated(equity, maintenance):
-            return
-        realized = (adverse - pos.entry_price) * pos.side.sign * pos.size
+        """Mark-based liquidation on this venue, after funding (§6.5).
+
+        Isolated positions stand alone against their own ``isolated_margin``;
+        cross positions share the venue's cash pool, so one breaching position
+        endangers all of them — the cross pool is evaluated across *every* cross
+        position on the venue each bar (not per-position) and the largest-loss one
+        closes first, repeating until the pool clears maintenance. The current
+        market's position is stressed at its adverse in-bar extreme; positions on
+        other markets are valued at their last recorded close mark.
+        """
+        venue = candle.venue
+        curkey = (venue, candle.market)
+        # Best-available mark (+ path-ambiguity) per position on this venue.
+        marks: dict[tuple[str, str], tuple[float, bool]] = {}
+        curpos = self.state.positions.get(curkey)
+        if curpos is not None:
+            marks[curkey] = self._adverse_mark(curpos.side, candle, bar_marks)
+        for key in self.state.positions:
+            if key[0] == venue and key != curkey and key in self._last_mark:
+                marks[key] = (self._last_mark[key], True)  # carried → path assumed
+
+        # Isolated: each closes whole against its own dedicated margin.
+        isolated = [
+            k
+            for k, p in self.state.positions.items()
+            if k in marks and p.margin_mode == "isolated"
+        ]
+        for key in isolated:
+            pos = self.state.positions[key]
+            mark, ambiguous = marks[key]
+            maintenance = tiered_maintenance(pos, mark, self._spec.liquidation)
+            equity = pos.isolated_margin + pos.unrealized_pnl(mark)
+            if equity < maintenance:
+                self._liquidate(
+                    key, mark, equity, maintenance,
+                    backing=pos.isolated_margin, ambiguous=ambiguous, ts=candle.ts,
+                )
+
+        # Cross: shared-pool cascade.
+        self._resolve_cross_pool(venue, marks, ts=candle.ts)
+
+        # Carry a representative (bar-closing) mark forward for next bar.
+        self._last_mark[curkey] = (
+            bar_marks[-1].mark_price if bar_marks else candle.close
+        )
+
+    def _resolve_cross_pool(
+        self,
+        venue: str,
+        marks: dict[tuple[str, str], tuple[float, bool]],
+        ts: int,
+    ) -> None:
+        """Deplete the shared cross pool, closing the largest-loss position first.
+
+        Cross pool = venue cash + unrealized PnL across all cross positions; it
+        must cover the sum of their maintenance. While it doesn't, the most
+        underwater cross position is liquidated and the pool re-evaluated — its
+        loss can drag the rest under, exactly the shared-collateral risk a naive
+        per-position check hides (§6.5).
+        """
+        acct = self.state.account(venue)
+
+        def cross_items() -> list[tuple[tuple[str, str], Position, float, bool]]:
+            return [
+                (key, self.state.positions[key], marks[key][0], marks[key][1])
+                for key in list(self.state.positions)
+                if key[0] == venue
+                and key in marks
+                and self.state.positions[key].margin_mode == "cross"
+            ]
+
+        while True:
+            items = cross_items()
+            if not items:
+                return
+            pool_equity = float(acct.cash) + sum(
+                p.unrealized_pnl(m) for _, p, m, _ in items
+            )
+            pool_maint = sum(
+                tiered_maintenance(p, m, self._spec.liquidation)
+                for _, p, m, _ in items
+            )
+            if pool_equity >= pool_maint:
+                return  # pool clears maintenance
+            key, _pos, mark, ambiguous = min(
+                items, key=lambda it: it[1].unrealized_pnl(it[2])
+            )
+            self._liquidate(
+                key, mark, pool_equity, pool_maint,
+                backing=float(acct.cash), ambiguous=ambiguous, ts=ts,
+            )
+
+    def _liquidate(
+        self,
+        key: tuple[str, str],
+        mark: float,
+        equity: float,
+        maintenance: float,
+        *,
+        backing: float,
+        ambiguous: bool,
+        ts: int,
+    ) -> None:
+        """Realize a liquidated position, apply the post-trigger loss, emit (§6.5).
+
+        HL charges no clearance fee, so the position realizes at the mark; the
+        extra loss comes from the *backstop*: below ``backstop_maint_frac`` ×
+        maintenance the HLP vault takes over and the user forfeits remaining
+        margin. Under the v1 solvent-fund assumption the vault absorbs any
+        sub-bankruptcy gap, so the backing cannot go negative — the covered
+        ``insurance_shortfall`` is recorded so the tearsheet can surface it.
+        """
+        venue, market = key
+        pos = self.state.positions[key]
+        liq = self._spec.liquidation
+        acct = self.state.account(venue)
+        m_frac = liq.maint_frac(pos.notional(mark))
+        realized = (mark - pos.entry_price) * pos.side.sign * pos.size
+        backstop = equity < liq.backstop_maint_frac * maintenance
+        shortfall = 0.0
+        if backstop and liq.insurance_fund_solvent:
+            max_loss = -backing  # realizing this leaves the backing at exactly zero
+            if realized < max_loss:
+                shortfall = max_loss - realized  # the vault covers this gap
+                realized = max_loss
         acct.credit(money(realized))
         acct.realized_pnl += money(realized)
         del self.state.positions[key]
         self._log.emit(
             LIQUIDATION,
             {
-                "market": candle.market,
-                "venue": candle.venue,
+                "market": market,
+                "venue": venue,
                 "side": pos.side,
                 "size": pos.size,
-                "mark_price": adverse,
+                "margin_mode": pos.margin_mode,
+                "mark_price": mark,
                 "equity": equity,
                 "maintenance": maintenance,
-                "bankruptcy_price": bankruptcy_price(pos, cash_before),
+                "liq_price": liquidation_price(pos, backing, m_frac),
+                "bankruptcy_price": bankruptcy_price(pos, backing),
                 "realized_pnl": str(money(realized)),
+                "backstop": backstop,
+                "insurance_fund_solvent": liq.insurance_fund_solvent,
+                "insurance_shortfall": str(money(shortfall)),
+                "adl_rank": liq.adl_rank,
                 "intrabar_ambiguous": ambiguous,
             },
-            ts=candle.ts,
+            ts=ts,
         )
 
     @staticmethod

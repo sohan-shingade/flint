@@ -8,12 +8,22 @@ for the fill engine.
 
 from __future__ import annotations
 
-from .spec import HYPERLIQUID, LatencyProfile, VenueSpec
+from .spec import (
+    HYPERLIQUID,
+    HYPERLIQUID_LIQUIDATION,
+    LatencyProfile,
+    LiquidationSpec,
+    MaintTier,
+    VenueSpec,
+)
 from .structure import MarketStructure
 
 __all__ = [
     "MarketStructure",
     "VenueSpec",
     "LatencyProfile",
+    "LiquidationSpec",
+    "MaintTier",
     "HYPERLIQUID",
+    "HYPERLIQUID_LIQUIDATION",
 ]
