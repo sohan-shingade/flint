@@ -5,7 +5,7 @@
 
 ### `flint.data.store.__init__`
 _data.store — durable port adapters + lake layout (§2.7, §9, §9.0)._
-- imports: `.cache`, `.coverage`, `.duckdb_adapter`, `.durable_cache`, `.layout`
+- imports: `.cache`, `.coverage`, `.duckdb_adapter`, `.durable_cache`, `.layout`, `.prune`
 
 ### `flint.data.store.cache`
 _Content-addressed cache keys + freshness policy for the local cache (§9.0)._
@@ -50,17 +50,29 @@ _Durable Parquet-backed local cache tier (§9.0)._
     - `def __init__(self, root: str | Path, *, registry: MigrationRegistry | None=None) -> None`
     - `def available(self, venue: str, market: str, kind: Kind, want: TimeRange) -> RangeSet`
     - `def coverage_ledger(self, venue: str, market: str, kind: Kind) -> CoverageLedger` — The asserted-coverage ledger of one stream directory, created if absent.
-    - `def fetch(self, venue: str, market: str, kind: Kind, span: TimeRange) -> pa.Table`
+    - `def fetch(self, venue: str, market: str, kind: Kind, span: TimeRange) -> pa.Table` — Materialize ``span`` as one table.
+    - `def fetch_batches(self, venue: str, market: str, kind: Kind, span: TimeRange, *, batch_size: int=DEFAULT_BATCH_SIZE) -> Iterator[pa.RecordBatch]` — Stream ``span`` batch-by-batch, never materializing a fragment set.
     - `def store(self, venue: str, market: str, kind: Kind, table: pa.Table) -> None` — Write ``table`` through to the Parquet lake, merging by ts per partition.
 
 ### `flint.data.store.layout`
 _Parquet lake layout + upgrade-on-read migration (§9.0)._
 - `def is_hour_partitioned(kind: str) -> bool` — True if ``kind`` partitions ``date/hour`` instead of ``date`` (§9.0).
 - `def partition_path(kind: str, venue: str, market: str, date: str, *, hour: int | None=None) -> str` — Return the partition sub-path ``kind/venue/market/date[/hour]`` (§9.0).
-- `def write_parquet(table: pa.Table, path: str, *, schema_version: int=SCHEMA_VERSION) -> None` — Write ``table`` to ``path`` with ``schema_version`` stamped in metadata.
+- `def write_parquet(table: pa.Table, path: str, *, schema_version: int=SCHEMA_VERSION, kind: str | None=None) -> None` — Write ``table`` to ``path`` with ``schema_version`` stamped in metadata.
 - `def read_schema_version(path: str) -> int` — Return the ``schema_version`` stamped in ``path`` (0 if unstamped).
 - `class MigrationRegistry` — Upgrade-on-read for lake Parquet files (§9.0).
     - `def __init__(self) -> None`
     - `def register(self, from_version: int) -> Callable[[Callable[[pa.Table], pa.Table]], Callable[[pa.Table], pa.Table]]` — Register the transform that promotes ``from_version`` → ``from_version + 1``.
     - `def upgrade(self, table: pa.Table, from_version: int, to_version: int=SCHEMA_VERSION) -> pa.Table` — Walk ``table`` from ``from_version`` up to ``to_version``, one step at a time.
 - `def read_parquet(path: str, *, registry: MigrationRegistry | None=None, to_version: int=SCHEMA_VERSION) -> pa.Table` — Read ``path`` and upgrade it on read to ``to_version`` if it is older.
+
+### `flint.data.store.prune`
+_Storage retention + ``flint data prune`` (D5, §B2/§B9)._
+- imports: `..ranges`, `.coverage`, `.layout`
+- `class PrunedPartition` — One partition file the pass deleted (or would delete, in dry-run).
+- `class PrunedCoverage` — Coverage retracted from one stream's ledger (exact removed sub-ranges).
+- `class PruneReport` — What a prune pass did (or would do — ``dry_run``).
+    - `def bytes_reclaimed(self) -> int`
+    - `def to_payload(self) -> dict` — JSON-safe summary for the CLI.
+- `def retention_boundary_ms(kind: Kind, days: int, now_ms: int) -> int` — Everything strictly before this instant is out of retention.
+- `def prune(root: str | Path, *, retention_days: dict[Kind, int | None] | None=None, now_ms: int | None=None, dry_run: bool=False) -> PruneReport` — Apply retention to the lake at ``root``; see the module docstring.

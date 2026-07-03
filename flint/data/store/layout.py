@@ -25,6 +25,19 @@ _SCHEMA_VERSION_KEY = b"flint_schema_version"
 # hour-partitioned; every other kind is day-partitioned (§9.0).
 _HOUR_PARTITIONED = frozenset({"depth", "trades", "quotes", "book_delta"})
 
+# Per-kind Parquet writer options (D5 write tuning). BOOK_DELTA is the only
+# kind whose volume warrants tuning: zstd beats the pyarrow default (snappy) by
+# ~14% on the real 2026-06-01 HL fragment (16.9 vs 19.6 bytes/row on disk;
+# ~74 bytes/row decoded), and ~1M-row row groups (~17 MB on disk / ~75 MB
+# decoded at those rates) keep a full HL day (tens of millions of flat delta
+# rows) split into dozens of independently readable groups, so a streaming
+# reader's peak memory is one row group, never a day. Every other kind gets
+# NO options — byte-identical writer behavior to pre-D5 files (and old files
+# need no migration either way: these are writer defaults, not schema).
+_WRITER_OPTIONS_BY_KIND: dict[str, dict[str, object]] = {
+    "book_delta": {"compression": "zstd", "row_group_size": 1_000_000},
+}
+
 
 def is_hour_partitioned(kind: str) -> bool:
     """True if ``kind`` partitions ``date/hour`` instead of ``date`` (§9.0)."""
@@ -49,12 +62,23 @@ def partition_path(
 
 
 def write_parquet(
-    table: pa.Table, path: str, *, schema_version: int = SCHEMA_VERSION
+    table: pa.Table,
+    path: str,
+    *,
+    schema_version: int = SCHEMA_VERSION,
+    kind: str | None = None,
 ) -> None:
-    """Write ``table`` to ``path`` with ``schema_version`` stamped in metadata."""
+    """Write ``table`` to ``path`` with ``schema_version`` stamped in metadata.
+
+    ``kind`` (the ``Kind`` string value) selects per-kind writer options
+    (:data:`_WRITER_OPTIONS_BY_KIND` — zstd + ~1M-row row groups for
+    ``book_delta``); omitted or unlisted kinds write with pyarrow defaults,
+    exactly as before D5.
+    """
     existing = dict(table.schema.metadata or {})
     existing[_SCHEMA_VERSION_KEY] = str(schema_version).encode()
-    pq.write_table(table.replace_schema_metadata(existing), path)
+    options = _WRITER_OPTIONS_BY_KIND.get(kind or "", {})
+    pq.write_table(table.replace_schema_metadata(existing), path, **options)
 
 
 def read_schema_version(path: str) -> int:

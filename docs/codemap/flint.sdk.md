@@ -9,7 +9,7 @@ _sdk — the Lab object and the ``flint`` CLI; delegates to services/ (§17)._
 
 ### `flint.sdk.cli`
 _The ``flint`` CLI — the everyday drivers over ``services/`` (§12)._
-- imports: `.lab`, `.logging`, `flint.adapters`, `flint.api`, `flint.api.security`, `flint.data.ingest.recorders`, `flint.data.ranges`, `flint.data.store`, `flint.live`, `flint.ports`, `flint.services`, `flint.venues.hyperliquid`
+- imports: `.lab`, `.logging`, `flint.adapters`, `flint.api`, `flint.api.security`, `flint.data.ingest.recorders`, `flint.data.ranges`, `flint.data.store`, `flint.data.store.prune`, `flint.live`, `flint.ports`, `flint.services`, `flint.venues.hyperliquid`
 - `def cmd_backtest(args: argparse.Namespace, *, lab: Lab | None=None, out=print) -> int`
 - `def cmd_optimize(args: argparse.Namespace, *, lab: Lab | None=None, out=print) -> int`
 - `def cmd_paper(args: argparse.Namespace, *, lab: Lab | None=None, out=print) -> int`
@@ -20,6 +20,7 @@ _The ``flint`` CLI — the everyday drivers over ``services/`` (§12)._
 - `def cmd_data_import_legacy(args: argparse.Namespace, *, lab: Lab | None=None, out=print) -> int`
 - `def cmd_export(args: argparse.Namespace, *, lab: Lab | None=None, out=print) -> int`
 - `def cmd_data_record(args: argparse.Namespace, *, source: Any | None=None, cache: Any | None=None, out=print) -> int` — Always-on live tick capture without a paper session (§9.2, §12).
+- `def cmd_data_prune(args: argparse.Namespace, *, out=print) -> int` — Apply per-kind retention to the local lake (D5, §B9).
 - `def cmd_recorder_start(args: argparse.Namespace, *, out=print) -> int` — Describe the self-hosted capture (a foreground live process; §12/§20).
 - `def build_parser() -> argparse.ArgumentParser`
 - `def main(argv: Sequence[str] | None=None) -> int` — Parse ``argv`` and dispatch. Returns the process exit code.

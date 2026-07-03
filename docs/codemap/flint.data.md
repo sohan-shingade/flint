@@ -123,6 +123,7 @@ _The source chain — where the DataManager looks for data, in order (§9)._
 - `class DataSource(ABC)` — One tier of the source chain. Kind-agnostic: candles/funding/OI/depth.
     - `def available(self, venue: str, market: str, kind: Kind, want: TimeRange) -> RangeSet` — Sub-ranges of ``want`` this source can serve for ``(venue, market, kind)``.
     - `def fetch(self, venue: str, market: str, kind: Kind, span: TimeRange) -> pa.Table` — Rows within half-open ``span``, ordered by ``ts``. Empty table if none.
+    - `def fetch_batches(self, venue: str, market: str, kind: Kind, span: TimeRange, *, batch_size: int=DEFAULT_BATCH_SIZE) -> Iterator[pa.RecordBatch]` — ``fetch`` as a bounded stream of ``RecordBatch``es (D5, §9.2).
 - `class InMemoryCacheSource(DataSource)` — The local cache tier — writable, so the manager writes through to it (§9).
     - `def __init__(self) -> None`
     - `def available(self, venue: str, market: str, kind: Kind, want: TimeRange) -> RangeSet`

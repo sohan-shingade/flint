@@ -31,7 +31,7 @@ holds without re-reading every row.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -39,9 +39,17 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..ranges import Kind, RangeSet, TimeRange
-from ..sources import DataSource
+from ..sources import DEFAULT_BATCH_SIZE, DataSource
 from .coverage import CoverageLedger
-from .layout import MigrationRegistry, partition_path, read_parquet, write_parquet
+from .layout import (
+    DEFAULT_MIGRATIONS,
+    SCHEMA_VERSION,
+    MigrationRegistry,
+    partition_path,
+    read_parquet,
+    read_schema_version,
+    write_parquet,
+)
 
 _PART_FILE = "part.parquet"
 # Sampled depth snapshots plus every tick-scale kind (mirrors layout.py's
@@ -54,10 +62,20 @@ _HOUR_PARTITIONED = frozenset({Kind.DEPTH}) | frozenset(
 # silently drops one of a predicted+final funding pair sharing a settlement ts,
 # and distinct trades/deltas can legitimately share a millisecond. Columns
 # missing from a table are skipped, so schema-light fixtures degrade to ts.
+#
+# QUOTES tie-break (D5, carried flag from D2): QUOTES_SCHEMA has no ``seq``
+# column (adding one is a lake schema bump — deliberately avoided), so the
+# identity is the full BBO row: distinct same-millisecond BBO updates both
+# survive, while byte-identical rows from overlapping ingests still collapse.
+# Caveat, documented: arrival order *within* one millisecond is not preserved
+# (rows sort by px/sz inside a ts tie); same-ms BBO consumers read the set of
+# states, not the sub-ms sequence. Revisit with a seq column if sub-ms BBO
+# ordering ever becomes load-bearing.
 _DEDUPE_KEYS: dict[Kind, tuple[str, ...]] = {
     Kind.FUNDING: ("ts", "rate_type"),
     Kind.TRADES: ("ts", "trade_id"),
     Kind.BOOK_DELTA: ("ts", "seq"),
+    Kind.QUOTES: ("ts", "bid_px", "bid_sz", "ask_px", "ask_sz"),
 }
 
 
@@ -154,6 +172,14 @@ class DurableCacheSource(DataSource):
     def fetch(
         self, venue: str, market: str, kind: Kind, span: TimeRange
     ) -> pa.Table:
+        """Materialize ``span`` as one table.
+
+        BOOK_DELTA callers must prefer :meth:`fetch_batches`: a whole-table
+        fetch of an L2 day concatenates tens of millions of rows, which is
+        exactly what the streaming surface exists to avoid (D5). The
+        DataManager never routes BOOK_DELTA through here — it hands out
+        ``PreparedData.streams`` handles instead.
+        """
         tables = [
             read_parquet(str(p), registry=self._registry)
             for p in self._partition_files(venue, market, kind, span)
@@ -164,6 +190,49 @@ class DurableCacheSource(DataSource):
         merged = _dedupe_sorted(pa.concat_tables(tables), kind)
         return self._slice_half_open(merged, span)
 
+    def fetch_batches(
+        self,
+        venue: str,
+        market: str,
+        kind: Kind,
+        span: TimeRange,
+        *,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+    ) -> Iterator[pa.RecordBatch]:
+        """Stream ``span`` batch-by-batch, never materializing a fragment set.
+
+        Native override of the :class:`~flint.data.sources.DataSource` default
+        (D5): partition files are visited in path order — chronological, since
+        dates are ISO and hours zero-padded — and each is read through
+        ``ParquetFile.iter_batches``, so peak memory is one row group (~1M rows
+        for BOOK_DELTA under the D5 writer tuning), not a day. Rows were
+        deduped + sorted by the kind's identity key at write time, and one
+        identity key always lands in exactly one partition file, so no
+        cross-fragment merge or dedupe is needed on the way out.
+
+        Files stamped with an older lake ``schema_version`` upgrade on read
+        per batch — sound because lake migrations are row-local (v1→v2 derives
+        ``settlement_ts`` from the same row); a future non-row-local migration
+        must materialize instead (guarded in ``layout``'s registry review).
+        """
+        for path in self._partition_files(venue, market, kind, span):
+            version = read_schema_version(str(path))
+            parquet = pq.ParquetFile(str(path))
+            for batch in parquet.iter_batches(batch_size=batch_size):
+                if batch.num_rows == 0:
+                    continue
+                if version < SCHEMA_VERSION:
+                    upgraded = (self._registry or DEFAULT_MIGRATIONS).upgrade(
+                        pa.Table.from_batches([batch]), version
+                    )
+                    candidates = upgraded.to_batches(max_chunksize=batch_size)
+                else:
+                    candidates = [batch]
+                for candidate in candidates:
+                    sliced = self._slice_batch_half_open(candidate, span)
+                    if sliced.num_rows:
+                        yield sliced
+
     def store(self, venue: str, market: str, kind: Kind, table: pa.Table) -> None:
         """Write ``table`` through to the Parquet lake, merging by ts per partition."""
         if table.num_rows == 0:
@@ -173,7 +242,7 @@ class DurableCacheSource(DataSource):
             combined = pa.concat_tables([existing, part]) if existing is not None else part
             merged = _dedupe_sorted(combined, kind)
             path.parent.mkdir(parents=True, exist_ok=True)
-            write_parquet(merged, str(path))
+            write_parquet(merged, str(path), kind=kind.value)
         lo, hi = self._extend_held(venue, market, kind, table)
         if not kind.is_tick_scale:
             # Once a directory has an authoritative ledger, non-tick
@@ -292,3 +361,16 @@ class DurableCacheSource(DataSource):
             pc.greater_equal(ts, span.start_ms), pc.less(ts, span.end_ms)
         )
         return table.filter(mask)
+
+    @staticmethod
+    def _slice_batch_half_open(batch: pa.RecordBatch, span: TimeRange) -> pa.RecordBatch:
+        """Half-open ts slice of one batch (edges of a partition may overhang)."""
+        import pyarrow.compute as pc
+
+        if batch.num_rows == 0 or "ts" not in batch.schema.names:
+            return batch
+        ts = batch.column("ts")
+        mask = pc.and_(
+            pc.greater_equal(ts, span.start_ms), pc.less(ts, span.end_ms)
+        )
+        return batch.filter(mask)
