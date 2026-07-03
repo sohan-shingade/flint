@@ -31,26 +31,23 @@ from ._compat import (
     BacktestEngine,
     BacktestEngineConfig,
     ClientId,
+    DataEngineConfig,
     LoggingConfig,
     Money,
     OmsType,
-    Strategy,
     Venue,
 )
+from .execmodels import FlintPriceFillModel, FlintTagFeeModel
+from .shim import BarLaneStrategy
 from .translate import FlintRecorder
 
-
-class _NoopHostStrategy(Strategy):
-    """The strategy slot — inert in N2, the bar-lane shim's host in N3.
-
-    Holds a reference to the Flint strategy so N3 can subscribe it to bars, route
-    its Signals to marketable orders, and fold the resulting fills into the shadow
-    book. In N2 it does nothing, so a Noop run trades not at all.
-    """
-
-    def __init__(self, flint_strategy: object) -> None:
-        super().__init__()
-        self._flint_strategy = flint_strategy
+# Bar-lane instrument price precision. Flint prices to 5 significant figures
+# (VenueSpec.price_sig_figs); a fixed 8-decimal instrument precision represents
+# those exactly for every HL perp priced above ~$0.001 and keeps the Nautilus fill
+# price within the §19.4 entry tolerance of Flint's. HL's real rule is
+# significant-figure- not decimal-based, so per-asset precision for sub-cent alts is
+# a later refinement — the bar-lane markets (majors) are well inside this bound.
+_BAR_LANE_PRICE_PRECISION = 8
 
 
 class NautilusEngine:
@@ -92,6 +89,8 @@ class NautilusEngine:
             config=BacktestEngineConfig(
                 trader_id="FLINT-001",
                 logging=LoggingConfig(bypass_logging=True),
+                # Never fabricate an empty bar for a trade-less interval (D26).
+                data_engine=DataEngineConfig(time_bars_build_with_no_updates=False),
             )
         )
         engine.add_venue(
@@ -100,17 +99,28 @@ class NautilusEngine:
             account_type=AccountType.MARGIN,
             base_currency=USDC,
             starting_balances=[Money(Decimal(spec.initial_capital), USDC)],
+            # Flint prices every fill: a synthetic book pinned to Flint's price and a
+            # fee model echoing Flint's fee, so Nautilus's account/positions mirror
+            # the shadow book (§A7). Synchronous processing so the OrderFilled →
+            # FILL translation happens inline in the shim's per-bar sequence.
+            fill_model=FlintPriceFillModel(),
+            fee_model=FlintTagFeeModel(),
+            use_message_queue=False,
         )
 
-        # One instrument + bar type per market; remember precisions for conversion.
+        # One instrument per market; a raised price precision so Flint's 5-sig-fig
+        # fill prices round-trip within the §19.4 entry tolerance (see module const).
         markets = sorted({c.market for c in feed.candles})
         instruments: dict[str, object] = {}
-        bar_types = []
         for market in markets:
-            instrument = dataconv.build_instrument(spec.venue_spec, market, venue_str)
+            instrument = dataconv.build_instrument(
+                spec.venue_spec,
+                market,
+                venue_str,
+                price_precision=_BAR_LANE_PRICE_PRECISION,
+            )
             engine.add_instrument(instrument)
             instruments[market] = instrument
-            bar_types.append(dataconv.bar_type_for(instrument.id, resolution_s))
 
         builtin_data: list = []
         funding_data: list = []
@@ -159,14 +169,25 @@ class NautilusEngine:
         recorder = FlintRecorder(
             event_log=event_log,
             shadow=shadow,
-            bar_types=bar_types,
-            resolution_s=resolution_s,
             engine_name=self.name,
         )
+        shim = BarLaneStrategy(
+            flint_strategy=strategy,
+            feed=feed,
+            recorder=recorder,
+            shadow=shadow,
+            spec=spec,
+            instruments=instruments,
+            resolution_s=resolution_s,
+        )
         engine.add_actor(recorder)
-        engine.add_strategy(_NoopHostStrategy(strategy))
+        engine.add_strategy(shim)
 
         engine.run()
+        # Run-end order cancels (shim-driven, legacy order) precede RUN_FINISHED,
+        # then reconcile the shadow book against Nautilus's own account/positions.
+        shim.finalize_run()
+        recorder.emit_run_finished()
         recorder.reconcile(
             portfolio=engine.portfolio,
             cache=engine.cache,

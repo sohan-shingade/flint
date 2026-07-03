@@ -16,6 +16,7 @@ from .arrow import (
     materialize,
     taker_walk_batch,
 )
+from .assemble import assemble_fill_context
 from .base import FillContext, FillModel, FillResult, TradePrint
 from .clob import ClobFillModel
 from .latency import LatencyModel
@@ -37,6 +38,7 @@ __all__ = [
     "FillContext",
     "FillResult",
     "TradePrint",
+    "assemble_fill_context",
     "NaiveFillModel",
     "ClobFillModel",
     "OraclePoolFillModel",

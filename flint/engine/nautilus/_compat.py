@@ -42,6 +42,7 @@ from nautilus_trader.backtest.engine import (  # noqa: E402
     BacktestEngine,
     BacktestEngineConfig,
 )
+from nautilus_trader.backtest.models import FeeModel, FillModel  # noqa: E402
 from nautilus_trader.config import (  # noqa: E402
     DataEngineConfig,
     LoggingConfig,
@@ -57,6 +58,7 @@ from nautilus_trader.core.data import Data  # noqa: E402
 # --- model: identifiers ------------------------------------------------------
 from nautilus_trader.model.identifiers import (  # noqa: E402
     ClientId,
+    ClientOrderId,
     InstrumentId,
     Symbol,
     TradeId,
@@ -68,11 +70,18 @@ from nautilus_trader.model.data import (  # noqa: E402
     Bar,
     BarSpecification,
     BarType,
+    BookOrder,
     DataType,
     IndexPriceUpdate,
     MarkPriceUpdate,
     TradeTick,
 )
+
+# --- model: order book (synthetic fill-simulation book) ----------------------
+from nautilus_trader.model.book import OrderBook  # noqa: E402
+
+# --- model: events (order lifecycle the recorder translates) -----------------
+from nautilus_trader.model.events import OrderFilled  # noqa: E402
 
 # --- model: enums ------------------------------------------------------------
 from nautilus_trader.model.enums import (  # noqa: E402
@@ -80,9 +89,12 @@ from nautilus_trader.model.enums import (  # noqa: E402
     AggregationSource,
     AggressorSide,
     BarAggregation,
+    BookType,
+    LiquiditySide,
     OmsType,
     OrderSide,
     PriceType,
+    TimeInForce,
 )
 
 # --- model: instruments ------------------------------------------------------
@@ -101,12 +113,15 @@ __all__ = [
     "NAUTILUS_REQUIRED",
     "BacktestEngine",
     "BacktestEngineConfig",
+    "FeeModel",
+    "FillModel",
     "DataEngineConfig",
     "LoggingConfig",
     "Actor",
     "Strategy",
     "Data",
     "ClientId",
+    "ClientOrderId",
     "InstrumentId",
     "Symbol",
     "TradeId",
@@ -114,17 +129,23 @@ __all__ = [
     "Bar",
     "BarSpecification",
     "BarType",
+    "BookOrder",
     "DataType",
     "IndexPriceUpdate",
     "MarkPriceUpdate",
     "TradeTick",
+    "OrderBook",
+    "OrderFilled",
     "AccountType",
     "AggregationSource",
     "AggressorSide",
     "BarAggregation",
+    "BookType",
+    "LiquiditySide",
     "OmsType",
     "OrderSide",
     "PriceType",
+    "TimeInForce",
     "CryptoPerpetual",
     "USDC",
     "Currency",

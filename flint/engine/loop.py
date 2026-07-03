@@ -75,6 +75,7 @@ from .fills import (
     FillResult,
     LatencyModel,
     TradePrint,
+    assemble_fill_context,
     fill_model_for,
 )
 from .context import AccountView, OpenInterestSnapshot
@@ -863,66 +864,21 @@ class BacktestEngine:
     ) -> FillContext:
         """Assemble the fill context at the order's effective time (§6.3).
 
-        Effective time = submit + a seeded latency draw; the book and oracle are
-        selected as-of that time, so the fill sees the market as it had moved, not
-        as the strategy saw it. With no recorded book the model runs Tier-C.
+        Delegates to the shared :func:`assemble_fill_context` — the same builder the
+        Nautilus bar-lane shim uses — so both engines draw latency once, in the same
+        place, per fill and derive an identical context from identical inputs (§6.0).
         """
-        spec = self._spec
-        submit_ts = candle.ts
-        effective_ts = submit_ts + int(self._latency.draw_ms(self._rng))
-        book, stale = self._book_as_of(order.market, effective_ts)
-        end = bar_end(candle.ts, candle.resolution_s)
-        return FillContext(
+        return assemble_fill_context(
+            order,
             reference_price=reference_price,
-            ts=submit_ts,
-            effective_ts=effective_ts,
-            taker_fee_rate=spec.taker_fee_rate,
-            maker_fee_rate=spec.maker_fee_rate,
-            book=book,
-            trades=self._trades_in_bar(order.market, candle.ts, end),
-            oracle_price=self._oracle_as_of(market_marks, effective_ts, candle.close),
-            oracle_band_bps=spec.oracle_band_bps,
-            stale_book=stale,
-            queue_ahead=self._queue_ahead(book, order),
-            bar_dollar_volume=candle.volume * candle.open,
-            half_spread_bps=spec.default_half_spread_bps,
-            impact_k=spec.tier_c_impact_k,
-            price_sig_figs=spec.price_sig_figs,
+            candle=candle,
+            market_marks=market_marks,
+            spec=self._spec,
+            latency=self._latency,
+            rng=self._rng,
+            books=self._books,
+            trades=self._trades,
         )
-
-    def _book_as_of(
-        self, market: str, effective_ts: int
-    ) -> tuple[OrderbookSnapshot | None, bool]:
-        """The book at-or-before ``effective_ts`` and whether it is stale (§6.3)."""
-        snap = last_before(
-            self._books.get(market, []), effective_ts + 1, key=lambda b: b.ts
-        )
-        if snap is None:
-            return None, False
-        stale = (effective_ts - snap.ts) > self._spec.book_staleness_s * 1000
-        return snap, stale
-
-    def _trades_in_bar(
-        self, market: str, start: int, end: int
-    ) -> tuple[TradePrint, ...]:
-        return tuple(
-            t for t in self._trades.get(market, []) if start <= t.ts < end
-        )
-
-    @staticmethod
-    def _oracle_as_of(
-        market_marks: list[MarkSnapshot], effective_ts: int, fallback: float
-    ) -> float:
-        snap = last_before(market_marks, effective_ts + 1, key=lambda m: m.ts)
-        return snap.index_price if snap is not None else fallback
-
-    @staticmethod
-    def _queue_ahead(book: OrderbookSnapshot | None, order: Order) -> float:
-        """Resting size ahead of a maker limit at its price (Tier-A/B queue)."""
-        if book is None or order.type is not OrderType.LIMIT:
-            return 0.0
-        levels = book.bids if order.side is Side.LONG else book.asks
-        return sum(size for price, size in levels if price == order.price)
 
     def _new_order(self, **kwargs) -> Order:
         coid = kwargs.pop("client_order_id", "") or self._next_coid()
