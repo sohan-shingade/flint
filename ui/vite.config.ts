@@ -8,10 +8,10 @@ export default defineConfig({
     outDir: 'dist',
   },
   server: {
-    port: 5173,
+    port: Number(process.env.FLINT_UI_PORT ?? 5173),
     proxy: {
-      '/api': 'http://localhost:8000',
-      '/ws': { target: 'ws://localhost:8000', ws: true },
+      '/api': `http://localhost:${process.env.FLINT_API_PORT ?? 8000}`,
+      '/ws': { target: `ws://localhost:${process.env.FLINT_API_PORT ?? 8000}`, ws: true },
     },
   },
 })

@@ -121,12 +121,13 @@ def _assert_valid(signals: list[Signal]) -> None:
 # --- 1. registry --------------------------------------------------------------
 
 
-def test_registry_has_all_nine_templates_sorted():
+def test_registry_has_all_ten_templates_sorted():
     names = template_names()
     assert names == sorted(names)
     assert set(names) == {
-        "funding_harvest", "funding_dislocation", "basis_trade", "oi_momentum",
-        "ma_cross", "rsi_reversion", "bollinger", "breakout", "lgbm_trend",
+        "funding_harvest", "funding_dislocation", "funding_svd", "basis_trade",
+        "oi_momentum", "ma_cross", "rsi_reversion", "bollinger", "breakout",
+        "lgbm_trend",
     }
 
 

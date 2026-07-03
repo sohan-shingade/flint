@@ -10,6 +10,7 @@ template (LightGBM). Every template emits Signals only — never ``ctx.submit_or
 
 from __future__ import annotations
 
+from .funding_svd import FundingSvdStrategy
 from .ml_template import LightGbmTrendStrategy
 from .perp import (
     BasisTradeStrategy,
@@ -42,6 +43,11 @@ register(TemplateSpec(
 register(TemplateSpec(
     "funding_dislocation", FundingDislocationStrategy,
     "Trade the HL leg when its funding dislocates from a benchmark rate.",
+    "funding",
+))
+register(TemplateSpec(
+    "funding_svd", FundingSvdStrategy,
+    "Rank-1 SVD funding factor: fade each market's residual funding dislocation.",
     "funding",
 ))
 register(TemplateSpec(
@@ -91,6 +97,7 @@ __all__ = [
     # template classes
     "FundingHarvestStrategy",
     "FundingDislocationStrategy",
+    "FundingSvdStrategy",
     "BasisTradeStrategy",
     "OiMomentumStrategy",
     "MaCrossStrategy",
