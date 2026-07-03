@@ -18,12 +18,17 @@ gate still rejects an uncovered request.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Protocol, runtime_checkable
 
 import pyarrow as pa
 
 from .ranges import Kind, RangeSet, TimeRange
+
+#: Rows per ``RecordBatch`` on the streaming read surface. 64k flat BOOK_DELTA
+#: rows ≈ 5 MB decoded (~74 bytes/row on the real 2026-06-01 HL fragment) — a
+#: comfortable per-step bound for tick consumers.
+DEFAULT_BATCH_SIZE = 65_536
 
 
 class DataSource(ABC):
@@ -45,6 +50,30 @@ class DataSource(ABC):
     ) -> pa.Table:
         """Rows within half-open ``span``, ordered by ``ts``. Empty table if none."""
         ...
+
+    def fetch_batches(
+        self,
+        venue: str,
+        market: str,
+        kind: Kind,
+        span: TimeRange,
+        *,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+    ) -> Iterator[pa.RecordBatch]:
+        """``fetch`` as a bounded stream of ``RecordBatch``es (D5, §9.2).
+
+        The tick-scale read surface: BOOK_DELTA (and any high-volume tick kind)
+        is consumed batch-by-batch so a reader never holds a whole day. The
+        default implementation wraps :meth:`fetch` — correct for the small
+        tiers (in-memory cache, REST providers, vendor day files) whose fetch
+        already materializes; :class:`~flint.data.store.durable_cache.
+        DurableCacheSource` overrides it to stream natively over Parquet
+        fragments without ever concatenating them.
+        """
+        table = self.fetch(venue, market, kind, span)
+        if table.num_rows == 0:
+            return
+        yield from table.to_batches(max_chunksize=batch_size)
 
 
 class InMemoryCacheSource(DataSource):

@@ -26,6 +26,7 @@ from .layout import (
     read_schema_version,
     write_parquet,
 )
+from .prune import DEFAULT_RETENTION_DAYS, PruneReport, prune
 
 __all__ = [
     "CoverageEntry",
@@ -46,4 +47,7 @@ __all__ = [
     "cache_key",
     "is_fresh",
     "is_immutable",
+    "DEFAULT_RETENTION_DAYS",
+    "PruneReport",
+    "prune",
 ]

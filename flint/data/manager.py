@@ -30,7 +30,7 @@ Sharpes stay comparable (§13) — and records that the range was clipped.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -100,12 +100,27 @@ class FidelitySummary:
 
 @dataclass(frozen=True)
 class PreparedData:
-    """The DataManager's output — feeds + effective range + fidelity (§9)."""
+    """The DataManager's output — feeds + effective range + fidelity (§9).
+
+    ``streams`` (D5, additive) is the tick-scale read surface: a zero-argument
+    callable per ``(venue, market, kind)`` returning a fresh bounded iterator
+    of Arrow ``RecordBatch``es over the effective range. Every tick-scale kind
+    (TRADES / QUOTES / BOOK_DELTA) gets a handle; **BOOK_DELTA is streams-only**
+    — its ``tables`` entry is an empty placeholder, because materializing an L2
+    day (tens of millions of flat rows) is exactly what the streaming surface
+    exists to avoid. Threshold decision, documented: a row-count threshold
+    would require materializing to count, so the cut is kind-level — BOOK_DELTA
+    is unconditionally book-replay volume; TRADES/QUOTES stay table-friendly at
+    HL volumes and keep their ``tables`` entries unchanged (handles are extra).
+    """
 
     requested: TimeRange
     effective_range: TimeRange
     tables: dict[tuple[str, str, Kind], pa.Table] = field(default_factory=dict)
     fidelity: FidelitySummary = FidelitySummary()
+    streams: dict[
+        tuple[str, str, Kind], Callable[[], Iterator[pa.RecordBatch]]
+    ] = field(default_factory=dict)
 
     @property
     def clipped(self) -> bool:
@@ -241,15 +256,22 @@ class DataManager:
         #    Executable legs first; then signal legs, flagged so their funding
         #    gaps read as the §8.2 soft contract, not an executable-venue gap.
         tables: dict[tuple[str, str, Kind], pa.Table] = {}
+        streams: dict[
+            tuple[str, str, Kind], Callable[[], Iterator[pa.RecordBatch]]
+        ] = {}
         entries: list[FidelityEntry] = []
         for leg in exec_legs:
             for kind in kinds:
-                table, covered = self._resolve(leg, kind, effective)
+                table, covered = self._prepare_kind(
+                    leg, kind, effective, streams
+                )
                 tables[(leg.venue, leg.market, kind)] = table
                 entries.append(self._fidelity(leg, kind, effective, covered))
         for leg in signal_legs:
             for kind in kinds:
-                table, covered = self._resolve(leg, kind, effective)
+                table, covered = self._prepare_kind(
+                    leg, kind, effective, streams
+                )
                 tables[(leg.venue, leg.market, kind)] = table
                 entries.append(
                     self._fidelity(leg, kind, effective, covered, signal=True)
@@ -260,6 +282,7 @@ class DataManager:
             effective_range=effective,
             tables=tables,
             fidelity=FidelitySummary(tuple(entries)),
+            streams=streams,
         )
 
     # --- internals ---------------------------------------------------------
@@ -283,6 +306,64 @@ class DataManager:
                 {leg: RangeSet((requested,)) for leg in legs}, funding_avail, requested
             )
         return max(covered.ranges, key=lambda r: r.duration_ms)
+
+    def _prepare_kind(
+        self,
+        leg: Leg,
+        kind: Kind,
+        want: TimeRange,
+        streams: dict[tuple[str, str, Kind], Callable[[], Iterator[pa.RecordBatch]]],
+    ) -> tuple[pa.Table, RangeSet]:
+        """Resolve one ``(leg, kind)`` — table for most kinds, streams for tick (D5).
+
+        Non-tick kinds are exactly the pre-D5 ``_resolve`` path. Tick-scale
+        kinds additionally get a ``streams`` handle; BOOK_DELTA gets *only* the
+        handle (its ``tables`` entry stays an empty placeholder — never
+        materialized whole, see ``PreparedData``). Coverage for BOOK_DELTA is
+        computed from ``available()`` alone, so fidelity stays honest without a
+        fetch. Write-through of vendor-served streamed rows is the ingester's
+        job (the Tardis fetcher's day-level sink / the recorder), not the
+        stream's: a stream may be consumed zero or many times, so it must not
+        be the thing that lands coverage.
+        """
+        key = (leg.venue, leg.market, kind)
+        if kind is Kind.BOOK_DELTA:
+            covered = self.coverage(leg, kind, want)
+            streams[key] = self._stream_handle(leg, kind, want)
+            return pa.table({}), covered
+        table, covered = self._resolve(leg, kind, want)
+        if kind.is_tick_scale:
+            streams[key] = self._stream_handle(leg, kind, want)
+        return table, covered
+
+    def _stream_handle(
+        self, leg: Leg, kind: Kind, want: TimeRange
+    ) -> Callable[[], Iterator[pa.RecordBatch]]:
+        """A restartable batch-stream over ``want``, planned lazily per call.
+
+        Each call re-walks the source chain (first source that declares a
+        sub-range serves it — the same priority rule ``_resolve`` applies) and
+        yields ``fetch_batches`` output span by span in ascending start order.
+        Planning at call time means a stream opened after a backfill sees the
+        new coverage.
+        """
+
+        def _iterate() -> Iterator[pa.RecordBatch]:
+            missing = RangeSet((want,))
+            plan: list[tuple[DataSource, TimeRange]] = []
+            for src in self._sources:
+                if missing.is_empty:
+                    break
+                servable = src.available(
+                    leg.venue, leg.market, kind, want
+                ).intersect(missing)
+                plan.extend((src, span) for span in servable.ranges)
+                missing = missing.subtract(servable)
+            plan.sort(key=lambda entry: entry[1].start_ms)
+            for src, span in plan:
+                yield from src.fetch_batches(leg.venue, leg.market, kind, span)
+
+        return _iterate
 
     def _resolve(
         self, leg: Leg, kind: Kind, want: TimeRange

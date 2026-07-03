@@ -413,6 +413,44 @@ def cmd_data_record(
     return 0
 
 
+def cmd_data_prune(args: argparse.Namespace, *, out=print) -> int:
+    """Apply per-kind retention to the local lake (D5, §B9).
+
+    Deletes whole expired partitions AND retracts the pruned ranges from each
+    stream's CoverageLedger in the same pass — eviction never lies about
+    coverage: after a prune, ``available()`` (and so the funding gate and the
+    tier resolver) reports exactly what is still on disk. ``--dry-run`` prints
+    the full plan (partitions + the exact coverage sub-ranges that would be
+    retracted) without touching anything. Like ``flint data record``, this is
+    local-store maintenance and operates on the lake directly.
+    """
+    from pathlib import Path
+
+    from flint.data.ranges import Kind
+    from flint.data.store.prune import prune
+
+    retention: dict[Kind, int | None] = {}
+    for pair in args.retention or []:
+        name, _, value = pair.partition("=")
+        try:
+            kind = Kind(name.strip())
+        except ValueError:
+            raise SystemExit(
+                f"unknown kind {name!r}; expected one of "
+                f"{[k.value for k in Kind]}"
+            ) from None
+        value = value.strip().lower()
+        retention[kind] = None if value in ("forever", "none") else int(value)
+
+    report = prune(
+        Path(args.cache_root).expanduser(),
+        retention_days=retention,
+        dry_run=args.dry_run,
+    )
+    _emit(out, json.dumps(report.to_payload(), sort_keys=True))
+    return 0
+
+
 def cmd_recorder_start(args: argparse.Namespace, *, out=print) -> int:
     """Describe the self-hosted capture (a foreground live process; §12/§20).
 
@@ -589,6 +627,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_recd.add_argument("--cache-root", dest="cache_root", default="~/.flint/cache")
     p_recd.add_argument("--flush-every", dest="flush_every", type=int, default=500)
     p_recd.set_defaults(func=cmd_data_record)
+
+    p_prune = data_sub.add_parser(
+        "prune", help="apply per-kind retention to the local lake (D5)"
+    )
+    p_prune.add_argument("--cache-root", dest="cache_root", default="~/.flint/cache")
+    p_prune.add_argument(
+        "--retention",
+        action="append",
+        default=[],
+        help="override, kind=days or kind=forever (e.g. book_delta=30); "
+        "defaults: book_delta=30 quotes=90 trades=180, everything else forever",
+    )
+    p_prune.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="print what would be deleted/retracted without touching disk",
+    )
+    p_prune.set_defaults(func=cmd_data_prune)
 
     p_imp = data_sub.add_parser(
         "import-legacy", help="lift legacy DuckDB runs into the library"

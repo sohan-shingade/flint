@@ -77,6 +77,18 @@ _META_TTL_MS = 24 * 3_600_000  # exchanges-endpoint response cached 24h on disk
 
 #: Tardis dataset name per Flint kind. ``derivative_ticker`` backs *two* kinds:
 #: it splits into FUNDING (predicted rows, on rate change) + OI (every row).
+#:
+#: LIQUIDATIONS slot (D5 investigation, 2026-07-03): a future ``Kind.
+#: LIQUIDATIONS`` would map to the Tardis ``liquidations`` dataset here — but
+#: Hyperliquid does not ship it. Verified empirically: the live exchanges
+#: endpoint lists no ``liquidations`` dataType for any HL symbol, and the
+#: free first-of-month download ``GET datasets.../hyperliquid/liquidations/
+#: 2026/06/01/SOL.csv.gz`` returns HTTP 400 (code 300, "Data type
+#: 'liquidations' is not supported for 'SOL'") while the identical URL grammar
+#: returns 200 for HL ``trades`` and 200 for ``binance-futures``
+#: ``liquidations`` — an HL-specific absence, not a URL error. Do not add the
+#: Kind until Tardis populates the dataset (HL liq flow would otherwise need
+#: reconstruction from trades, which is inference, not capture — D26).
 DATASET_BY_KIND: dict[Kind, str] = {
     Kind.TRADES: "trades",
     Kind.QUOTES: "quotes",

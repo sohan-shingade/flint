@@ -407,3 +407,120 @@ def test_coverage_ledger_accessor_seeds_the_envelope_for_non_tick_kinds(tmp_path
     ledger = cache.coverage_ledger("hyperliquid", "SOL-PERP", Kind.FUNDING)
     assert ledger.covered().ranges == (TimeRange(t0, t0 + 1),)  # seeded envelope
     assert {e.source for e in ledger.entries} == {"hl_rest"}
+
+
+# --- D5: QUOTES dedupe tie-break + pre-tuning file compatibility -------------
+
+
+def _quotes(rows: list[tuple[int, float, float, float, float]]) -> pa.Table:
+    """Hand-authored BBO rows: (ts, bid_px, bid_sz, ask_px, ask_sz)."""
+    from flint.data.normalize import QUOTES_SCHEMA
+
+    return pa.Table.from_pylist(
+        [
+            {
+                "ts": ts,
+                "market": "SOL-PERP",
+                "venue": "hyperliquid",
+                "bid_px": bid_px,
+                "bid_sz": bid_sz,
+                "ask_px": ask_px,
+                "ask_sz": ask_sz,
+            }
+            for ts, bid_px, bid_sz, ask_px, ask_sz in rows
+        ],
+        schema=QUOTES_SCHEMA,
+    )
+
+
+def test_same_ms_distinct_quotes_both_survive(tmp_path):
+    # D2 carried flag: with a ts-only dedupe key, two *distinct* BBO updates in
+    # the same millisecond were silently thinned to one. QUOTES has no seq
+    # column, so the tie-break is full-row identity (D5).
+    cache = DurableCacheSource(tmp_path)
+    ts = _ms(2025, 1, 1, 13)
+    table = _quotes(
+        [(ts, 211.4, 10.0, 211.6, 8.0), (ts, 211.5, 4.0, 211.6, 8.0)]
+    )
+    cache.store("hyperliquid", "SOL-PERP", Kind.QUOTES, table)
+    cache.store("hyperliquid", "SOL-PERP", Kind.QUOTES, table)  # idempotent re-run
+
+    got = cache.fetch("hyperliquid", "SOL-PERP", Kind.QUOTES, TimeRange(ts, ts + 1))
+    assert got.num_rows == 2  # distinct same-ms BBOs both survive
+    assert sorted(got.column("bid_px").to_pylist()) == [211.4, 211.5]
+
+
+def test_identical_duplicate_quotes_still_collapse(tmp_path):
+    # Full-row identity still collapses byte-identical rows from overlapping
+    # ingests — the tie-break widens identity, it does not disable dedupe.
+    cache = DurableCacheSource(tmp_path)
+    ts = _ms(2025, 1, 1, 13)
+    one = _quotes([(ts, 211.4, 10.0, 211.6, 8.0)])
+    cache.store("hyperliquid", "SOL-PERP", Kind.QUOTES, one)
+    cache.store("hyperliquid", "SOL-PERP", Kind.QUOTES, one)
+
+    got = cache.fetch("hyperliquid", "SOL-PERP", Kind.QUOTES, TimeRange(ts, ts + 1))
+    assert got.num_rows == 1
+
+
+def _book_deltas(rows: list[tuple[int, int, str, float, float]]) -> pa.Table:
+    """Hand-authored L2 deltas: (ts, seq, side, px, sz)."""
+    from flint.data.normalize import BOOK_DELTA_SCHEMA
+
+    return pa.Table.from_pylist(
+        [
+            {
+                "ts": ts,
+                "local_ts": ts,
+                "seq": seq,
+                "market": "SOL-PERP",
+                "venue": "hyperliquid",
+                "side": side,
+                "px": px,
+                "sz": sz,
+                "is_snapshot": False,
+            }
+            for ts, seq, side, px, sz in rows
+        ],
+        schema=BOOK_DELTA_SCHEMA,
+    )
+
+
+def test_pre_tuning_book_delta_file_remains_readable(tmp_path):
+    # D5 changes the BOOK_DELTA *writer* options (zstd + 1M-row groups). Files
+    # written before the tuning (pyarrow defaults: snappy, default groups) must
+    # stay readable through both read paths — writer options are not schema.
+    import pyarrow.parquet as pq
+
+    ts = _ms(2025, 1, 1, 13)
+    table = _book_deltas([(ts, 1, "bid", 211.4, 10.0), (ts, 2, "ask", 211.6, 0.0)])
+    part_dir = (
+        tmp_path / "book_delta" / "hyperliquid" / "SOL-PERP" / "2025-01-01" / "13"
+    )
+    part_dir.mkdir(parents=True)
+    # Exactly what the pre-D5 writer produced: default (snappy) compression,
+    # default row groups, schema_version stamped in the file metadata.
+    stamped = table.replace_schema_metadata({b"flint_schema_version": b"2"})
+    pq.write_table(stamped, str(part_dir / "part.parquet"))
+
+    cache = DurableCacheSource(tmp_path)
+    span = TimeRange(ts, ts + 1)
+    got = cache.fetch("hyperliquid", "SOL-PERP", Kind.BOOK_DELTA, span)
+    assert got.column("seq").to_pylist() == [1, 2]
+    streamed = list(
+        cache.fetch_batches("hyperliquid", "SOL-PERP", Kind.BOOK_DELTA, span)
+    )
+    assert sum(b.num_rows for b in streamed) == 2
+
+    # Merging new rows into the pre-tuning partition (now written zstd) keeps
+    # the whole partition readable and deduped.
+    cache.store(
+        "hyperliquid",
+        "SOL-PERP",
+        Kind.BOOK_DELTA,
+        _book_deltas([(ts, 2, "ask", 211.6, 0.0), (ts, 3, "bid", 211.3, 5.0)]),
+    )
+    got = cache.fetch("hyperliquid", "SOL-PERP", Kind.BOOK_DELTA, span)
+    assert got.column("seq").to_pylist() == [1, 2, 3]
+    meta = pq.ParquetFile(str(part_dir / "part.parquet")).metadata
+    assert meta.row_group(0).column(0).compression == "ZSTD"
