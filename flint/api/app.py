@@ -34,6 +34,7 @@ from flint.services import (
     ValidationError,
     compare_runs,
     data_coverage,
+    funding_lab,
     list_runs,
     new_run_id,
     paper_snapshot,
@@ -215,6 +216,28 @@ def _install_routes(app: FastAPI) -> None:
     def coverage(request: Request, market: str, venue: str) -> dict:
         deps: Deps = request.app.state.deps
         return data_coverage(data=deps.data, market=market, venue=venue)
+
+    @app.get(f"{api}/lab/funding", dependencies=_READ)
+    def lab_funding(
+        request: Request,
+        market: list[str] = Query(default_factory=list),
+        venue: list[str] = Query(default_factory=list),
+        start_ms: int = 0,
+        end_ms: int | None = None,
+        rate_type: str | None = "predicted",
+    ) -> dict:
+        # Read-only funding/basis lab (§10): markets×venues carry for the heatmap.
+        # All venues are lab legs — degrade-not-reject, never funding-gated (§6.4).
+        deps: Deps = request.app.state.deps
+        return funding_lab(
+            deps.tenant,
+            data=deps.data,
+            markets=market,
+            venues=venue,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            rate_type=rate_type,
+        )
 
     @app.post(f"{api}/alerts", status_code=201, dependencies=_WRITE)
     def create_alert(request: Request, body: AlertBody) -> dict:

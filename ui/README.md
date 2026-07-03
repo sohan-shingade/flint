@@ -14,10 +14,10 @@ fix), never blank screens or console errors (§19.1).
 | Route | Screen | Reads |
 |---|---|---|
 | `/results` | Results / tearsheet | `GET /backtests/{id}` |
-| `/funding` | Funding coverage heatmap (markets × venues) | `GET /data/coverage` |
+| `/funding` | Funding/basis heatmap (markets × venues carry) | `GET /lab/funding` (falls back to `GET /data/coverage`) |
 | `/data` | Data explorer (coverage matrix) | `GET /data/coverage` |
-| `/live` | Live monitor | `WS /paper/{id}/stream` — *7.4b* |
-| `/runs` | Run library + two-run diff | `GET /runs`, `GET /runs/compare` — *7.4b* |
+| `/live` | Live monitor (positions, funding, liq distance, drift) | `WS /paper/{id}/stream` |
+| `/runs` | Run library + two-run diff | `GET /runs`, `GET /runs/compare` |
 
 ## Auth
 

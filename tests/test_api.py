@@ -246,6 +246,25 @@ def test_data_coverage_reports_per_kind_ranges():
     assert cov["oi"] is None  # nothing stored → honestly absent
 
 
+def test_lab_funding_returns_real_carry_and_degrades_missing_venues():
+    client = _client()
+    resp = client.get(
+        "/api/v1/lab/funding",
+        params={"market": [MARKET], "venue": [VENUE, "binance"]},
+        headers=_auth(),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    # hyperliquid has predicted funding in the fixture → a real cell with carry.
+    hl = body["cells"][f"{VENUE}/{MARKET}"]
+    assert hl is not None
+    assert hl["n"] > 0
+    assert hl["annualized"] is not None
+    # binance has no funding — a lab leg degrades to null, never a rejection.
+    assert body["cells"][f"binance/{MARKET}"] is None
+    assert "effective_range" in body
+
+
 def test_data_pull_warms_the_cache():
     client = _client()
     resp = client.post(

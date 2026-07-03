@@ -1,15 +1,12 @@
 // The Flint web UI shell (§12). Five screens, each reading ONLY the 7.1 REST/WS
 // API through src/api — the UI never imports Python or reaches services directly.
-//
-// Screens 1–3 (results, funding heatmap, data explorer) land in slice 7.4a.
-// Screens 4–5 (live monitor, run library) + deletion of the legacy pre-greenfield
-// pages land in 7.4b — they are placeholders here so the shell is whole and the
-// nav is stable for the successor to fill in.
 
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
 import Tearsheet from './screens/Tearsheet'
 import FundingHeatmap from './screens/FundingHeatmap'
 import DataExplorer from './screens/DataExplorer'
+import LiveMonitor from './screens/LiveMonitor'
+import RunLibrary from './screens/RunLibrary'
 
 const NAV = [
   { to: '/results', label: 'RESULTS' },
@@ -18,15 +15,6 @@ const NAV = [
   { to: '/live', label: 'LIVE' },
   { to: '/runs', label: 'RUNS' },
 ]
-
-function ComingSoon({ name, slice }: { name: string; slice: string }) {
-  return (
-    <div className="p-8 font-mono text-sm text-ghost">
-      <div className="mb-1 text-terminal">{name}</div>
-      <div>landing in slice {slice}.</div>
-    </div>
-  )
-}
 
 export default function App() {
   return (
@@ -56,8 +44,8 @@ export default function App() {
           <Route path="/results" element={<Tearsheet />} />
           <Route path="/funding" element={<FundingHeatmap />} />
           <Route path="/data" element={<DataExplorer />} />
-          <Route path="/live" element={<ComingSoon name="Live monitor" slice="7.4b" />} />
-          <Route path="/runs" element={<ComingSoon name="Run library" slice="7.4b" />} />
+          <Route path="/live" element={<LiveMonitor />} />
+          <Route path="/runs" element={<RunLibrary />} />
           <Route path="*" element={<Navigate to="/results" replace />} />
         </Routes>
       </main>

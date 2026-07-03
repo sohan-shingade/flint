@@ -89,3 +89,13 @@ export function encodeQuery(params: Record<string, string | undefined>): string 
   }
   return parts.length ? `?${parts.join('&')}` : ''
 }
+
+// Query string with repeated keys (e.g. ?market=A&market=B&venue=hyperliquid) —
+// FastAPI reads these as list[str]. Used by the funding lab + run-compare routes.
+export function encodeMulti(params: Record<string, string[]>): string {
+  const parts: string[] = []
+  for (const [k, values] of Object.entries(params)) {
+    for (const v of values) if (v) parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+  }
+  return parts.length ? `?${parts.join('&')}` : ''
+}

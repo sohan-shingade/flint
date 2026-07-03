@@ -26,6 +26,7 @@ from .errors import (
     VenueUnavailableError,
 )
 from .jobs import BacktestJobs, JobRecord, new_run_id
+from .lab import funding_lab
 from .optimize import OptimizeOutcome, OptimizeRequest, run_optimization
 from .paper import paper_snapshot, start_paper
 from .runs import compare_runs, export_run, import_legacy_runs, list_runs, run_results
@@ -53,6 +54,8 @@ __all__ = [
     # data
     "data_coverage",
     "pull_data",
+    # funding/basis lab (§10 — screen 2 heatmap)
+    "funding_lab",
     # run library
     "list_runs",
     "compare_runs",

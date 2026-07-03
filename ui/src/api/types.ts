@@ -83,6 +83,35 @@ export interface Coverage {
   }
 }
 
+// ---- funding lab (GET /lab/funding) — services.funding_lab -----------------
+
+export interface FundingCell {
+  venue: string
+  market: string
+  n: number
+  mean_hourly: number
+  annualized: number
+  interval_s: number
+  settlements_per_year: number
+}
+
+export interface Dislocation {
+  ts: number
+  venue: string
+  dislocation_hourly: number
+}
+
+export interface FundingLab {
+  markets: string[]
+  venues: string[]
+  rate_type: string | null
+  requested_range: Range
+  effective_range: Range
+  cells: Record<string, FundingCell | null> // key `${venue}/${market}`
+  dislocation: Record<string, Dislocation | null> // key market
+  fidelity: string[]
+}
+
 // ---- run library (GET /runs, GET /runs/compare) — services.runs ------------
 
 export interface RunRow {
