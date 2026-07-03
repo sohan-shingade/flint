@@ -91,6 +91,7 @@ These were decided collaboratively before this doc. Everything below obeys them.
 | **D26** | **No synthetic data — ever** | Flint never generates synthetic market data, never runs backtests on synthetic data, and never presents synthetic results. If real data doesn't exist for a (venue, range), the backtest is **unavailable** there — same philosophy as the funding hard gate. Engine *unit tests* use hand-built fixtures internally but these are never surfaced as backtest results. Jupiter v1 consequence: recorders + fill model ship; real Jupiter backtests unlock only as recorded history accumulates (~90 days). | User-locked. A correctness product that fabricates data destroys its own premise |
 | **D27** | **Dynamic universes stay in v1** — with a point-in-time contract | `top:N:volume` resolves membership for bar *t* using **only data timestamped < t**, from point-in-time volume/OI in the lake; membership snapshots are written to the event log (deterministic replay); a `universe_exit_behavior` param (`hold_existing` default / `force_close` / `warn`); the look-ahead linter gets a universe check. | User-locked over the review's defer recommendation; the PIT contract is what makes it safe (round-1 M3) |
 | **D28** | **v1 venue scope (v3 decision)** | **Hyperliquid only.** Binance execution, Jupiter Perps (adapter + fill model + on-chain recorders), and the cross-venue two-leg backtest defer to v1.x+. Everything stays venue-parameterized — `Signal.venue` required, per-venue accounts (§6.6, one account in v1), the `MarketStructure` enum (CLOB implemented, oracle-pool specified-only), `VenueSpec`-driven funding/liquidation — so venue expansion is adapters + data, never an engine or API break. CEX funding rates still ingest **read-only** into the lab (§10). | User-locked 2026-07-02. One venue done venue-exactly beats three venues shallow; cuts ~2 adapters, the on-chain decoders, and cross-venue margin from v1 while the venue-parameterized shape keeps the expansion path cheap. Cost acknowledged: Jupiter/Binance now-or-never recording clocks start later. |
+| **D29** | **NautilusTrader is the simulation core (v4 decision)** | **The engine's matching/accounting substrate is [NautilusTrader](https://nautilustrader.io), exact-version-pinned.** Nautilus supplies the event loop, order matching, L2 book replay, the clock, and determinism; **Flint supplies the perp economics** — the funding predicted/final contract (§6.4), mark-based liquidation (§6.5), `Decimal` money (§5), and the EventLog + tearsheet fold (§19.2) — as **Flint-owned modules that wrap the existing pure functions** (`engine/funding/settlement.py`, `engine/liquidation/check.py`), not a rewrite. Nautilus settles no funding and does no mark liquidation itself (spike-verified), so those stay ours on top. Nautilus is a **domain-internal detail of `flint/engine/`** — never visible above `services/`, **never a port**, never named in a surface. Product framing: **one core, three tiers (candles / ticks / book) — "the perp backtester for everything"** (§6, §8, §9), serving the average trader on free candles+funding through the quant desk on L2 replay. | User-locked. Rebuilding a tick/event-driven core in Python would duplicate a mature, Rust-backed matching engine; adopting Nautilus buys the substrate while the invariants that *are* the product (§6.4/§6.5/§5/§19.1/§19.2, D25, D26) stay Flint-owned and parity-tested (§19.4). The bar-driven engine survives as a parity oracle and the paper substrate during migration, deleted at N10 (§18) — not permanent. |
 
 ---
 
@@ -623,9 +624,25 @@ The presence of `index_price` *and* `mark_price` in one snapshot, `price_basis` 
 
 ## 6. The execution engine (internals, with worked examples)
 
-### 6.1 The per-bar loop
+### 6.0 The simulation core: two lanes on one Nautilus substrate (D29)
 
-A backtest walks candles in time order. For each bar:
+The engine's matching/accounting substrate is **NautilusTrader** (D29) — the event loop, order matching, L2 book replay, clock, and determinism come from Nautilus; the **perp economics stay Flint-owned** and wrap the same pure functions this section already specifies. Nautilus lives entirely inside `flint/engine/` (`flint/engine/nautilus/`, §17); nothing above `services/` knows it exists, and it is **never a port**. Everything §6.1–§6.6 says about the *economics* (within-bar ordering, the predicted/final contract, mark liquidation, cross-pool cascade) is unchanged — Nautilus changes *how the loop is driven*, not *what the money does*.
+
+The core runs in **two lanes** over that one substrate:
+
+- **The bar lane** (§6.1) — the candle-driven path, with **exact T+1-at-next-open semantics preserved**. It is a thin shim (`BarLaneStrategy`, §8) over the Nautilus substrate: signal routing/validation is extracted into shared pure `flint/engine/signals.py`, held signals submit at bar *t+1*'s open exactly as the legacy loop did, and Flint's own fill models price every tier (the shim submits marketable IOC limits at that price). This is the tier-1 path the average trader lives on and it must keep working unchanged as bars become derived events.
+- **The tick lane** (§8, tick-native `TickStrategy`) — event-driven L2 matching done **Nautilus-native**, **no T+1** (a real venue latency model replaces the next-bar-open rule), for tick/quote/book strategies. This is the new capability; its fills are covered by hand-authored book goldens, not by bar-lane parity.
+
+**Shared pure modules are the single implementation both engines call during migration.** `funding/settlement.py`, `liquidation/check.py` + the new `liquidation/cascade.py` (the cascade orchestration extracted from the legacy loop into a pure function, §6.5), and the fill models are called *verbatim* by both the legacy `BacktestEngine` and the `NautilusEngine` — parity (§19.4) reduces to "the same inputs reach the same pure math." The legacy bar loop is retained as a **parity oracle and the paper substrate** during migration and is deleted at N10 (§18) once parity is green through a release soak and the paper lane has migrated — it is **not** permanent.
+
+**Two run-manifest knobs the substrate swap introduces** (both always recorded in the run manifest, §19.6, so a result never hides how it was produced):
+
+- **EQUITY sampling cadence.** The bar lane samples equity **per bar** (parity with legacy). The tick lane samples at a **fixed interval, default 60 s**, via a Nautilus clock timer (Nautilus's `AccountState` is not per-bar). The chosen cadence is stamped in the manifest and the equity curve ships as `[ts, value]` pairs end-to-end (§9) so irregular tick sampling is a first-class shape, not a regular-spacing assumption.
+- **`mark_policy`** — `"recorded"` | `"close_derived"`. Close-derived per-bar `MarkSnapshot` synthesis (the OHLCV-only path) is **bar-lane-only** and moves behind `mark_policy="close_derived"`, recorded in the manifest. The **tick lane requires recorded marks** (from real `derivative_ticker`/`activeAssetCtx` rows, §9) or gates per §6.4 — it never synthesizes a mark from a close.
+
+### 6.1 The per-bar loop (the bar lane)
+
+The candle-driven path below is the **bar lane** (§6.0): under D29 it is a shim over the Nautilus substrate, but the within-bar economics and the T+1 rule are **identical** to the legacy loop — the ordering and worked examples in this section are the contract the parity suite (§19.4) holds Nautilus to. A backtest walks candles in time order. For each bar:
 
 ```mermaid
 flowchart TD
@@ -1010,6 +1027,32 @@ class MyMLStrategy(MLStrategy):
 
 **Look-ahead linter (trust artifact, §11) — with its limits stated.** Before a backtest is trusted, Flint runs an automated detector (FreqAI-style) that flags future-reading code — `shift(-n)`, `.iloc[]` into future rows, unbounded full-frame `.mean()/.max()/.fit()`, degenerate label horizons — by (a) a **static AST pass** and (b) re-running on a truncated frame and detecting columns whose values change. What it **cannot** catch, stated on every result: label leakage via target definition, feature selection fitted on test-range correlations, and hyperparameter tuning against the OOS window (that one is DSR's job, §11). `lookahead_detected: false` therefore reads as "no leak *detected*," never "leak-free" — the agent schema (§13.3) words it exactly that way.
 
+### 8.6 The tick-native strategy API (`TickStrategy`) — the tick lane surface (D29)
+
+Everything above (`Strategy`/`on_candle`/`Signal`) is the **bar lane** (§6.0/§6.1) and is unchanged — under D29 those strategies run on the Nautilus substrate through the `BarLaneStrategy` shim with `EngineContext` intact, exact T+1, and Flint's fill models pricing every tier. `on_candle` over tick data works because Nautilus aggregates bars internally (ticks never cross the GIL), bar-START-ms normalized and asserted against `core/time`.
+
+The **tick lane** (§6.0) adds a second, event-driven surface in `flint/strategy/tick.py` for strategies that want trades/quotes/book, not just closed candles:
+
+```python
+class MyTickStrategy(TickStrategy):
+    params = dict(...)
+
+    def on_trade(self, trade, ctx): ...     # a print crossed the tape
+    def on_quote(self, quote, ctx): ...     # top-of-book changed (QUOTES, §9)
+    def on_book(self, delta, ctx): ...      # L2 incremental update (BOOK_DELTA, §9)
+    def on_funding(self, funding, ctx): ... # a PREDICTED funding row published
+    def on_candle(self, candle, ctx): ...   # internally-aggregated bar (bridges to bar logic)
+```
+
+**All handlers are optional** and the rules are locked:
+
+- **Subscribe only to overridden handlers.** The host subscribes a strategy **only** to the event kinds whose handlers it actually overrides — an unrequested delta never crosses the GIL into Python. This is what keeps the Python-callback throughput ceiling (§19.4, ~2–4k ev/s) a function of *what the strategy asked for*, not of the raw firehose.
+- **`TickCtx` is the same visibility contract at the event ts.** It exposes the same read-only accessors as `ctx` (§8.2) — `position`, `account`, `funding_rate`, `orderbook`, `open_interest`, `candles`, `submit_order`, `model_store`, `rng`, `now` — evaluated at the **event's** timestamp with the identical "strictly-less, closed-data-only, `None`-over-stale, never-synthetic" rule (D26). The truncated-frame accessor tests (§19.3) apply unchanged.
+- **`on_funding` serves predicted rows only.** Consistent with the §6.4 predicted/final contract: a strategy is handed **predicted** funding rows (what a trader knew at that ts); the **final** rate still drives the settlement *payment* inside the funding module (§6.4), never the handler.
+- **Same `Signal` validation.** Handlers return the same `Signal` model with the same conversion/validation rules (§8.1). What changes is execution: **no T+1** — tick fills are **Nautilus-native L2 matching** against the real book, priced by a **venue latency model** rather than the next-bar-open rule. Tick-lane fills are covered by **hand-authored book/trade goldens with hand-computed fills** (D26), not by bar-lane parity.
+
+**The future Rust strategy slot (design-only, Nautilus v2, deferred).** A Rust strategy would enter as a Nautilus strategy object; the funding/liquidation modules, the recorder, and the event translation are already language-agnostic. The commitments made *now* so the slot stays open without building it: the `dataconv` encoding (Flint models → Nautilus data, §17) is **versioned**, and the recorder/`translate.py` **never assume a Python strategy** is on the other side. Building the Rust lane waits for Nautilus v2 to stabilize (§8.4's registry and the templates are Python-only in v1).
+
 ---
 
 ## 9. The data layer (on-demand, no manual download)
@@ -1110,6 +1153,51 @@ The full per-venue × data-type matrix and pipelines live in the [venue data-sou
 - **Jupiter / GMX** = oracle-pool — no book exists, so the depth tier doesn't apply; fills are oracle + impact fee + borrow.
 
 **Operational flags:** provision the **Pyth API key before 2026-07-31** (owner/billing to assign); a **Helius archival key** is required for any Jupiter/Phoenix history (public RPC prunes ~days); **Tardis (~$599/mo)** can seed HL/dYdX pre-recording history **for an individual user via the BYO lane only** (D23) — a platform purchase without redistribution rights buys nothing the lake can serve. Several retention depths are **UNVERIFIED** (Bybit/OKX intraday OI, Binance `liquidationSnapshot` start, Jupiter deci-bps funding scaling) — verify empirically and record live defensively.
+
+### 9.2 Tick-scale data, coverage honesty, and the tier/granularity model (D29)
+
+The tick lane (§6.0, §8.6) needs data the bar-only layer never had: trade prints, top-of-book, and L2 increments, plus **honest coverage** for sparse event streams where a min/max envelope lies. These amendments make the on-demand chain (§9, above) serve all three product tiers without changing the engine boundary (§9.3).
+
+**New data Kinds.** Two kinds join `CANDLES`/`FUNDING`/`OI`/`DEPTH`/`TRADES`:
+
+- `Kind.QUOTES` — top-of-book (ts, market, venue, bid/ask px+sz).
+- `Kind.BOOK_DELTA` — L2 incremental (ts, local_ts, seq, side, px, sz, is_snapshot; `sz=0` = delete), flat rows matching Tardis `incremental_book_L2`.
+- `DEPTH` keeps its existing meaning (sampled snapshots — a degradable fill-fidelity kind, §6.3, unchanged).
+- `Kind.is_tick_scale = {TRADES, QUOTES, BOOK_DELTA}` is the predicate that drives **hour-partitioning**, **ledger-mandatory coverage**, and the **granularity gate** below.
+
+**CoverageLedger — coverage is asserted, never inferred, for tick kinds.** `DurableCacheSource.available()` today infers a `[min_ts, max_ts)` envelope from stored rows. That is **correct for candles/funding** (regular cadence) but **wrong for tick data**: one row in January + one in June would claim six months of coverage, and a genuinely quiet market with zero trades in an hour is *real data*, not a gap. So a new `flint/data/store/coverage.py` **`CoverageLedger`** (§17) holds, per `(kind, venue, market)`, an ingester-**asserted** `RangeSet` + provenance (`tardis` | `recorder` | `hl_rest`) in one atomic `_coverage.json`. The rules:
+
+- **Envelope inference is not coverage for tick data.** Tick kinds **require** a ledger entry; absent one, the range is *not* covered no matter what rows exist. Candle/funding keep the envelope fallback (behavior unchanged), and a one-shot migration seeds ledgers from existing envelopes.
+- **A covered day with zero rows is valid data.** A Tardis day file that lands with no trades marks the whole UTC day **covered** — a quiet market is data, not a gap. This is the inverse of the funding hard gate's philosophy applied to tick presence.
+- Writers assert their own coverage: the Tardis backfiller marks whole UTC days when a day file lands; the **recorder** (below) marks `[session_start, last_event)` minus gap incidents; REST backfillers mark fetched spans. The ledger key carries a `variant` slot so multi-resolution collisions never need another migration.
+
+**FUNDING gains a `settlement_ts` column.** The schema bumps to add `settlement_ts` (Tardis `funding_timestamp`; `= ts` for HL REST finals), upgrade-on-read via the existing `MigrationRegistry` (§9.0). This is what lets predicted rows (known at capture ts) and their eventual settlement (at `settlement_ts`) coexist in one kind without the dedupe collision noted in §9.3.
+
+**The Tardis vendor source (BYO-license, D23).** The Tardis adapter (`flint/data/ingest/vendors/tardis.py`) uses the **CSV datasets API** (pre-normalized daily gzip per symbol — day granularity matches the partitions and the ledger), **not** the replay API. Its **first-of-month files are free without a key** (verified live), which is where the D26-compliant real-fragment test fixtures come from (`tests/fixtures/tardis/`, §17). Semantics locked:
+
+- **Local-cache-only, always (D23).** A new `TardisVendorSource(DataSource)` appended after the free-venue provider fetches with the tenant's `TARDIS_API_KEY` (SecretsPort) and lands bytes in **that user's local cache only** — vendor data never enters the shared lake. `available()` reports `[availableSince, now) ∩ want` **iff** the tenant key exists, so coverage reflects entitlement; `fetch()` write-through makes tier-2 backtests download on first touch (§2.11 on-demand preserved).
+- **Per-symbol `availableSince` floors** (HL exchange floor 2024-10-29, per-symbol from the exchanges endpoint, 24h-cached) — never advertise the exchange-level date for a newer listing.
+- **Capture-timestamp semantics for funding.** `derivative_ticker` rows use **`local_timestamp` (capture) as `ts`** — the §6.4 "known at" time — and split into a FUNDING row (predicted, `price_basis=oracle`, `settlement_ts`) + an OI row in one download. Dataset→Kind: `trades`→TRADES, `quotes`→QUOTES, `book_snapshot_25`→DEPTH, `incremental_book_L2`→BOOK_DELTA.
+
+**The live recorder as a coverage-asserting source.** The HL recorder (§9.1, §6.7) emits QUOTES (from `bbo`) and **predicted** FUNDING rows (from `activeAssetCtx`, `rate_type=predicted`, `ts=capture`, `settlement_ts=next hour`) alongside the existing OI fold, and **hooks the CoverageLedger**: it asserts `[last_flush, newest_event)` per kind and, on a sequence gap/reconnect, closes the range at the last good event and reopens after recovery (provenance `recorder`). Paper sessions can passively build tick history via an optional LiveFeed tee. So free forward-recorded tick history and paid Tardis backfill contribute to the **same** kinds under one honest ledger.
+
+**The tier model and the granularity gate.** Three tiers map to required kinds:
+
+| Tier | Required kinds | Who it serves |
+|---|---|---|
+| `candles` | CANDLES + FUNDING (OI/DEPTH optional) | the average trader (free, tier-1) |
+| `ticks` | TRADES + FUNDING (+ QUOTES flagged) | tick-native strategies (tier-2) |
+| `book` | TRADES + QUOTES + BOOK_DELTA + FUNDING | the quant desk, L2 replay (tier-3) |
+
+`BacktestBody`/`SourceBacktestBody` gain `granularity: "auto" | "candles" | "ticks" | "book"` (`resolution_s` stays — it is the strategy's bar clock even in a tick run). **`DataManager.prepare()` resolves granularity BEFORE the funding gate** (a coverage query only): `auto` picks the highest fully-covered tier. An explicit tier with a gap raises a new **`GranularityUnavailableError`** — a structured rejection (§19.1, *not* a stack trace) carrying per-leg per-kind coverage plus machine-readable options: **`run_bars`** (drop to a covered lower tier), **`clip_to_coverage`**, **`vendor_backfill`** (Tardis — emitted *even without* a key, with the availability window and the `TARDIS_API_KEY` requirement), and **`record_forward`** (start the recorder). The UI renders these as action buttons on an options card, never an error toast. The gate resolves the tier *first*, then the §6.4 funding hard gate runs on the resolved tier's FUNDING coverage — funding stays a hard gate regardless of tier.
+
+### 9.3 The engine data boundary stays Nautilus-free (D29)
+
+`PreparedData` remains the contract between the data layer and the engine — Arrow tables per `(venue, market, kind)` + fidelity + effective range — and the data layer **imports no Nautilus** (the 443 MB / 5.3 s dependency is never paid by a candle-only user; the lazy import lives on the engine side, §17). The Arrow→Nautilus conversion is the engine-owned `flint/engine/nautilus/dataconv.py` (§17) — the *same* component the engine plan calls the "wrangler." Three data-layer accommodations keep that map pure:
+
+1. **Total ordering.** Tables are sorted by `(ts, seq|trade_id)` with the tie-break column present and documented on `PreparedData` — Nautilus event order must be deterministic.
+2. **Tier-3 streaming.** `PreparedData.streams: dict[key, () -> Iterator[RecordBatch]]` (backed by a new `fetch_batches()` on `DataSource`) so **BOOK_DELTA is never concatenated whole** — memory-bounded L2 replay.
+3. **Real marks in tick tiers.** Tier 1 keeps close-derived mark synthesis (flagged, = §6.0's `mark_policy="close_derived"`); tick tiers build the mark stream from **real** `derivative_ticker`/`activeAssetCtx` mark/index rows (`mark_policy="recorded"`). A `DataManager` fidelity sub-entry reports **predicted-funding coverage separately from final-funding coverage**, so the tearsheet can say "true predicted series (tardis|recorder)" vs "predicted derived from settled — bridge," and the `PredictedFromSettled` bridge (§6.4) becomes a **labeled** fallback keyed off that flag rather than a silent default.
 
 ---
 
@@ -1361,11 +1449,25 @@ flint/
     models/        #   Candle, Order, Fill, Position, FundingRate, MarkSnapshot, ...
     time/          #   bar alignment + the no-look-ahead guarantees
   engine/          # the simulator/executor shared by backtest + paper
+    api.py         #   the engine seam (D29): EngineFeed, EngineRunSpec, SimulationEngine Protocol
+    select.py      #   engine_for(name) -- lazy Nautilus import; legacy default until the N9 flip
+    signals.py     #   shared pure signal routing/validation + T+1 buffering (bar lane, §6.1)
     context/       #   ExecutionContext + the 7 state managers
-    fills/         #   FillModel interface + CLOB + oracle-pool models
-    funding/       #   venue-specific funding accrual + ledger
+    fills/         #   FillModel interface + CLOB + oracle-pool models (shared by both engines)
+    funding/       #   venue-specific funding accrual + ledger (settlement.py: shared pure)
     liquidation/   #   mark-based liquidation + margin tiers
+      check.py     #     pure per-position liquidation check (shared by both engines)
+      cascade.py   #     pure cross-pool cascade orchestration (extracted from the legacy loop, §6.5)
     portfolio/     #   cross-position risk + event log/replay/snapshots
+    nautilus/      #   the Nautilus substrate (D29) -- domain-internal, never above services/
+      engine.py    #     NautilusEngine: assembly + run
+      _compat.py   #     EVERY nautilus_trader import + the exact-version assert (churn firewall)
+      timeconv.py  #     ms<->ns, bar-START<->bar-CLOSE
+      dataconv.py  #     Flint models -> Nautilus data (+ FlintFundingRate); the data plan's "wrangler"
+      funding.py   #     FlintFundingModule (SimulationModule; wraps funding/settlement.py verbatim)
+      liquidation.py #   FlintLiquidationModule (registered after funding; wraps check.py/cascade.py)
+      translate.py #     event mapping -> the EventLog (never assumes a Python strategy)
+      shim.py      #     BarLaneStrategy: hosts unmodified Flint strategies with exact T+1
   venues/          # one adapter per exchange, keyed by market structure
     base.py        #   VenueAdapter interface + MarketStructure enum
     hyperliquid/   #   DEX, CLOB adapter + specs (native API) -- the ONLY executable v1 venue (D28)
@@ -1385,9 +1487,11 @@ flint/
       vendors/     #     paid backfill (Tardis, Crypto Lake, Kaiko, Amberdata)
       oracle.py    #     Pyth Hermes/Benchmarks poller (key before 2026-07-31)
     store/         #   MarketDataPort adapters: DuckDB local cache (+ object-store lake, hosted)
+      coverage.py  #     CoverageLedger: ingester-asserted RangeSet + provenance for tick kinds (§9.2)
     api_client.py  #   client for the hosted Flint Data API (the canonical source, D16)
   strategy/        # the user's surface
-    base.py        #   Strategy base class + the Signal model (§8.1)
+    base.py        #   Strategy base class + the Signal model (§8.1) -- the bar lane
+    tick.py        #   TickStrategy: on_trade/on_quote/on_book/on_funding/on_candle + TickCtx (§8.6)
     ml.py          #   MLStrategy: declarative features/target/train (batch; online learning v2)
     context.py     #   the read-only ctx value object (+ model_store, rng, now, submit_order)
     sandbox/       #   the OS-isolated runner (D25): subprocess + RLIMIT + env-scrub + nsjail/seccomp
@@ -1420,6 +1524,9 @@ flint/
 ui/                # focused React app (5 screens) -> API only
 docs/              # guides, this spec, plans, the research dossier
 tests/             # all mocked; engine tests inject fake ports
+  parity/          #   legacy-engine-vs-Nautilus byte-diff harness (§19.4; CI-required from N6)
+  fixtures/
+    tardis/        #     committed real Tardis first-of-month fragments, truncated (D26, §9.2)
 ```
 
 ---
@@ -1436,6 +1543,32 @@ This design is too big for one implementation plan, so Track-3 implementation is
 6. **Trust + lab.** Walk-forward (+ purge/embargo for all multi-bar strategies) + **Deflated Sharpe** + the look-ahead linter (static pass + truncation) + metric-definitions appendix implementation + the **Run Library + reproducibility export** + the cross-venue funding/basis lab (read-only Binance/Bybit/OKX funding ingestion included — D28).
 7. **Surfaces + agent engine + live.** REST/WS API (job lifecycle, local auth) + SDK/CLI + the 5-screen web UI + the **agent surface** (MCP tools, structured results, serial/low-concurrency) + the **minimal HL live executor** (D20: caps, kill switch, same code path). End state: an agent loops author→backtest→refine safely; a human goes paper→live-small on the same screen.
 8. **(v2) Speed + breadth.** The Rust port behind the §19.4 parity contract; online learning behind the determinism whitelist; broader live; venue expansion as each passes validation.
+
+### 18.1 The tick-driven migration (D29): the N-track (engine) + D-track (data)
+
+Phases 1–7 above build the bar-driven v1. The D29 swap to the Nautilus substrate + the tick lane is a **separate, independently-shippable migration** decomposed into two parallel tracks — the **N-track** (engine) and the **D-track** (data) — each phase a board task with its own gate. Every phase gates on `pytest tests/ -v` fully green (no network, no keys) + `python scripts/codemap.py --check`. **N0+N1 and D1 can start in parallel** (no shared files); N2–N7 and D2–D4 then run on separate tracks; **N8 (tick lane) needs D1+D2** (tick kinds + Tardis data); the parity flip (N9) and paper migration (N10) close it. Rough total ~6–8 weeks of build, ~4–5 calendar weeks with two streams.
+
+**Engine track (Nautilus as the simulation core):**
+
+- **N0 — Spec amendments** (this change). DESIGN.md D29 + §6/§8/§9/§17/§18/§19.4 updates, sunset conditions, codemap regen (no-op — docs only).
+- **N1 — Seam extraction, zero behavior change.** `engine/api.py` (EngineFeed, EngineRunSpec, SimulationEngine Protocol), `select.py` (lazy import), `signals.py` (T+1 extracted pure), `liquidation/cascade.py` (cascade extracted pure), the `mark_policy` fence, the CandleAggregator≡Nautilus aggregation parity test. **Gate:** the entire existing suite passes untouched (extraction-purity proof).
+- **N2 — Nautilus skeleton.** The `nautilus` optional extra + `_compat.py` exact pin, `timeconv`/`dataconv`, the `FlintRecorder` + shadow book, assembly. **Gate:** a NoopStrategy runs end-to-end through the real EventLog.
+- **N3 — Bar-lane shim + fills.** `BarLaneStrategy`, Flint's fill models pricing every tier, marketable-IOC submission, oracle-band/zero-volume pre-checks. **Gate:** the first template runs on Nautilus, invariants green.
+- **N4 — Funding module.** `FlintFundingModule` (SimulationModule, constructed with final-rate + mark series, calls `settlement.py` verbatim). **Gates:** the §6.4 golden byte-exact; the predicted/final divergence golden.
+- **N5 — Liquidation module** (forced-close spike **first**, §19.5). `FlintLiquidationModule` registered after funding; mark-driven Tier-C adverse-extreme; cross-pool cascade + isolated. **Gate:** the funding-before-liquidation ordering golden (§6.1).
+- **N6 — Parity harness** (`tests/parity/`), **CI-required from here.** Input-parity layer + full byte-diff layer (§19.4) over the §19.3 goldens + one recorded HL day.
+- **N7 — Services + sandbox wiring.** Engine field on the sandbox child, Nautilus import inside the child before strategy exec (warm-up excluded from budgets), RLIMIT_AS raised. Default remains legacy.
+- **N8 — Tick lane** (needs D1+D2). `strategy/tick.py`, new core models (QuoteTick/BookDelta), interval EQUITY, hand-authored book goldens, throughput measurement vs §19.4.
+- **N9 — Default flip.** `engine="auto"` resolves to nautilus; bar-semantics tests parameterized over both engines. Gated on a full green release of the parity suite.
+- **N10 — Paper-lane migration + legacy deletion** (separate plan). PaperSession migrated off the legacy walk; legacy engine deleted once parity is green through one release soak. See the sunset gates in §6.0.
+
+**Data track (tick kinds, coverage honesty, tiers):**
+
+- **D1 — Foundations** (parallel with N0/N1, zero behavior change). Kinds QUOTES/BOOK_DELTA + schemas, `settlement_ts` bump + migration, **per-kind dedupe keys** (the pre-flight fix: `(ts, rate_type)` for FUNDING, `(ts, trade_id)` for TRADES, `(ts, seq)` for BOOK_DELTA — today's ts-only dedupe silently drops a predicted or final row sharing a ts), hour-partitioning for tick kinds, the `CoverageLedger` + `available()` rewrite + envelope-seeding migration. **Gate incl.** "rows without a ledger entry ≠ tick coverage" and "predicted+final same-ts survives the merge."
+- **D2 — Tardis** (needs D1). CSV client + normalizers + `derivative_ticker` split, `TardisVendorSource`, key gating, day-incremental backfill via JobRunnerPort, `pull_data` wiring. Fixtures: committed real first-of-month free samples truncated to a few hundred rows under `tests/fixtures/tardis/` (D26).
+- **D3 — Recorder/live** (parallel after D1). `bbo`→QUOTES, predicted-funding rows, the ledger hook, the LiveFeed tee, `flint data record`.
+- **D4 — Tiering UX** (needs D2). The `granularity` field, auto-resolution, the `GranularityUnavailableError` payload + options, the per-tier coverage summary, the **equity-curve `[ts, value]` wire change** end-to-end, the UI ladder + options card.
+- **D5 — Tier-3 scale** (pairs with N8). BOOK_DELTA streaming (`PreparedData.streams`, `fetch_batches`), compression tuning, storage quotas + `flint data prune` (pruned ranges **removed** from the ledger — eviction never lies), a memory-bounded read test.
 
 ---
 
@@ -1472,7 +1605,9 @@ The rule: **expected scarcity is data, faults are retried then surfaced, bugs ar
 
 - **Budget (Phase-2 spike gates this):** a 6-month, 3-market, 1-minute-bar Tier-C backtest ≤ **60 s**; the same at Tier A (HL S3 depth) ≤ **15 min**; peak RSS ≤ 4 GB. If the spike fails, book/trade data feeds the fill model via an **Arrow-native columnar path** (dataclasses stay for orders/fills/events only — they're low-volume).
 - **Tier-A snapshot policy:** depth replays at recorded cadence; an optional documented down-sample (e.g. 1s) is a *visible* run parameter, never silent.
+- **Tick-lane throughput ceiling (D29):** Nautilus's Python strategy callbacks cost ~**2–4k events/s** — the budget context for the tick lane. This is why the tick-native API subscribes **only to overridden handlers** (§8.6): the ceiling applies only to what the strategy asks Python to see, not the raw firehose, and the Rust strategy slot (§8.6) is the real fix for firehose-scale strategies. Book replay/matching itself runs in Nautilus's Rust core and is not bound by this ceiling.
 - **Numerics** (§5): `Decimal`/scaled-int for accumulators; integer lamports; floats for prices.
+- **Nautilus parity contract (D29 — the primary parity contract now, ahead of the Rust one).** The parity suite (§18.1 N6, `tests/parity/`) byte-diffs the **legacy engine vs the Nautilus bar lane** on the §19.3 goldens + one recorded HL day. Two layers: **(a) input parity** — the exact settlement/liq-check inputs both engines feed the *shared pure functions* are diffed, localizing any divergence to reach, not math; **(b) full diff** — event sequence by `(ts, seq)`, fill decisions/prices/sizes, order transitions, FUNDING/LIQUIDATION payloads including Decimal-string amounts, and per-bar EQUITY. **The bar lane targets exact Decimal-string equality** — because the shared pure modules ARE the single implementation (§6.0), equality is by construction, not by tolerance. A **documented tolerance is admitted only where float→Decimal conversion order provably differs** between the two drivers (and the specific site is named in the test). The **pinned Nautilus version is recorded in the run manifest** (§19.6) alongside the engine version, so a churn-induced numeric change is attributable, never silent. CI-required from N6; the default flip (N9) waits on a full green release.
 - **Rust parity contract (v2):** bit-exact = event order, fill/no-fill, order-state transitions, event counts. Tolerance = monetary accumulators (|Δ| ≤ 1e-9 rel) and derived stats (Sharpe to 4 sig figs). Accumulation order specified (sorted by `(ts, event_seq)`); Kahan summation where float accumulation survives. "Identical results" without this contract either never passes or hides drift — so it's written *before* the Python engine exists.
 
 ### 19.5 Pre-build verification checklist (empirical, before the relevant phase locks)
@@ -1483,6 +1618,8 @@ The rule: **expected scarcity is data, faults are retried then surfaced, bugs ar
 4. ☐ Python throughput spike vs the §19.4 budget on one real HL S3 day.
 5. ☐ Pyth key + billing owner before **2026-07-31**; Jupiter lite-api tier reverified before **~2026-06-30**.
 6. ☐ UNVERIFIED retention depths (Bybit/OKX intraday OI, Binance `liquidationSnapshot` start) probed empirically; recorders running defensively meanwhile.
+7. ☐ **(D29, before N5) Forced-close spike.** Nautilus's `SimulatedExchange` has no force-close API — spike a **reduce-only tagged order with a mark-pinned fill** as the liquidation-close mechanism; the documented fallback is a `cascade.py`-computed close + a direct account/cache correction. Both are cross-checked by the run-end shadow-book-vs-Nautilus-cache reconciliation. Failure here reshapes N5, so it is spiked *first* inside N5, not discovered mid-phase.
+8. ☐ **(D29, before N5) Funding-before-liquidation module-ordering golden.** The §6.1 invariant (funding settles before the liquidation check, funding-saves-position) requires `FlintFundingModule` to mutate the account **before** `FlintLiquidationModule` runs *in the same Nautilus timestep*. Verify empirically that SimulationModule registration order guarantees this within one exchange step; the documented fallback if it does not is a single combined `FlintPerpModule` that orders the two internally.
 
 ### 19.6 Versioning, migration, distribution
 
