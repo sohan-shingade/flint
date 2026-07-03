@@ -37,6 +37,7 @@ from flint.engine.portfolio import apply_fill_delta
 from flint.engine.portfolio.events import (
     EQUITY,
     FILL,
+    FUNDING,
     ORDER_CANCELLED,
     ORDER_PLACED,
     ORDER_REJECTED,
@@ -221,6 +222,55 @@ class FlintRecorder(Actor):
             },
             ts=p["ts"],
             event_version=2,
+        )
+
+    # -- funding settlement (FlintFundingModule-driven, §6.4) ------------------
+
+    def record_funding(
+        self,
+        *,
+        venue: str,
+        market: str,
+        rate_hourly: float,
+        settled_rate_hourly: float,
+        rate_capped: bool,
+        interval_s: int,
+        price_basis: str,
+        rate_type: str,
+        oracle_price: float,
+        size: float,
+        amount: Decimal,
+        ts: int,
+    ) -> None:
+        """Apply one settled funding payment and emit FUNDING — byte-identical to ``loop._settle_funding``.
+
+        The :class:`~flint.engine.nautilus.funding.FlintFundingModule` computes
+        ``amount`` from the three pure primitives; the recorder is the single writer,
+        so it makes the shadow-book money move (credit cash, accrue ``funding_paid``)
+        and emits the FUNDING event here. ``replay.fold`` reproduces the same cash from
+        the ``amount`` string on the payload, so the shadow book and the stored log
+        cannot diverge. The payload fields and order mirror the legacy loop exactly
+        (``oracle_price`` names the settlement price for every ``price_basis``).
+        """
+        acct = self._flint_shadow.account(venue)
+        acct.credit(amount)
+        acct.funding_paid += amount
+        self._flint_log.emit(
+            FUNDING,
+            {
+                "market": market,
+                "venue": venue,
+                "rate_hourly": rate_hourly,
+                "settled_rate_hourly": settled_rate_hourly,
+                "rate_capped": rate_capped,
+                "interval_s": interval_s,
+                "price_basis": price_basis,
+                "rate_type": rate_type,
+                "oracle_price": oracle_price,
+                "size": size,
+                "amount": str(amount),
+            },
+            ts=ts,
         )
 
     # -- per-bar equity (shim-driven) ------------------------------------------

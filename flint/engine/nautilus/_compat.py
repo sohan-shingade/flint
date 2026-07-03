@@ -43,6 +43,10 @@ from nautilus_trader.backtest.engine import (  # noqa: E402
     BacktestEngineConfig,
 )
 from nautilus_trader.backtest.models import FeeModel, FillModel  # noqa: E402
+from nautilus_trader.backtest.modules import (  # noqa: E402
+    SimulationModule,
+    SimulationModuleConfig,
+)
 from nautilus_trader.config import (  # noqa: E402
     DataEngineConfig,
     LoggingConfig,
@@ -115,6 +119,8 @@ __all__ = [
     "BacktestEngineConfig",
     "FeeModel",
     "FillModel",
+    "SimulationModule",
+    "SimulationModuleConfig",
     "DataEngineConfig",
     "LoggingConfig",
     "Actor",

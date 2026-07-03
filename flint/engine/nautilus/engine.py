@@ -38,6 +38,7 @@ from ._compat import (
     Venue,
 )
 from .execmodels import FlintPriceFillModel, FlintTagFeeModel
+from .funding import build_funding_module
 from .shim import BarLaneStrategy
 from .translate import FlintRecorder
 
@@ -85,6 +86,23 @@ class NautilusEngine:
         shadow = PortfolioState()
         shadow.fund(fund_venue, money(spec.initial_capital))
 
+        # The recorder (single EventLog + shadow-book writer) and the funding module
+        # are built before the venue: the module needs the recorder to emit FUNDING and
+        # move the shadow book, and the venue needs the module in its ``modules`` list so
+        # Nautilus wires ``module.exchange`` for ``adjust_account`` (§6.4, §A4).
+        recorder = FlintRecorder(
+            event_log=event_log,
+            shadow=shadow,
+            engine_name=self.name,
+        )
+        funding_module = build_funding_module(
+            recorder=recorder,
+            shadow=shadow,
+            feed=feed,
+            venue_spec=spec.venue_spec,
+        )
+        modules = [funding_module] if funding_module is not None else None
+
         engine = BacktestEngine(
             config=BacktestEngineConfig(
                 trader_id="FLINT-001",
@@ -106,6 +124,7 @@ class NautilusEngine:
             fill_model=FlintPriceFillModel(),
             fee_model=FlintTagFeeModel(),
             use_message_queue=False,
+            modules=modules,
         )
 
         # One instrument per market; a raised price precision so Flint's 5-sig-fig
@@ -166,11 +185,6 @@ class NautilusEngine:
                 funding_data, client_id=ClientId(dataconv.FLINT_CLIENT_ID), sort=True
             )
 
-        recorder = FlintRecorder(
-            event_log=event_log,
-            shadow=shadow,
-            engine_name=self.name,
-        )
         shim = BarLaneStrategy(
             flint_strategy=strategy,
             feed=feed,
@@ -179,6 +193,7 @@ class NautilusEngine:
             spec=spec,
             instruments=instruments,
             resolution_s=resolution_s,
+            funding=funding_module,
         )
         engine.add_actor(recorder)
         engine.add_strategy(shim)

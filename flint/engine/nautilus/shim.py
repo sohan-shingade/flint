@@ -73,12 +73,17 @@ class BarLaneStrategy(Strategy):
         spec: EngineRunSpec,
         instruments: dict[str, object],
         resolution_s: int,
+        funding: object = None,
     ) -> None:
         super().__init__()
         self._flint_strategy = flint_strategy
         self._flint_feed = feed
         self._flint_recorder = recorder
         self._flint_shadow = shadow
+        # The §6.4 funding module (a SimulationModule) or ``None`` for a candle-only
+        # feed. Bar-lane funding is shim-driven, not process-driven (see funding.py):
+        # settlement must land before this bar's EQUITY snapshot for byte-exact parity.
+        self._flint_funding = funding
         self._flint_venue_spec = spec.venue_spec
         self._flint_instruments = instruments
         self._flint_resolution_s = resolution_s
@@ -153,6 +158,12 @@ class BarLaneStrategy(Strategy):
 
         # (2) T+1: market orders decided last bar fill at this bar's open.
         self._fill_pending_market(candle, market_marks)
+        # (3) Funding: every final settlement in [start, end), each in ts order.
+        # Shim-driven (not module.process, which runs after this bar's EQUITY in the
+        # Nautilus step) so accrued_funding is byte-exact with the legacy loop (§6.4).
+        # Liquidation (step 4) is N5, registered after funding — same shim-driven order.
+        if self._flint_funding is not None:
+            self._flint_funding.settle_bar(candle, end)
         # (5) Resting stop/limit/TP — adverse-extreme-first on Tier-C.
         self._process_resting(candle, bar_marks, market_marks)
         # (6) Strategy sees a read-only ctx as-of bar start; route its signals.
