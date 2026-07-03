@@ -417,3 +417,98 @@ def test_live_stop_route_requires_the_token():
     client = _live_client(ud)
     resp = client.post("/api/v1/live/live-1/stop")  # no bearer token
     assert resp.status_code == 401
+
+
+# -- templates / health / source backtests (UI shell surface, §12) ------------
+
+_CLEAN_SOURCE = '''
+from flint.strategy import Strategy
+from flint.core.models import Signal
+
+
+class MomoStrat(Strategy):
+    params = {"n": 1}
+
+    def on_candle(self, candle, history, ctx):
+        if len(history) < 2:
+            return []
+        if candle.close > history[-2].close:
+            return [Signal.long(candle.market, candle.venue, size_usd=2000.0)]
+        return [Signal(market=candle.market, venue=candle.venue, action="close")]
+'''
+
+
+def test_templates_route_lists_the_registry_with_params():
+    client = _client()
+    resp = client.get("/api/v1/templates", headers=_auth())
+    assert resp.status_code == 200
+    body = resp.json()
+    names = [t["name"] for t in body["templates"]]
+    assert "funding_harvest" in names and "funding_svd" in names
+    by_name = {t["name"]: t for t in body["templates"]}
+    assert by_name["funding_svd"]["category"] == "funding"
+    assert "entry_z" in by_name["funding_svd"]["params"]
+    assert body["executable_venues"] == ["hyperliquid"]
+
+
+def test_templates_route_requires_the_token():
+    assert _client().get("/api/v1/templates").status_code == 401
+
+
+def test_system_health_reports_ok_and_a_version():
+    resp = _client().get("/api/v1/system/health", headers=_auth())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert isinstance(body["version"], str) and body["version"]
+
+
+def test_source_backtest_runs_sandboxed_and_lands_in_the_run_library():
+    ud = InMemoryUserData()
+    client = _client(ud)
+    body = {
+        "source": _CLEAN_SOURCE,
+        "universe": [MARKET],
+        "venues": [VENUE],
+        "range": {"start_ms": T0, "end_ms": COVERED_END},
+        "resolution_s": 3600,
+    }
+    resp = client.post("/api/v1/backtests/source", json=body, headers=_auth())
+    assert resp.status_code == 201
+    run_id = resp.json()["run_id"]
+
+    status = client.get(f"/api/v1/backtests/{run_id}/status", headers=_auth()).json()
+    assert status["state"] == "done"
+    summary = client.get(f"/api/v1/backtests/{run_id}", headers=_auth()).json()
+    assert summary["verdict"] == "ok"
+    assert summary["strategy_source"] == _CLEAN_SOURCE
+    assert "sharpe" in summary["metrics"]
+
+
+def test_source_backtest_invalid_code_completes_with_verdict_invalid():
+    client = _client()
+    body = {
+        "source": "import requests\nfrom flint.strategy import Strategy\n"
+        "class S(Strategy):\n    def on_candle(self, candle, history, ctx):\n        return []\n",
+        "universe": [MARKET],
+        "venues": [VENUE],
+        "range": {"start_ms": T0, "end_ms": COVERED_END},
+    }
+    resp = client.post("/api/v1/backtests/source", json=body, headers=_auth())
+    assert resp.status_code == 201
+    run_id = resp.json()["run_id"]
+    summary = client.get(f"/api/v1/backtests/{run_id}", headers=_auth()).json()
+    assert summary["verdict"] == "invalid"
+    assert summary["validation"]["valid"] is False
+
+
+def test_source_backtest_requires_token_and_localhost_origin():
+    client = _client()
+    body = {"source": "x", "range": {"start_ms": 0, "end_ms": 1}}
+    assert client.post("/api/v1/backtests/source", json=body).status_code == 401
+    evil = client.post(
+        "/api/v1/backtests/source",
+        json=body,
+        headers={**_auth(), "Origin": "https://evil.example"},
+    )
+    assert evil.status_code == 403

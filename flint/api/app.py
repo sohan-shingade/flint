@@ -43,7 +43,7 @@ from flint.services import (
     stop_live,
 )
 
-from .schemas import AlertBody, BacktestBody, DataPullBody
+from .schemas import AlertBody, BacktestBody, DataPullBody, SourceBacktestBody
 from .security import check_origin, check_token, generate_token
 
 # code -> HTTP status for the uniform error schema (§19.1).
@@ -186,10 +186,64 @@ def _install_routes(app: FastAPI) -> None:
         )
         return {"run_id": run_id}
 
+    @app.post(f"{api}/backtests/source", status_code=201, dependencies=_WRITE)
+    def submit_source_backtest(request: Request, body: SourceBacktestBody) -> dict:
+        """Backtest user strategy source (§13.2) — validated + run inside the sandbox (D25)."""
+        deps: Deps = request.app.state.deps
+        run_id = deps.jobs.submit_source(
+            deps.tenant,
+            source=body.source,
+            run_id=new_run_id(),
+            universe=tuple(body.universe),
+            venues=tuple(body.venues),
+            start_ms=body.range.start_ms,
+            end_ms=body.range.end_ms,
+            resolution_s=body.resolution_s,
+            fill_mode=body.fill_mode,
+            seed=body.seed,
+            initial_capital=body.initial_capital,
+            overrides=body.overrides,
+            signal_venues=tuple(body.signal_venues),
+            idempotency_key=body.idempotency_key,
+            now_ms=_now_ms(),
+        )
+        return {"run_id": run_id}
+
     @app.get(f"{api}/backtests/{{run_id}}/status", dependencies=_READ)
     def backtest_status(request: Request, run_id: str) -> dict:
         deps: Deps = request.app.state.deps
         return deps.jobs.status(deps.tenant, run_id)
+
+    @app.get(f"{api}/templates", dependencies=_READ)
+    def templates(request: Request) -> dict:
+        """The built-in template registry (§8.4) — what the Lab can launch by name."""
+        from flint.strategy import list_templates
+        from flint.venues import HYPERLIQUID
+
+        return {
+            "templates": [
+                {
+                    "name": spec.name,
+                    "category": spec.category,
+                    "summary": spec.summary,
+                    "is_ml": spec.is_ml,
+                    "params": spec.param_spec(),
+                }
+                for spec in list_templates()
+            ],
+            "executable_venues": [HYPERLIQUID.name],
+        }
+
+    @app.get(f"{api}/system/health", dependencies=_READ)
+    def system_health() -> dict:
+        """Liveness + version for the UI shell (banner/footer)."""
+        try:
+            from importlib.metadata import version as _pkg_version
+
+            version = _pkg_version("flint")
+        except Exception:  # noqa: BLE001 — version is cosmetic, never a fault
+            version = "unknown"
+        return {"ok": True, "version": version}
 
     @app.post(f"{api}/backtests/{{run_id}}/cancel", dependencies=_WRITE)
     def cancel_backtest(request: Request, run_id: str) -> dict:

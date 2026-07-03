@@ -18,6 +18,7 @@ funding-gap rejection is a *completed* job whose result carries the structured
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -85,17 +86,6 @@ class BacktestJobs:
         returned ``run_id`` is already queryable. A :class:`ServiceError` (e.g. an
         unknown template) propagates and leaves no phantom job.
         """
-        if idempotency_key is not None:
-            existing = self._idem.get((tenant.tenant_id, idempotency_key))
-            if existing is not None:
-                return existing
-
-        key = (tenant.tenant_id, request.run_id)
-        rec = JobRecord(run_id=request.run_id, state="running")
-        self._jobs[key] = rec
-        if idempotency_key is not None:
-            self._idem[(tenant.tenant_id, idempotency_key)] = request.run_id
-
         def _job() -> BacktestOutcome:
             return run_backtest(
                 tenant,
@@ -105,8 +95,80 @@ class BacktestJobs:
                 now_ms=now_ms,
             )
 
+        return self._track(tenant, request.run_id, _job, idempotency_key=idempotency_key)
+
+    def submit_source(
+        self,
+        tenant: TenantContext,
+        *,
+        source: str,
+        run_id: str,
+        universe: Sequence[str] = ("SOL-PERP",),
+        venues: Sequence[str] = ("hyperliquid",),
+        start_ms: int = 0,
+        end_ms: int = 0,
+        resolution_s: int = 3600,
+        fill_mode: str = "auto",
+        seed: int = 0,
+        initial_capital: str = "100000",
+        overrides: Mapping[str, Any] | None = None,
+        signal_venues: Sequence[str] = (),
+        idempotency_key: str | None = None,
+        now_ms: int = 0,
+    ) -> str:
+        """Run user ``source`` through the sandboxed §13.2 path as a tracked job.
+
+        Same lifecycle as :meth:`submit` — the returned ``run_id`` is queryable via
+        ``status``/``result``. A validation failure (or a contained in-run sandbox
+        fault) is a *completed* job whose summary carries ``verdict="invalid"``
+        (§19.1 data, not an HTTP error); a funding gap completes as ``rejected``.
+        """
+        from .strategy_source import run_backtest_source
+
+        def _job() -> BacktestOutcome:
+            return run_backtest_source(
+                tenant,
+                source=source,
+                run_id=run_id,
+                universe=tuple(universe),
+                venues=tuple(venues),
+                start_ms=start_ms,
+                end_ms=end_ms,
+                resolution_s=resolution_s,
+                fill_mode=fill_mode,
+                seed=seed,
+                initial_capital=initial_capital,
+                overrides=dict(overrides or {}),
+                signal_venues=tuple(signal_venues),
+                user_data=self._user_data,
+                data=self._data,
+                now_ms=now_ms,
+            )
+
+        return self._track(tenant, run_id, _job, idempotency_key=idempotency_key)
+
+    def _track(
+        self,
+        tenant: TenantContext,
+        run_id: str,
+        job: "Callable[[], BacktestOutcome]",
+        *,
+        idempotency_key: str | None = None,
+    ) -> str:
+        """Drive ``job`` through the runner under the shared job lifecycle."""
+        if idempotency_key is not None:
+            existing = self._idem.get((tenant.tenant_id, idempotency_key))
+            if existing is not None:
+                return existing
+
+        key = (tenant.tenant_id, run_id)
+        rec = JobRecord(run_id=run_id, state="running")
+        self._jobs[key] = rec
+        if idempotency_key is not None:
+            self._idem[(tenant.tenant_id, idempotency_key)] = run_id
+
         try:
-            rec.outcome = self._job_runner.submit(tenant, _job, self._quota)
+            rec.outcome = self._job_runner.submit(tenant, job, self._quota)
         except ServiceError:
             # User error / known fault — no job left behind; the surface maps it.
             del self._jobs[key]
@@ -121,11 +183,11 @@ class BacktestJobs:
                 "detail": str(exc),
                 "incident_id": uuid.uuid4().hex,
             }
-            return request.run_id
+            return run_id
 
         rec.state = "done"
         rec.progress_pct = 100
-        return request.run_id
+        return run_id
 
     def status(self, tenant: TenantContext, run_id: str) -> dict[str, Any]:
         return self._get(tenant, run_id).status()

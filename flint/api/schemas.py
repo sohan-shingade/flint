@@ -32,6 +32,22 @@ class BacktestBody(BaseModel):
     idempotency_key: str | None = None
 
 
+class SourceBacktestBody(BaseModel):
+    """A user-source backtest (§13.2): ``source`` replaces the template name."""
+
+    source: str = Field(min_length=1)
+    universe: list[str] = Field(default_factory=lambda: ["SOL-PERP"], min_length=1)
+    venues: list[str] = Field(default_factory=lambda: ["hyperliquid"], min_length=1)
+    range: RangeModel
+    fill_mode: str = "auto"
+    resolution_s: int = Field(default=3600, gt=0)
+    seed: int = 0
+    initial_capital: str = "100000"
+    overrides: dict[str, Any] = Field(default_factory=dict)
+    signal_venues: list[str] = Field(default_factory=list)
+    idempotency_key: str | None = None
+
+
 class DataPullBody(BaseModel):
     market: str
     venues: list[str] = Field(min_length=1)
