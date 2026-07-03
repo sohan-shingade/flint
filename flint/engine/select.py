@@ -22,6 +22,46 @@ class UnknownEngineError(ValueError):
     """An engine name that this build cannot provide (unbuilt or unrecognized, §6.0)."""
 
 
+#: The wire vocabulary for ``BacktestRequest.engine`` (§6.0, D29). Surfaces
+#: enum-validate against this; services resolve through :func:`resolve_engine_name`.
+KNOWN_ENGINES: tuple[str, ...] = ("auto", "legacy-bar", "nautilus")
+
+
+def resolve_engine_name(name: str) -> str:
+    """Map a requested engine name to the substrate that will actually run (§6.0).
+
+    Pure string resolution — imports nothing, so services can validate and stamp
+    the resolved engine (§19.6) without paying the Nautilus import. ``"auto"``
+    resolves to ``"legacy-bar"`` today; N9 flips it to ``"nautilus"`` once parity
+    is green. Raises :class:`UnknownEngineError` on anything outside
+    :data:`KNOWN_ENGINES` — services surface that as the uniform §19.1
+    validation error.
+    """
+    if name in ("auto", "legacy-bar"):
+        return "legacy-bar"
+    if name == "nautilus":
+        return "nautilus"
+    raise UnknownEngineError(
+        f"unknown engine {name!r} — expected one of 'auto', 'legacy-bar', 'nautilus'"
+    )
+
+
+def installed_nautilus_version() -> str:
+    """The exact ``nautilus_trader`` version this process runs (§19.4/§19.6).
+
+    Imported lazily through the ``_compat`` churn firewall, which asserts the
+    exact pin — so by construction this equals the pinned version whenever a
+    Nautilus run is possible at all. Callers stamp it into the run manifest so a
+    churn-induced numeric change is attributable, never silent (§19.4). Only call
+    this when the Nautilus engine was actually selected (the import is then
+    already paid); calling it without the extra raises ``_compat``'s actionable
+    ImportError.
+    """
+    from .nautilus import _compat
+
+    return _compat.NAUTILUS_REQUIRED
+
+
 class LegacyBarEngine:
     """The legacy per-bar loop as a :class:`SimulationEngine` — zero behavior change.
 

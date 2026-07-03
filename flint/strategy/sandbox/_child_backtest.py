@@ -6,10 +6,14 @@ runs the *entire* engine over a user strategy, so the OS boundary contains the
 whole run and not merely pre-run validation — the ruling that closes D25 after
 7.3. It receives inert, serialized engine inputs (candles/funding/marks: copied
 bytes, no live handle), compiles the user source under the restricted builtins,
-wraps it with the trusted ``build_adapter``, walks the real ``BacktestEngine``,
-and writes the resulting event log + drained rejections/notes back over the
-protocol channel. The parent persists those events through services; this child
-touches no store of the parent's — it logs to an in-process throwaway.
+wraps it with the trusted ``build_adapter``, walks the substrate the job selects
+through the same ``engine/select.py`` seam as the in-process path (§6.0 — the
+legacy bar loop or the Nautilus engine; N7), and writes the resulting event log
++ drained rejections/notes + engine attribution back over the protocol channel.
+The parent persists those events through services; this child touches no store
+of the parent's — it logs to an in-process throwaway. When Nautilus is selected,
+its wheel is imported before the user source is exec'd and before the RLIMIT
+clamp, so the CPU budget clock starts after warm-up (plan §A9).
 
 Only the *user source* runs under ``build_safe_builtins`` (import allowlist +
 minimal builtins); the engine, adapter, and models are trusted platform code and
@@ -34,8 +38,10 @@ def _run(job: dict[str, Any]) -> dict[str, Any]:
     """Compile + run the user backtest inside the child; return its result data."""
     from flint.adapters import InMemoryUserData
     from flint.core.models.market import Candle, FundingRate, MarkSnapshot
-    from flint.engine import BacktestEngine, EngineConfig, PortfolioState, money
+    from flint.engine import EngineConfig
+    from flint.engine.api import EngineFeed, EngineRunSpec
     from flint.engine.portfolio import EventLog
+    from flint.engine.select import engine_for, resolve_engine_name
     from flint.live import build_adapter
     from flint.ports import TenantContext
     from flint.strategy.ml import MLStrategy
@@ -44,9 +50,27 @@ def _run(job: dict[str, Any]) -> dict[str, Any]:
 
     from .policy import build_safe_builtins
 
-    # Clamp RLIMIT_AS only AFTER the heavy infra above is imported (pyarrow/engine
-    # are large), so a low memory floor bounds the strategy's own allocations
-    # rather than crashing interpreter/import startup — same ordering as ``_child``.
+    # Engine selection happens through the same seam as the in-process template
+    # path (flint/engine/select.py, §6.0) — the child never hand-rolls a substrate.
+    resolved = resolve_engine_name(job.get("engine", "legacy-bar"))
+    engine_versions: dict[str, str] = {}
+    if resolved == "nautilus":
+        # Import the Nautilus wheel NOW — before the RLIMIT clamp (a low memory
+        # floor must bound the strategy, not crash the 443 MB import) and before
+        # the untrusted source is exec'd (warm-up is trusted platform time). The
+        # CPU budget clock is armed after this completes: ``_apply_rlimits``
+        # offsets already-consumed CPU, so the ~5s import never eats the
+        # strategy's budget (plan §A9). ``_compat`` asserts the exact pin here.
+        from flint.engine.nautilus import _compat
+
+        engine_versions["nautilus_trader"] = _compat.NAUTILUS_REQUIRED
+
+    engine_cls = engine_for(job.get("engine", "legacy-bar"))
+
+    # Clamp RLIMIT_AS/CPU only AFTER the heavy infra above is imported (pyarrow/
+    # engine/nautilus are large), so a low memory floor bounds the strategy's own
+    # allocations rather than crashing interpreter/import startup, and the CPU
+    # budget excludes warm-up — same ordering as ``_child``.
     _apply_rlimits(job["quota"])
 
     raw = job["inputs"]
@@ -83,19 +107,32 @@ def _run(job: dict[str, Any]) -> dict[str, Any]:
         strategy_id=job["run_id"],
         overrides=dict(job["overrides"]),
     )
-    state = PortfolioState()
-    state.fund(job["fund_venue"], money(job["initial_capital"]))
     log = EventLog(InMemoryUserData(), tenant, job["run_id"])
-    engine = BacktestEngine(
-        log, config=EngineConfig(), state=state, venue_spec=HYPERLIQUID
+    # The engine seam (§6.0): both substrates take the same feed/spec and fund the
+    # portfolio themselves. The legacy branch is behavior-identical to the direct
+    # ``BacktestEngine`` construction this child used pre-N7 (``LegacyBarEngine``
+    # replays the exact same construction order and kwargs).
+    feed = EngineFeed(candles=candles, funding=funding, marks=marks)
+    spec = EngineRunSpec(
+        config=EngineConfig(),
+        venue_spec=HYPERLIQUID,
+        initial_capital=job["initial_capital"],
+        fund_venue=job["fund_venue"],
+        # The parent already applied close-derived mark synthesis while building
+        # the inert inputs (services._engine_inputs.build_engine_inputs), so the
+        # feed's marks are complete here and no engine-side synthesis exists.
     )
-    engine.run(candles, strategy=adapter, marks=marks, funding=funding)
+    engine_cls().run(feed, adapter, event_log=log, spec=spec)
 
     return {
         # Raw stored rows, so the parent re-persists them bit-for-bit (parity).
         "events": log.read_raw(),
         "rejections": [_rejection_row(r) for r in adapter.drain_rejections()],
         "notes": list(adapter.tearsheet_notes()),
+        # Attribution (§19.4/§19.6): the substrate that actually ran, and the
+        # exact Nautilus pin when that substrate is Nautilus.
+        "engine": resolved,
+        "engine_versions": engine_versions,
     }
 
 

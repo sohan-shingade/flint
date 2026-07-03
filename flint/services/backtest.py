@@ -137,6 +137,7 @@ def run_backtest(
             detail="strategy must be a registered template name",
             hint="call list_universe/list_templates for valid names",
         )
+    validate_engine(request.engine)
 
     user_data.save_run(
         tenant,
@@ -209,6 +210,48 @@ def make_backtest_runner(
 
 
 # -- internals ---------------------------------------------------------------
+
+
+def validate_engine(name: str) -> str:
+    """Resolve ``name`` to the substrate that will run, or raise the §19.1 error.
+
+    Shared by every entry point that accepts an ``engine`` field (template path
+    here, sandboxed source path in ``strategy_source``), so an unknown engine is
+    the same uniform :class:`ValidationError` everywhere — never a stack trace
+    from deep inside engine dispatch. Pure string resolution: nothing
+    Nautilus-related is imported.
+    """
+    from flint.engine.select import UnknownEngineError, resolve_engine_name
+
+    try:
+        return resolve_engine_name(name)
+    except UnknownEngineError as exc:
+        raise ValidationError(
+            str(exc),
+            detail="engine must be one of 'auto', 'legacy-bar', 'nautilus'",
+            hint="omit the field (or pass 'auto') to use the default substrate",
+        ) from exc
+
+
+def _stamp_engine(
+    summary: dict[str, Any], resolved: str, versions: Mapping[str, str] | None = None
+) -> None:
+    """Stamp the substrate that actually ran into the run's summary (§19.4/§19.6).
+
+    ``summary["engine"]`` carries the resolved name (``legacy-bar`` | ``nautilus``
+    — never ``auto``); ``summary["engine_versions"]`` the exact dependency pins
+    behind it (the Nautilus pin, so a churn-induced numeric change is attributable,
+    never silent — §19.4). The same facts are appended as a fidelity line, which
+    the caller threads into the Run-Library manifest (``_manifest(fidelity_lines=…)``)
+    — so the persisted head records how the result was produced (§19.6).
+    """
+    summary["engine"] = resolved
+    line = f"engine: {resolved}"
+    if versions:
+        summary["engine_versions"] = dict(versions)
+        pins = ", ".join(f"{k}=={v}" for k, v in sorted(versions.items()))
+        line = f"engine: {resolved} ({pins})"
+    summary["fidelity_lines"] = [*summary.get("fidelity_lines", ()), line]
 
 
 def _template_exists(name: str) -> bool:
@@ -293,6 +336,15 @@ def _execute(
 
     equity_curve = equity_points_from_events(events)
     summary = _summary(request, prepared, report, equity_curve, rejections, notes, timing)
+    # Attribution (§19.4/§19.6): the substrate that actually ran, plus the exact
+    # Nautilus pin when that substrate is Nautilus (the wheel is already imported
+    # at this point, so reading the pin through select is free).
+    versions = None
+    if engine.name == "nautilus":
+        from flint.engine.select import installed_nautilus_version
+
+        versions = {"nautilus_trader": installed_nautilus_version()}
+    _stamp_engine(summary, engine.name, versions)
     return _Run(summary=summary, equity=equity)
 
 

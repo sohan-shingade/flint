@@ -65,8 +65,10 @@ from .backtest import (
     _manifest,
     _persist,
     _rejection_from_exc,
+    _stamp_engine,
     _summary,
     _timed,
+    validate_engine,
 )
 from .errors import ValidationError
 
@@ -275,6 +277,7 @@ def run_backtest_source(
     overrides: Mapping[str, Any] | None = None,
     signal_venues: Sequence[str] = (),
     granularity: str = "auto",
+    engine: str = "auto",
     user_data: UserDataPort,
     data: DataManager,
     now_ms: int = 0,
@@ -292,6 +295,7 @@ def run_backtest_source(
     surfaced as ``verdict="invalid"`` with a structured ``sandbox_error`` — never a
     stack trace, and nothing is persisted.
     """
+    validate_engine(engine)  # unknown engine → uniform §19.1 error, before anything runs
     report = validate_strategy(source)
     if not report.valid:
         summary = {
@@ -326,6 +330,7 @@ def run_backtest_source(
         overrides=dict(overrides or {}),
         signal_venues=tuple(signal_venues),
         granularity=granularity,
+        engine=engine,
     )
 
     # No "running" head is written up front: an invalid verdict (validation OR a
@@ -417,6 +422,13 @@ def _run_source_in_sandbox(
     with _timed(timing, "input_build_ms"):
         inputs = build_engine_inputs(prepared.tables, executable)
 
+    # Resolve the substrate before the child spawns (§6.0): the child receives a
+    # concrete name (never "auto") and dispatches through the same engine/select.py
+    # seam as the in-process template path; the engine-aware default quota (§8.3,
+    # measured in N7) is picked inside run_backtest_in_sandbox from this name.
+    from flint.engine.select import resolve_engine_name
+
+    resolved_engine = resolve_engine_name(request.engine)
     with _timed(timing, "engine_run_ms"):
         sandboxed = run_backtest_in_sandbox(
             source,
@@ -429,6 +441,7 @@ def _run_source_in_sandbox(
             fund_venue=request.venues[0],
             run_id=request.run_id,
             overrides=dict(request.overrides),
+            engine=resolved_engine,
         )
 
     # Persist the sandbox's event stream on the trusted side, then fold the report
@@ -445,6 +458,9 @@ def _run_source_in_sandbox(
         request, prepared, report, equity_curve, [], sandboxed.notes, timing
     )
     summary["rejections"] = sandboxed.rejections
+    # Attribution (§19.4/§19.6): the child reports the substrate that actually ran
+    # (it resolved through the same select.py seam) and the exact Nautilus pin.
+    _stamp_engine(summary, sandboxed.engine, sandboxed.engine_versions or None)
     return summary
 
 
