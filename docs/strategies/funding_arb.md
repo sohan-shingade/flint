@@ -44,4 +44,4 @@ flint backtest \
 
 ## Venues
 
-Designed for **Drift** and **Hyperliquid** by default. Any two venues with funding rate data in FlintStore can be substituted via the `venues` constructor parameter.
+Built around **Hyperliquid** (the live venue) paired with any second venue that has funding-rate data in FlintStore — a CEX reference today, Phoenix / Jupiter spot as those connectors land. Substitute via the `venues` constructor parameter.

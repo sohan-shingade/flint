@@ -12,7 +12,7 @@ import { http, HttpResponse } from 'msw'
 
 // Mock chart components
 vi.mock('../../components/InteractiveChart', () => ({
-  default: (props: any) => <div data-testid="interactive-chart">Chart</div>,
+  default: () => <div data-testid="interactive-chart">Chart</div>,
 }))
 
 vi.mock('recharts', () => ({

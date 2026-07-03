@@ -169,6 +169,5 @@ Built-in markets like `SOL-PERP` and custom markets like `custom:BTC-SPOT` canno
 
 ## See also
 
-- [`docs/specs/phase-1-trust-correctness.md#16-custom-dataset-ingest`](../specs/phase-1-trust-correctness.md#16-custom-dataset-ingest) — implementation spec
 - [`docs/how-to/calibrate-slippage.md`](../how-to/calibrate-slippage.md) — uses BYO fill log
 - Source: `flint/providers/custom.py`

@@ -17,6 +17,8 @@ import DrawdownChart from '../components/DrawdownChart'
 import MetricsCard from '../components/MetricsCard'
 import TradeTable from '../components/TradeTable'
 import PriceChart from '../components/PriceChart'
+import CandleChart from '../components/CandleChart'
+import type { OHLC, TradeMarker } from '../components/CandleChart'
 import PnlHistogram from '../components/PnlHistogram'
 import ExposureTimeline from '../components/ExposureTimeline'
 import InstrumentExposure from '../components/InstrumentExposure'
@@ -1754,7 +1756,20 @@ export default function BacktestLab() {
                   <span className="inline-block w-2 h-2 bg-loss ml-2 mr-1" />exit (loss)
                 </span>
               </div>
-              <PriceChart candles={results.buy_hold_equity || results.equity_curve} trades={results.trades} height={260} />
+              {results.price_candles?.length > 0 ? (
+                <CandleChart
+                  candles={(results.price_candles as number[][]).map(
+                    ([ts, open, high, low, close, volume]): OHLC => ({ ts, open, high, low, close, volume }),
+                  )}
+                  markers={(results.trades || []).flatMap((t: any): TradeMarker[] => [
+                    { ts: t.entry_ts, side: t.side, type: 'entry' },
+                    { ts: t.exit_ts, side: t.side, type: 'exit', pnl: t.pnl },
+                  ])}
+                  height={260}
+                />
+              ) : (
+                <PriceChart candles={results.buy_hold_equity || results.equity_curve} trades={results.trades} height={260} />
+              )}
             </div>
           )}
 

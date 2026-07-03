@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { useLiveMonitor, useLiveSessions } from '../hooks/useLiveMonitor'
 import { useWebSocket } from '../hooks/useWebSocket'
+import CandleChart from '../components/CandleChart'
+import type { OHLC, TradeMarker } from '../components/CandleChart'
 
 /** D-4.3-websocket: payload shape LiveExecutionContext broadcasts. */
 interface LiveWsFill {
@@ -103,6 +105,37 @@ export default function LiveMonitor() {
   })()
 
   const activeSession = sessions.find(s => s.session_id === activeId)
+
+  // Price candles for the session's market — fetched from the data API and
+  // refreshed periodically. The live WS feed only carries fills, so price
+  // history comes from stored OHLCV (1h candles).
+  const sessionMarket = activeSession?.market
+  const [priceCandles, setPriceCandles] = useState<OHLC[]>([])
+  useEffect(() => {
+    if (!sessionMarket) { setPriceCandles([]); return }
+    let cancelled = false
+    const load = async () => {
+      try {
+        const r = await fetch(`/api/v1/data/ohlcv?market=${encodeURIComponent(sessionMarket)}&resolution_s=3600&limit=500`)
+        const j = await r.json()
+        if (!cancelled && Array.isArray(j.candles)) {
+          setPriceCandles(j.candles.map((c: any): OHLC => ({
+            ts: c.ts, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+          })))
+        }
+      } catch { /* leave prior candles in place on transient error */ }
+    }
+    load()
+    const iv = setInterval(load, 30000)
+    return () => { cancelled = true; clearInterval(iv) }
+  }, [sessionMarket])
+
+  // Mark each fill on the price chart (buy/long → up, sell/short → down).
+  const priceMarkers: TradeMarker[] = fills.map(f => ({
+    ts: f.ts,
+    side: (f.side === 'buy' || f.side === 'long') ? 'long' : 'short',
+    type: 'entry',
+  }))
 
   // Derive metrics from latest equity point
   const latest = equity.length > 0 ? equity[equity.length - 1] : null
@@ -219,6 +252,28 @@ export default function LiveMonitor() {
                 />
               </LineChart>
             </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      {/* price candlesticks + fill markers */}
+      <div className="border border-border bg-surface/60">
+        <div className="px-4 py-2.5 border-b border-border flex items-center gap-2">
+          <span className="w-2 h-2 bg-amber/60" />
+          <span className="text-[10px] text-ghost tracking-[0.2em]">
+            PRICE.ACTION{sessionMarket ? ` // ${sessionMarket}` : ''}
+          </span>
+          <span className="ml-auto text-[10px] text-ghost/30">1H CANDLES · FILLS MARKED</span>
+        </div>
+        <div className="p-4">
+          {priceCandles.length === 0 ? (
+            <div className="flex items-center justify-center h-40">
+              <span className="text-ghost/30 text-[10px] tracking-[0.3em]">
+                {activeId ? 'NO PRICE DATA' : 'SELECT A SESSION'}
+              </span>
+            </div>
+          ) : (
+            <CandleChart candles={priceCandles} markers={priceMarkers} height={260} />
           )}
         </div>
       </div>

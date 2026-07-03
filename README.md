@@ -33,7 +33,7 @@ Flint is a **local power-user lab** for Solana DEX + perp strategy work — venu
 It is **not** a hosted SaaS, a general crypto trading bot, an AI agent platform, or a MEV scanner. Single-machine, single-DuckDB-writer, by design.
 
 <p align="center">
-  <img src="imgs/homepage.png" alt="Flint homepage" width="100%">
+  <img src="docs/assets/homepage.png" alt="Flint homepage" width="100%">
 </p>
 
 ---
@@ -133,10 +133,10 @@ Optimizable with Optuna by adding a `parameters()` classmethod. Full API: [docs/
 Every backtest produces a full tearsheet: equity curve, drawdown, trade markers, PnL distribution, monthly returns heatmap, complete trade log.
 
 <p align="center">
-  <img src="imgs/IMG_5613.png" alt="Backtest results" width="100%">
+  <img src="docs/assets/backtest-results.png" alt="Backtest results" width="100%">
 </p>
 
-Optimization (Optuna), walk-forward analysis, regime-conditioned reports, and Monte Carlo bootstrap (trade-frequency Sharpe) are all built in. See [docs/guides/architecture.md](docs/guides/architecture.md) for the execution stack.
+Optimization (Optuna), walk-forward analysis, regime-conditioned reports, and Monte Carlo bootstrap (trade-frequency Sharpe) are all built in. See [docs/concepts/architecture.md](docs/concepts/architecture.md) for the execution stack.
 
 ---
 
@@ -159,7 +159,7 @@ Core data is free — no API keys, no signup.
 | **CoinGecko / GeckoTerminal** | Spot candles + DEX pool candles for non-perp comparisons |
 | **Jupiter / Raydium / Orca** | Swap quotes + AMM pool data |
 
-Optional providers (free API key, no credit card): Birdeye, Helius. Full list with rate limits + PIT declarations: [docs/guides/data-providers.md](docs/guides/data-providers.md).
+Optional providers (free API key, no credit card): Birdeye, Helius. Full list with rate limits + PIT declarations: [docs/reference/data-providers.md](docs/reference/data-providers.md).
 
 Everything caches to a local DuckDB file (`./data/flint.duckdb`). Nothing leaves your machine unless a provider needs it to. No telemetry, no cloud sync.
 
@@ -171,7 +171,7 @@ Fills go through a 4-tier pipeline: deterministic close → slippage layer → o
 
 Slippage parameters are calibrated from real fills you upload via `flint calibrate`. The reconciliation tool (`scripts/reconcile_fills.py`) compares engine fills against venue executions and emits a markdown report with p50/p95/p99 price + timestamp deltas. CI gates this at 10 bps p95.
 
-Details: [docs/guides/slippage-models.md](docs/guides/slippage-models.md).
+Details: [docs/concepts/fill-pipeline.md](docs/concepts/fill-pipeline.md).
 
 ---
 
@@ -210,15 +210,15 @@ index at [`docs/README.md`](docs/README.md). Quick links:
 |---|---|
 | First backtest in 5 min | [docs/tutorials/01-install-first-backtest.md](docs/tutorials/01-install-first-backtest.md) |
 | Quickstart guide | [docs/guides/quickstart.md](docs/guides/quickstart.md) |
-| Architecture (BacktestContext + 7 managers, PaperContext, Rust engine, replay) | [docs/guides/architecture.md](docs/guides/architecture.md) |
+| Architecture (BacktestContext + 7 managers, PaperContext, Rust engine, replay) | [docs/concepts/architecture.md](docs/concepts/architecture.md) |
 | Strategy authoring (v1/v2 APIs, indicators, optimization) | [docs/guides/strategy-authoring.md](docs/guides/strategy-authoring.md) |
-| Data providers + PIT declarations | [docs/guides/data-providers.md](docs/guides/data-providers.md) |
-| Live + paper deployment + risk guards | [docs/guides/live-deployment.md](docs/guides/live-deployment.md) |
+| Data providers + PIT declarations | [docs/reference/data-providers.md](docs/reference/data-providers.md) |
+| Live + paper deployment + risk guards | [docs/tutorials/04-paper-to-live.md](docs/tutorials/04-paper-to-live.md) |
 | Web UI tour | [docs/guides/web-ui.md](docs/guides/web-ui.md) |
-| MCP integration (AI tooling — experimental) | [docs/guides/mcp-integration.md](docs/guides/mcp-integration.md) |
-| Slippage models + calibration | [docs/guides/slippage-models.md](docs/guides/slippage-models.md) |
+| MCP integration (AI tooling — experimental) | [docs/reference/mcp-tools.md](docs/reference/mcp-tools.md) |
+| Slippage models + calibration | [docs/concepts/fill-pipeline.md](docs/concepts/fill-pipeline.md) |
 
-Project state: [`ROADMAP.md`](ROADMAP.md) · [`WAVE_STATUS.md`](WAVE_STATUS.md) · [`DEFERRED.md`](DEFERRED.md) · [`TRUST_ARTIFACTS.md`](TRUST_ARTIFACTS.md) · [`CHANGELOG.md`](CHANGELOG.md). AI-dev guide: [`CLAUDE.md`](CLAUDE.md).
+Project state: [`ROADMAP.md`](ROADMAP.md) · [`CHANGELOG.md`](CHANGELOG.md). AI-dev guide: [`CLAUDE.md`](CLAUDE.md).
 
 ---
 

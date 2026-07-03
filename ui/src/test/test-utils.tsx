@@ -1,13 +1,6 @@
-import { ReactElement } from 'react'
-import { render, RenderOptions } from '@testing-library/react'
+import type { ReactElement } from 'react'
+import { render, type RenderOptions } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-
-/**
- * Wrapper that provides MemoryRouter for components using react-router hooks.
- */
-function AllProviders({ children }: { children: React.ReactNode }) {
-  return <MemoryRouter>{children}</MemoryRouter>
-}
 
 /**
  * Custom render that wraps in MemoryRouter.

@@ -29,7 +29,7 @@ Cross-venue basis arbitrage that longs the cheaper venue and shorts the more exp
 ```bash
 flint backtest \
   --strategy basis_trade \
-  --markets drift:SOL-PERP,hyperliquid:SOL-PERP \
+  --markets hyperliquid:SOL-PERP,binance:SOL-PERP \
   --start 2024-01-01 \
   --end 2024-09-30 \
   --capital 20000 \
@@ -47,4 +47,4 @@ flint backtest \
 
 ## Venues
 
-Default venues: **Drift** and **Hyperliquid**. Any two venues whose candles are tagged with `venue` in FlintStore can be used. Pass `venues=["drift", "binance"]` or similar to the constructor to override.
+Default venue: **Hyperliquid** (live). Any two venues whose candles are tagged with `venue` in FlintStore can be paired — e.g. a CEX reference like Binance, or Phoenix / Jupiter spot as those connectors land. Pass `venues=["hyperliquid", "binance"]` or similar to the constructor to override.

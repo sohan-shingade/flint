@@ -25,13 +25,13 @@ Read the relevant guide when working on that area. These same files power the we
 | Area | Guide | When to read |
 |------|-------|--------------|
 | Getting started | [docs/guides/quickstart.md](docs/guides/quickstart.md) | Install, first backtest, optimization, paper deploy workflow |
-| Architecture | [docs/guides/architecture.md](docs/guides/architecture.md) | Module layout, execution hierarchy, Rust engine, regimes |
+| Architecture | [docs/concepts/architecture.md](docs/concepts/architecture.md) | Module layout, execution hierarchy, Rust engine, regimes |
 | Strategies | [docs/guides/strategy-authoring.md](docs/guides/strategy-authoring.md) | v1/v2 APIs, 20 built-in templates, optimization params, security |
-| Data | [docs/guides/data-providers.md](docs/guides/data-providers.md) | 15 providers, 7 funding venues, downloading, custom providers |
-| Live/Paper | [docs/guides/live-deployment.md](docs/guides/live-deployment.md) | Paper trading, Hyperliquid/CEX setup, risk guards, parity testing |
+| Data | [docs/reference/data-providers.md](docs/reference/data-providers.md) | 15 providers, 7 funding venues, downloading, custom providers |
+| Live/Paper | [docs/tutorials/04-paper-to-live.md](docs/tutorials/04-paper-to-live.md) | Paper trading, Hyperliquid/CEX setup, risk guards, parity testing |
 | Web UI | [docs/guides/web-ui.md](docs/guides/web-ui.md) | All 10 UI pages, features, keyboard shortcuts |
-| MCP | [docs/guides/mcp-integration.md](docs/guides/mcp-integration.md) | 17 MCP tools, setup, AI workflow |
-| Fills | [docs/guides/slippage-models.md](docs/guides/slippage-models.md) | 4-tier fill pipeline, vAMM, calibration |
+| MCP | [docs/reference/mcp-tools.md](docs/reference/mcp-tools.md) | 17 MCP tools, setup, AI workflow |
+| Fills | [docs/concepts/fill-pipeline.md](docs/concepts/fill-pipeline.md) | 4-tier fill pipeline, vAMM, calibration |
 
 To update docs: edit `docs/guides/*.md`, then run `python scripts/build_docs.py` to regenerate the UI docs page.
 

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { useHybridPoll } from './useHybridPoll'
 
 interface EquityPoint { ts: number; equity: number; cash: number; unrealized_pnl: number }
-interface LiveFill { fill_id: string; market: string; side: string; price: number; size: number; fee: number; ts: number; venue: string }
+interface LiveFill { fill_id: string; order_id?: string; market: string; side: string; price: number; size: number; fee: number; ts: number; venue: string }
 interface LiveSession { session_id: string; strategy: string; market: string; venue: string; status: string; started_at: number; stopped_at: number | null }
 
 interface MonitorPayload {

@@ -54,6 +54,8 @@ class Tearsheet:
     rolling_sharpe: List[Dict[str, Any]] = field(default_factory=list)
     # individual trade breakdown with entry/exit details
     trade_breakdown: List[Dict[str, Any]] = field(default_factory=list)
+    # OHLC price series for candlestick charting: [[ts, open, high, low, close, volume], ...]
+    price_candles: List[List[float]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -150,6 +152,11 @@ def generate_tearsheet(
     # --- Trade breakdown from closed positions ---
     trade_breakdown = _compute_trade_breakdown(result)
 
+    # --- OHLC price series (for candlestick chart) ---
+    price_candles = [
+        [c.ts, c.open, c.high, c.low, c.close, c.volume] for c in candles
+    ]
+
     return Tearsheet(
         strategy_name=strategy_name,
         market=market,
@@ -169,6 +176,7 @@ def generate_tearsheet(
         instrument_exposure=instrument_exposure,
         rolling_sharpe=rolling_sharpe,
         trade_breakdown=trade_breakdown,
+        price_candles=price_candles,
     )
 
 

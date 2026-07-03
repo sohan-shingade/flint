@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts'
 import InteractiveChart from '../components/InteractiveChart'
 import { EXECUTION_VENUES, DEFAULT_EXECUTION_VENUES, DEX_VENUES, CEX_VENUES } from '../constants/venues'
-import { REGIMES, REGIME_TYPES } from '../constants/regimes'
+import { REGIMES } from '../constants/regimes'
 
 interface CandleData { ts: number; open: number; high: number; low: number; close: number; volume: number }
 interface MarketInfo { market: string; resolution_s: number; candle_count: number; first_ts: number; last_ts: number }

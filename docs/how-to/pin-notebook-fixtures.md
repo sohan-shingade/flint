@@ -119,7 +119,5 @@ re-run is the exact scenario the pin was designed to catch.
 
 ## See also
 
-- [DEFERRED.md][1] — D-1.5 origin + closure criteria
-- `docs/specs/phase-1-trust-correctness.md#15-proof-notebooks` — spec
 - `notebooks/README.md` — notebook conventions
 - `docs/reference/custom-data-schema.md` — Parquet fixture format

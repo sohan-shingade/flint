@@ -45,6 +45,9 @@ node_modules/
 # Flint local state
 .flint/
 
+# Internal planning docs (archive + phase specs) — kept local, off the public tree
+.dev/
+
 # Superpowers / Claude scaffolding
 .superpowers/
 .claude/

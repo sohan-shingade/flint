@@ -47,4 +47,4 @@ flint backtest \
 
 ## Venues
 
-Works on any market with hourly funding data in FlintStore. Best results on **Drift** and **Hyperliquid** perp markets where multiple months of funding history are available.
+Works on any market with hourly funding data in FlintStore. Best results on **Hyperliquid** perp markets where multiple months of funding history are available.

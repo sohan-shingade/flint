@@ -78,6 +78,6 @@ describe('useBackoffPoll', () => {
       expect(callCount).toBeGreaterThan(0)
     })
     unmount()
-    expect(observedSignal?.aborted).toBe(true)
+    expect((observedSignal as AbortSignal | null)?.aborted).toBe(true)
   })
 })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { waitFor } from '@testing-library/react'
 import { renderWithRouter } from '../test-utils'
 import FundingHeatmap from '../../pages/FundingHeatmap'
 

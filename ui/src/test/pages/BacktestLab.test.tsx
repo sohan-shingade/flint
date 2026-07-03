@@ -22,11 +22,11 @@ vi.mock('../../components/EquityCurve', () => ({
 }))
 
 vi.mock('../../components/DrawdownChart', () => ({
-  default: (props: any) => <div data-testid="drawdown-chart">Drawdown</div>,
+  default: () => <div data-testid="drawdown-chart">Drawdown</div>,
 }))
 
 vi.mock('../../components/MetricsCard', () => ({
-  default: (props: any) => <div data-testid="metrics-card">Metrics</div>,
+  default: () => <div data-testid="metrics-card">Metrics</div>,
 }))
 
 vi.mock('../../components/TradeTable', () => ({
@@ -34,31 +34,31 @@ vi.mock('../../components/TradeTable', () => ({
 }))
 
 vi.mock('../../components/PriceChart', () => ({
-  default: (props: any) => <div data-testid="price-chart">Price Chart</div>,
+  default: () => <div data-testid="price-chart">Price Chart</div>,
 }))
 
 vi.mock('../../components/PnlHistogram', () => ({
-  default: (props: any) => <div data-testid="pnl-histogram">PnL Histogram</div>,
+  default: () => <div data-testid="pnl-histogram">PnL Histogram</div>,
 }))
 
 vi.mock('../../components/ExposureTimeline', () => ({
-  default: (props: any) => <div data-testid="exposure-timeline">Exposure</div>,
+  default: () => <div data-testid="exposure-timeline">Exposure</div>,
 }))
 
 vi.mock('../../components/InstrumentExposure', () => ({
-  default: (props: any) => <div data-testid="instrument-exposure">Instruments</div>,
+  default: () => <div data-testid="instrument-exposure">Instruments</div>,
 }))
 
 vi.mock('../../components/SplitMetrics', () => ({
-  default: (props: any) => <div data-testid="split-metrics">Split</div>,
+  default: () => <div data-testid="split-metrics">Split</div>,
 }))
 
 vi.mock('../../components/RegimeSelector', () => ({
-  RegimeSelector: (props: any) => <div data-testid="regime-selector">Regimes</div>,
+  RegimeSelector: () => <div data-testid="regime-selector">Regimes</div>,
 }))
 
 vi.mock('../../components/RegimeResults', () => ({
-  RegimeResults: (props: any) => <div data-testid="regime-results">Regime Results</div>,
+  RegimeResults: () => <div data-testid="regime-results">Regime Results</div>,
 }))
 
 describe('BacktestLab', () => {

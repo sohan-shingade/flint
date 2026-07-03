@@ -43,5 +43,3 @@ Running a notebook:
 - Prints a summary to stdout.
 - Emits a markdown report at `artifacts/parity/{strategy}-{market}-{date}.md`.
 - Exits non-zero if parity thresholds are breached (CI-gate-ready).
-
-See `docs/specs/phase-1-trust-correctness.md#15-proof-notebooks` for the spec.

@@ -44,4 +44,4 @@ flint backtest \
 
 ## Venues
 
-Single-venue. Works on any Drift or Hyperliquid perp market. Oracle confirmation is most useful on **Drift** where Pyth oracle prices are available via `DriftWebSocketFeed` or the Pyth REST API.
+Single-venue. Works on any Hyperliquid perp market. Oracle confirmation uses **Pyth** oracle prices via the Pyth REST API.
