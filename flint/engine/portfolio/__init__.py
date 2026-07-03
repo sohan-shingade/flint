@@ -8,7 +8,16 @@ registry (upcast-on-read), and the ``EventLog`` writer/reader over
 from __future__ import annotations
 
 from .event_log import EventLog
-from .events import NOOP, RUN_FINISHED, RUN_STARTED, Event
+from .events import (
+    FILL,
+    FUNDING,
+    LIQUIDATION,
+    NOOP,
+    ORDER_PLACED,
+    RUN_FINISHED,
+    RUN_STARTED,
+    Event,
+)
 from .upcasters import REGISTRY, UpcasterRegistry
 
 __all__ = [
@@ -19,4 +28,8 @@ __all__ = [
     "NOOP",
     "RUN_STARTED",
     "RUN_FINISHED",
+    "ORDER_PLACED",
+    "FILL",
+    "FUNDING",
+    "LIQUIDATION",
 ]

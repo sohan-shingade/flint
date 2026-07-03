@@ -22,12 +22,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-# Phase-1 event kinds. Phase 3 adds ORDER_PLACED / FILL / FUNDING /
-# LIQUIDATION / UNIVERSE_MEMBERSHIP as the engine grows (kinds are plain
-# strings so new ones need no change here).
+# Phase-1 event kinds. Phase 3 adds the engine kinds below as the loop grows
+# (kinds are plain strings so new ones need no change to the envelope).
 NOOP = "noop"
 RUN_STARTED = "run_started"
 RUN_FINISHED = "run_finished"
+
+# Phase-3 engine kinds (§6). ORDER_PLACED records an accepted order entering the
+# shared fill path; FILL an executed trade; FUNDING a settled funding payment;
+# LIQUIDATION a mark-triggered forced close. All carry ``ts`` = the domain time
+# they occurred at, so replay/fold (slice 3.5) reconstructs state in order.
+ORDER_PLACED = "order_placed"
+FILL = "fill"
+FUNDING = "funding"
+LIQUIDATION = "liquidation"
 
 
 @dataclass(frozen=True, slots=True)
