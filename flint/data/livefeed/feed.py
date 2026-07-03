@@ -112,6 +112,7 @@ class LiveFeed:
         resolution_s: int,
         gap_source: GapSource | None = None,
         funding_interval_s: int = 3600,
+        resume_bar_start: int | None = None,
     ) -> None:
         if resolution_s <= 0:
             raise ValueError(f"resolution_s must be positive, got {resolution_s}")
@@ -122,7 +123,11 @@ class LiveFeed:
         self._gap_source = gap_source
         self._funding_interval_s = funding_interval_s
         self.clock = PaperClock(resolution_s)
-        self._last_emitted_bar_start: int | None = None
+        # ``resume_bar_start`` seeds the cursor on a session restart (§6.7): the
+        # first post-restart connection is then a *reconnect*, so the bars missed
+        # while the process was down are gap-replayed from the lake, and any
+        # already-processed bar the new stream re-sends is de-duplicated.
+        self._last_emitted_bar_start: int | None = resume_bar_start
         self._agg: CandleAggregator | None = None
         self.recoveries: list[GapRecovery] = []
 
