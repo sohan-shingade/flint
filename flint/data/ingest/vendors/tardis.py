@@ -62,7 +62,7 @@ from ...normalize import (
 )
 from ...ranges import Kind, RangeSet, TimeRange
 from ...sources import DataSource
-from ...store.coverage import CoverageLedger
+from ...store.coverage import FUNDING_PREDICTED_VARIANT, CoverageLedger
 from ....ports.secrets import SecretsPort
 from ....ports.tenant import TenantContext
 from ..backfillers.hyperliquid import coin_of
@@ -520,6 +520,10 @@ class TardisFetcher:
         self._on_day = on_day
         self._meta_memo: tuple[int, dict[str, Any]] | None = None
 
+    @property
+    def exchange(self) -> str:
+        return self._exchange
+
     # -- key handling (D23) ---------------------------------------------------
 
     def has_key(self) -> bool:
@@ -657,7 +661,13 @@ class TardisFetcher:
                 if ledger is not None:
                     # After persistence, never before — and zero-row days too:
                     # a landed day file with no rows is a quiet market (§9.2).
-                    ledger.assert_covered(day_span, "tardis")
+                    # derivative_ticker FUNDING rows are the *predicted* series
+                    # (not yet settled), so they assert under the predicted
+                    # variant and never satisfy the final-series hard gate.
+                    variant = (
+                        FUNDING_PREDICTED_VARIANT if kind is Kind.FUNDING else ""
+                    )
+                    ledger.assert_covered(day_span, "tardis", variant=variant)
             if self._on_day is not None:
                 self._on_day(day.isoformat(), kind, parsed.num_rows)
             pieces.append(_slice_half_open(parsed, span))
@@ -721,6 +731,43 @@ class TardisVendorSource(DataSource):
         self, venue: str, market: str, kind: Kind, span: TimeRange
     ) -> pa.Table:
         return self._fetcher.fetch(venue, market, kind, span)
+
+    def available_funding(
+        self, venue: str, market: str, want: TimeRange, *, rate_type: str = "final"
+    ) -> RangeSet:
+        """Tardis FUNDING is ``derivative_ticker`` — the *predicted* series only.
+
+        It never contributes final-series coverage, so it can never satisfy the
+        funding hard gate (§6.4): the settled series comes from the venue's own
+        history (HL REST / the hosted lake). Predicted coverage — the true
+        rate-path a tick strategy sees — is what this tier adds.
+        """
+        if rate_type != "predicted":
+            return RangeSet()
+        return self.available(venue, market, Kind.FUNDING, want)
+
+    def backfill_advert(
+        self, venue: str, market: str, kind: Kind
+    ) -> dict[str, Any] | None:
+        """The vendor-backfill option for a coverage gap — advertised keyless.
+
+        Entitlement gates *coverage* (``available()``), never the advertisement:
+        the exchanges metadata endpoint is free, so a keyless user still learns
+        exactly what a ``TARDIS_API_KEY`` would unlock (§B7). Returns None when
+        the vendor has no dataset for this (market, kind).
+        """
+        if venue != self._fetcher.exchange:
+            return None
+        window = self._fetcher.availability(market, kind)
+        return {
+            "vendor": "tardis",
+            "requires_secret": "TARDIS_API_KEY",
+            "available": (
+                {"start_ms": window.start_ms, "end_ms": window.end_ms}
+                if window is not None
+                else None
+            ),
+        }
 
 
 # --- helpers ------------------------------------------------------------------

@@ -1,7 +1,8 @@
-// Equity curve for the result panel (§11.1). v2 hands us the per-bar equity as a
-// plain number[] (carry-forward h: folded over EQUITY events), so the x-axis is the
-// bar index — no synthetic timestamps. Wrapped in a role="img" element so the curve
-// is announced (and asserted) even where the SVG has no measured size.
+// Equity curve for the result panel (§11.1). v3 hands us the per-sample equity as
+// [ts_ms, value] pairs (§B7 wire change), so the x-axis is real domain time — bar
+// runs come regularly spaced, tick runs irregularly, and the same chart reads both.
+// Wrapped in a role="img" element so the curve is announced (and asserted) even
+// where the SVG has no measured size.
 
 import { useMemo } from 'react'
 import {
@@ -13,6 +14,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import type { EquityPoint } from '../api/types'
 
 const TICK = { fill: '#555560', fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }
 
@@ -23,6 +25,14 @@ const tooltipStyle = {
   fontSize: 11,
   fontFamily: "'JetBrains Mono', monospace",
   color: '#a0a0a8',
+}
+
+// UTC day-and-time label for a ts axis tick; time is meaningful on intraday runs.
+function fmtTick(ms: number): string {
+  const d = new Date(ms)
+  const day = d.toISOString().slice(5, 10)
+  const hm = d.toISOString().slice(11, 16)
+  return hm === '00:00' ? day : `${day} ${hm}`
 }
 
 // Peak-preserving downsample to keep the DOM light on long runs.
@@ -43,9 +53,9 @@ function downsample<T extends { equity: number }>(arr: T[], maxPoints: number): 
   return out
 }
 
-export function EquityCurve({ series, height = 260 }: { series: number[]; height?: number }) {
+export function EquityCurve({ series, height = 260 }: { series: EquityPoint[]; height?: number }) {
   const data = useMemo(
-    () => downsample(series.map((equity, bar) => ({ bar, equity: +equity.toFixed(2) })), 300),
+    () => downsample(series.map(([ts, equity]) => ({ ts, equity: +equity.toFixed(2) })), 300),
     [series],
   )
 
@@ -57,7 +67,7 @@ export function EquityCurve({ series, height = 260 }: { series: number[]; height
     )
   }
 
-  const up = series[series.length - 1] >= series[0]
+  const up = series[series.length - 1][1] >= series[0][1]
   const stroke = up ? 'var(--color-gain)' : 'var(--color-loss)'
 
   return (
@@ -65,9 +75,22 @@ export function EquityCurve({ series, height = 260 }: { series: number[]; height
       <ResponsiveContainer width="100%" height={height}>
         <AreaChart data={data}>
           <CartesianGrid strokeDasharray="2 6" stroke="#1a1a1f" />
-          <XAxis dataKey="bar" tick={TICK} interval="preserveStartEnd" minTickGap={60} />
+          <XAxis
+            dataKey="ts"
+            type="number"
+            scale="time"
+            domain={['dataMin', 'dataMax']}
+            tickFormatter={fmtTick}
+            tick={TICK}
+            interval="preserveStartEnd"
+            minTickGap={60}
+          />
           <YAxis tick={TICK} domain={['auto', 'auto']} width={65} />
-          <Tooltip contentStyle={tooltipStyle} labelStyle={{ color: '#a0a0a8' }} />
+          <Tooltip
+            contentStyle={tooltipStyle}
+            labelStyle={{ color: '#a0a0a8' }}
+            labelFormatter={(label) => fmtTick(Number(label))}
+          />
           <Area
             type="monotone"
             dataKey="equity"

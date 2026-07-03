@@ -46,6 +46,37 @@ class DataSource(ABC):
         """Rows within half-open ``span``, ordered by ``ts``. Empty table if none."""
         ...
 
+    def available_funding(
+        self, venue: str, market: str, want: TimeRange, *, rate_type: str = "final"
+    ) -> RangeSet:
+        """Coverage of one FUNDING series, discriminated by ``rate_type`` (§6.4).
+
+        The hard gate consults ``rate_type="final"`` — only the settled series
+        settles money, so only it may satisfy the gate; ``"predicted"`` coverage
+        drives the fidelity flag. The default is honest for sources that serve
+        the settled series (the HL REST provider, the hosted lake): final ==
+        their whole FUNDING coverage and predicted == nothing. Sources whose
+        FUNDING rows are predicted-only (Tardis ``derivative_ticker``) or whose
+        store discriminates (ledger variants) override this.
+        """
+        if rate_type == "final":
+            return self.available(venue, market, Kind.FUNDING, want)
+        return RangeSet()
+
+    def provenance(
+        self, venue: str, market: str, kind: Kind, want: TimeRange
+    ) -> tuple[tuple[TimeRange, str], ...]:
+        """``available()`` broken into (range, provenance-label) pieces.
+
+        Default: every range this source can serve, labelled with the source's
+        chain name. The durable cache refines this per ledger entry (tardis /
+        recorder / hl_rest), so the coverage surface can color a range by who
+        actually captured it.
+        """
+        return tuple(
+            (r, self.name) for r in self.available(venue, market, kind, want).ranges
+        )
+
 
 class InMemoryCacheSource(DataSource):
     """The local cache tier — writable, so the manager writes through to it (§9).
@@ -91,6 +122,32 @@ class InMemoryCacheSource(DataSource):
         existing = self._tables.get(key)
         combined = pa.concat_tables([existing, table]) if existing else table
         self._tables[key] = _dedupe_sorted_by_ts(combined)
+
+    def available_funding(
+        self, venue: str, market: str, want: TimeRange, *, rate_type: str = "final"
+    ) -> RangeSet:
+        """Row-derived funding coverage, discriminated by the ``rate_type`` column.
+
+        Tables without a ``rate_type`` column are treated as the final series
+        (pre-§10 fixtures and REST backfills carry settled rates). With the
+        column, the final envelope extends left by the first settled row's
+        ``interval_s`` — a settlement at ``ts`` covers the accrual window that
+        *ends* there (§6.4) — clamped to the rows actually held, so coverage is
+        never advertised before any observation exists.
+        """
+        table = self._tables.get(self._key(venue, market, Kind.FUNDING))
+        if table is None or table.num_rows == 0:
+            return RangeSet()
+        held = _held_range(table)
+        if held is None:
+            return RangeSet()
+        if "rate_type" not in table.column_names:
+            series = held if rate_type == "final" else None
+        else:
+            series = _funding_series_envelope(table, rate_type, clamp=held)
+        if series is None:
+            return RangeSet()
+        return RangeSet((series,)).intersect(RangeSet((want,)))
 
 
 class FlintDataAPIClient(DataSource):
@@ -176,6 +233,17 @@ class FreeVenueProvider(DataSource):
             return pa.table({})
         return provider.fetch_range(market, kind, span)
 
+    def provenance(
+        self, venue: str, market: str, kind: Kind, want: TimeRange
+    ) -> tuple[tuple[TimeRange, str], ...]:
+        # The free tier *is* the venue's public REST API; label it with the
+        # ledger's provenance vocabulary so a fetched-then-cached range and a
+        # to-be-fetched range read as the same origin ("hl_rest" for HL).
+        label = "hl_rest" if venue == "hyperliquid" else f"{venue}_rest"
+        return tuple(
+            (r, label) for r in self.available(venue, market, kind, want).ranges
+        )
+
 
 # --- Arrow helpers (ts-keyed, half-open) ------------------------------------
 
@@ -208,6 +276,39 @@ def _slice_half_open(table: pa.Table, span: TimeRange) -> pa.Table:
         pc.less(table["ts"], span.end_ms),
     )
     return table.filter(mask).sort_by("ts")
+
+
+def _funding_series_envelope(
+    table: pa.Table, rate_type: str, *, clamp: TimeRange
+) -> TimeRange | None:
+    """Envelope of the FUNDING rows whose ``rate_type`` matches, or None.
+
+    For the final series the envelope extends left by the earliest settled
+    row's ``interval_s`` (a settlement covers the accrual window ending at its
+    ts, §6.4), then clamps to ``clamp`` (the table's full envelope) so nothing
+    is advertised before any row exists. ``"legacy"`` rows (pre-greenfield
+    import, store.layout) count as final: they are settled history.
+    """
+    import pyarrow.compute as pc
+
+    col = table.column("rate_type")
+    if rate_type == "final":
+        mask = pc.or_(pc.equal(col, "final"), pc.equal(col, "legacy"))
+    else:
+        mask = pc.equal(col, rate_type)
+    rows = table.filter(mask)
+    if rows.num_rows == 0:
+        return None
+    lo = int(pc.min(rows["ts"]).as_py())
+    hi = int(pc.max(rows["ts"]).as_py())
+    if rate_type == "final" and "interval_s" in rows.column_names:
+        first = rows.sort_by("ts").slice(0, 1)
+        interval_s = first.column("interval_s")[0].as_py()
+        if interval_s:
+            lo -= int(interval_s) * 1000
+    lo = max(lo, clamp.start_ms)
+    hi = min(hi + 1, clamp.end_ms)
+    return TimeRange(lo, hi) if lo < hi else None
 
 
 def _dedupe_sorted_by_ts(table: pa.Table) -> pa.Table:

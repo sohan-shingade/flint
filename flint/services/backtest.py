@@ -30,8 +30,13 @@ from time import perf_counter
 from typing import Any
 
 from flint.adapters import InMemoryUserData
-from flint.data import CoverageMode, DataManager, FundingCoverageError
-from flint.data.ranges import Kind, TimeRange
+from flint.data import (
+    CoverageMode,
+    DataManager,
+    FundingCoverageError,
+    GranularityUnavailableError,
+)
+from flint.data.ranges import Kind, RangeSet, TimeRange
 from flint.engine import EngineConfig
 from flint.engine.portfolio import EventLog
 from flint.live import build_adapter
@@ -41,6 +46,7 @@ from flint.research import (
     RunManifest,
     build_report,
     engine_version,
+    equity_points_from_events,
     equity_series_from_events,
 )
 from flint.strategy.base import StrategyRejection
@@ -77,6 +83,10 @@ class BacktestRequest:
     # Which simulation substrate to run on (§6.0, D29). "auto" resolves to the
     # legacy bar loop today; N9 flips "auto" to Nautilus once parity is green.
     engine: str = "auto"
+    # The market-data granularity tier the run consumes (§B7): "auto" (highest
+    # fully-covered tier, candles floor), or an explicit "candles"/"ticks"/"book"
+    # whose coverage gap is a structured rejection resolved before the funding gate.
+    granularity: str = "auto"
 
     @property
     def range(self) -> TimeRange:
@@ -137,8 +147,8 @@ def run_backtest(
 
     try:
         run = _execute(tenant, request, data=data, event_store=user_data)
-    except FundingCoverageError as exc:
-        rejection = _rejection_from_gate(exc)
+    except (FundingCoverageError, GranularityUnavailableError) as exc:
+        rejection = _rejection_from_exc(exc)
         manifest = _manifest(request, now_ms=now_ms, note=f"rejected: {rejection.code}")
         summary = {
             **manifest.to_summary(),
@@ -241,6 +251,7 @@ def _execute(
             request.range,
             mode=CoverageMode.STRICT,  # funding hard gate (§6.4); raises on a gap
             signal_venues=request.signal_venues,
+            granularity=request.granularity,
         )
     with _timed(timing, "input_build_ms"):
         # Bar lane: close-derived mark synthesis is the OHLCV-only path today, so the
@@ -280,7 +291,8 @@ def _execute(
         equity = equity_series_from_events(events)
         report = build_report(equity, resolution_s=request.resolution_s, events=events)
 
-    summary = _summary(request, prepared, report, equity, rejections, notes, timing)
+    equity_curve = equity_points_from_events(events)
+    summary = _summary(request, prepared, report, equity_curve, rejections, notes, timing)
     return _Run(summary=summary, equity=equity)
 
 
@@ -298,19 +310,24 @@ def _summary(
     request: BacktestRequest,
     prepared: Any,
     report: Any,
-    equity: list[float],
+    equity_curve: list[list[Any]],
     rejections: list[StrategyRejection],
     notes: list[str],
     timing: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     m = report.metrics
     cost = report.cost
+    # The tearsheet's honesty record leads with the resolved granularity tier and
+    # its per-leg provenance, then the per-(leg, kind) fidelity lines (§B7, §9).
+    fidelity_lines = [*prepared.granularity_detail, *prepared.fidelity.lines()]
     return {
         "verdict": "ok",
         "strategy": request.strategy,
         "universe": list(request.universe),
         "venues": list(request.venues),
         "fill_mode": request.fill_mode,
+        "granularity": prepared.granularity,
+        "granularity_detail": list(prepared.granularity_detail),
         "requested_range": _range(prepared.requested),
         "effective_range": _range(prepared.effective_range),
         "clipped": prepared.clipped,
@@ -332,9 +349,9 @@ def _summary(
         "n_trials": report.n_trials,
         "win_rate": report.win_rate,
         "cost": _cost(cost),
-        "equity_curve": equity,
+        "equity_curve": equity_curve,
         "rejections": [_rej(r) for r in rejections],
-        "fidelity_lines": prepared.fidelity.lines(),
+        "fidelity_lines": fidelity_lines,
         "notes": list(notes),
         # Per-run timing breakdown (§19.2): data fetch / input build / the engine
         # per-bar loop / trust-report fold — the phases the front door can observe.
@@ -435,6 +452,16 @@ def _rej(r: StrategyRejection) -> dict[str, Any]:
     }
 
 
+def _rejection_from_exc(
+    exc: FundingCoverageError | GranularityUnavailableError,
+) -> Rejection:
+    """Convert a data-scarcity gate exception into a structured §19.1 rejection."""
+    if isinstance(exc, GranularityUnavailableError):
+        return _rejection_from_granularity(exc)
+    return _rejection_from_gate(exc)
+
+
+# Kept as a named seam: strategy_source's sandbox path imports it directly.
 def _rejection_from_gate(exc: FundingCoverageError) -> Rejection:
     missing = tuple(leg.label() for leg in exc.gaps)
     available: dict[str, Any] = {}
@@ -452,3 +479,40 @@ def _rejection_from_gate(exc: FundingCoverageError) -> Rejection:
         available=available,
         hint="Re-run over a covered range, or pass a clip-to-coverage mode.",
     )
+
+
+def _rejection_from_granularity(exc: GranularityUnavailableError) -> Rejection:
+    """Granularity gap → ``granularity_unavailable`` rejection (§B7, §19.1).
+
+    The per-leg per-kind coverage (each a list of covered ``[start_ms, end_ms)``
+    pieces with provenance-free bounds) and the machine-readable ``options`` ride
+    in ``extras`` so a surface/agent can render the ways out without parsing prose.
+    ``missing`` lists the legs with any gap in a required tier kind.
+    """
+    coverage: dict[str, Any] = {}
+    missing: list[str] = []
+    for leg, per_kind in exc.coverage.items():
+        leg_gap = False
+        per_kind_payload: dict[str, Any] = {}
+        for kind, rs in per_kind.items():
+            per_kind_payload[kind.value] = _rangeset_payload(rs)
+            if not rs.covers(exc.requested):
+                leg_gap = True
+        coverage[leg.label()] = per_kind_payload
+        if leg_gap:
+            missing.append(leg.label())
+    return Rejection(
+        code="granularity_unavailable",
+        message=str(exc).split("\n", 1)[0],
+        missing=tuple(missing),
+        hint="Run at bars, clip to coverage, backfill via Tardis, or record forward.",
+        extras={
+            "granularity": exc.requested_tier,
+            "coverage": coverage,
+            "options": exc.options,
+        },
+    )
+
+
+def _rangeset_payload(rs: RangeSet) -> list[dict[str, int]]:
+    return [{"start_ms": r.start_ms, "end_ms": r.end_ms} for r in rs.ranges]

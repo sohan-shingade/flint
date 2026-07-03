@@ -13,6 +13,8 @@ export interface Cell {
   market: string
   venue: string
   coverage?: Coverage['coverage']
+  detail?: Coverage['detail']
+  tiers?: Coverage['tiers']
   error?: ApiError | Error
 }
 
@@ -42,7 +44,7 @@ export function useCoverageMatrix(markets: string[], venues: string[]): Coverage
         const k = cellKey(venue, market)
         try {
           const c = await apiGet<Coverage>(`/data/coverage${encodeQuery({ market, venue })}`)
-          return [k, { market, venue, coverage: c.coverage }] as const
+          return [k, { market, venue, coverage: c.coverage, detail: c.detail, tiers: c.tiers }] as const
         } catch (e) {
           return [k, { market, venue, error: e as ApiError }] as const
         }

@@ -99,6 +99,11 @@ class Rejection:
     ranges actually available and the fix, and this rides in the result body as a
     structured payload (never a 4xx/5xx). ``missing`` lists the ``(venue, market)``
     legs whose funding is missing; ``available`` gives each leg's covered bounds.
+
+    ``extras`` carries any code-specific structured fields (merged flat into the
+    ``rejected`` body): a ``granularity_unavailable`` rejection uses it for the
+    per-leg per-kind ``coverage`` and the machine-readable ``options`` out (§B7),
+    which the funding-gap case has no use for.
     """
 
     code: str  # e.g. "funding_gap"
@@ -106,6 +111,7 @@ class Rejection:
     missing: tuple[str, ...] = ()
     available: Mapping[str, Any] = field(default_factory=dict)
     hint: str = ""
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -115,5 +121,6 @@ class Rejection:
                 "missing": list(self.missing),
                 "available": dict(self.available),
                 "hint": self.hint,
+                **dict(self.extras),
             }
         }

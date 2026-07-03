@@ -11,14 +11,26 @@ import { MetricsCard } from './MetricsCard'
 import { EquityCurve } from './EquityCurve'
 import { DrawdownChart } from './DrawdownChart'
 import { ValidationPanel } from './ValidationPanel'
+import { GranularityOptionsCard, type GranularityActions } from './GranularityOptionsCard'
 import { RejectedState } from './states'
 import { fmtUsd } from '../lib/format'
 
-export function ResultPanel({ result }: { result: BacktestResult }) {
+export function ResultPanel({
+  result,
+  granularityActions,
+}: {
+  result: BacktestResult
+  granularityActions?: GranularityActions
+}) {
   if (result.verdict === 'invalid' && result.validation) {
     return <ValidationPanel report={result.validation} />
   }
   if (result.verdict === 'rejected' && result.rejected) {
+    // A granularity gap carries the machine-readable ways out — render the options
+    // card; every other rejection (funding gap) is the missing-ranges state.
+    if (result.rejected.code === 'granularity_unavailable') {
+      return <GranularityOptionsCard rejected={result.rejected} actions={granularityActions} />
+    }
     return <RejectedState rejected={result.rejected} />
   }
 

@@ -44,6 +44,7 @@ from .sources import (
     FreeVenueProvider,
     InMemoryCacheSource,
 )
+from .tiers import CANDLES_TIER, GRANULARITIES, TIER_BY_NAME, TIERS, Tier
 
 
 class CoverageMode(Enum):
@@ -106,6 +107,11 @@ class PreparedData:
     effective_range: TimeRange
     tables: dict[tuple[str, str, Kind], pa.Table] = field(default_factory=dict)
     fidelity: FidelitySummary = FidelitySummary()
+    #: The granularity tier the run resolved to (§B7): "candles" | "ticks" | "book".
+    granularity: str = "candles"
+    #: Human-readable provenance lines for the resolved tier — tearsheet honesty,
+    #: e.g. "granularity: ticks" + per-leg "trades: tardis 2024-10-29 → …".
+    granularity_detail: tuple[str, ...] = ()
 
     @property
     def clipped(self) -> bool:
@@ -144,6 +150,52 @@ class FundingCoverageError(Exception):
             )
         else:
             lines.append("Re-run over a covered range, or pass --clip-to-coverage.")
+        return "\n".join(lines)
+
+
+class GranularityUnavailableError(Exception):
+    """Raised when an *explicit* granularity tier has a coverage gap (§B7).
+
+    Like :class:`FundingCoverageError`, this is expected data scarcity, not a
+    fault: the services front door converts it into a structured §19.1
+    ``rejected`` payload (code ``granularity_unavailable``) carrying the per-leg
+    per-kind coverage and the machine-readable ``options`` out — run at bars,
+    clip to coverage, vendor backfill (advertised even without a key), or
+    record forward. It never surfaces as an HTTP error.
+    """
+
+    def __init__(
+        self,
+        requested_tier: str,
+        coverage: dict[Leg, dict[Kind, RangeSet]],
+        options: list[dict[str, object]],
+        requested: TimeRange,
+    ) -> None:
+        self.requested_tier = requested_tier
+        self.coverage = coverage
+        self.options = options
+        self.requested = requested
+        super().__init__(self._format())
+
+    def _format(self) -> str:
+        lines = [
+            f"Granularity {self.requested_tier!r} unavailable over the requested "
+            "range — backtest rejected."
+        ]
+        for leg, per_kind in self.coverage.items():
+            for kind, rs in per_kind.items():
+                if rs.covers(self.requested):
+                    continue
+                bounds = rs.bounds()
+                have = (
+                    f"{_fmt_date(bounds.start_ms)} → {_fmt_date(bounds.end_ms)}"
+                    if bounds is not None
+                    else "none"
+                )
+                lines.append(f"  {leg.label()} {kind.value}: covered {have}.")
+        actions = ", ".join(str(o.get("action")) for o in self.options)
+        if actions:
+            lines.append(f"Options: {actions}.")
         return "\n".join(lines)
 
 
@@ -189,6 +241,61 @@ class DataManager:
             covered = covered.union(src.available(leg.venue, leg.market, kind, want))
         return covered
 
+    def funding_coverage(
+        self, leg: Leg, want: TimeRange, *, rate_type: str = "final"
+    ) -> RangeSet:
+        """Union of one FUNDING *series*' coverage across the chain (§6.4).
+
+        The hard gate consults ``rate_type="final"`` — only the settled series
+        settles money. ``"predicted"`` coverage (the recorder's ctx fold, Tardis
+        derivative_ticker) drives the fidelity flag, never the gate.
+        """
+        covered = RangeSet()
+        for src in self._sources:
+            covered = covered.union(
+                src.available_funding(leg.venue, leg.market, want, rate_type=rate_type)
+            )
+        return covered
+
+    def coverage_detail(
+        self, leg: Leg, kind: Kind, want: TimeRange
+    ) -> tuple[tuple[TimeRange, str], ...]:
+        """Coverage as (range, provenance) pieces, chain-priority merged (§B7).
+
+        Each source reports its coverage with a provenance label (ledger
+        entries carry their asserting ingester — tardis/recorder/hl_rest);
+        earlier tiers claim ranges first, so an overlap reads as the tier that
+        would actually serve it. Pieces are non-overlapping, sorted by start.
+        """
+        claimed = RangeSet()
+        out: list[tuple[TimeRange, str]] = []
+        for src in self._sources:
+            for piece, label in src.provenance(leg.venue, leg.market, kind, want):
+                fresh = RangeSet((piece,)).subtract(claimed)
+                for sub in fresh.ranges:
+                    out.append((sub, label))
+                claimed = claimed.union(fresh)
+        return tuple(sorted(out, key=lambda p: p[0].start_ms))
+
+    def tier_coverage(
+        self, legs: Sequence[Leg], tier: Tier, want: TimeRange
+    ) -> dict[Leg, dict[Kind, RangeSet]]:
+        """Per-leg per-required-kind coverage for one tier — queries only, no fetch.
+
+        FUNDING coverage means the **final/settled** series (§6.4): predicted
+        captures never make a tier (or the gate) look covered.
+        """
+        per_leg: dict[Leg, dict[Kind, RangeSet]] = {}
+        for leg in legs:
+            per_kind: dict[Kind, RangeSet] = {}
+            for kind in tier.required:
+                if kind is Kind.FUNDING:
+                    per_kind[kind] = self.funding_coverage(leg, want)
+                else:
+                    per_kind[kind] = self.coverage(leg, kind, want)
+            per_leg[leg] = per_kind
+        return per_leg
+
     def prepare(
         self,
         universe: Sequence[str],
@@ -198,6 +305,7 @@ class DataManager:
         *,
         mode: CoverageMode = CoverageMode.STRICT,
         signal_venues: Sequence[str] = (),
+        granularity: str = "candles",
     ) -> PreparedData:
         """Resolve every leg × kind over ``requested`` and apply the gates.
 
@@ -209,7 +317,21 @@ class DataManager:
         degrades per the §8.2 soft contract (``None`` + a fidelity flag), it never
         rejects the run. A venue named in both sets is treated as executable (the
         stronger contract wins).
+
+        ``granularity`` picks the tier of market data the run consumes (§B7):
+        ``"candles"`` (default — the pre-tier behavior, byte-identical),
+        ``"ticks"`` / ``"book"`` (explicit: a coverage gap in the tier's kinds
+        raises :class:`GranularityUnavailableError`, resolved **before** the
+        funding gate), or ``"auto"`` (highest tier whose required kinds fully
+        cover the range for every executable leg — coverage queries only,
+        falling back to the candles floor). Tiers above candles extend the
+        fetched kinds with the tier's market-data kinds.
         """
+        if granularity not in GRANULARITIES:
+            raise ValueError(
+                f"unknown granularity {granularity!r}; expected one of "
+                f"{list(GRANULARITIES)}"
+            )
         exec_legs = [Leg(venue=v, market=m) for v in venues for m in universe]
         exec_venues = set(venues)
         signal_legs = [
@@ -219,23 +341,42 @@ class DataManager:
             for m in universe
         ]
 
-        # 1. Funding hard gate up front, over the requested range — EXECUTABLE
-        #    legs only (§2.11, D28). Signal-only lab legs degrade below, never gate.
-        funding_avail = {
-            leg: self.coverage(leg, Kind.FUNDING, requested) for leg in exec_legs
-        }
-        gaps = {
-            leg: RangeSet((requested,)).subtract(avail)
-            for leg, avail in funding_avail.items()
-        }
-        gaps = {leg: g for leg, g in gaps.items() if not g.is_empty}
+        # 0. Granularity resolution — BEFORE the funding gate (§B7): an explicit
+        #    tier with a gap is its own structured rejection; auto never rejects
+        #    (the candles floor + the funding gate keep their own contracts).
+        tier = self._resolve_tier(exec_legs, requested, granularity)
+        kinds = tuple(dict.fromkeys(kinds))
+        if tier.name != CANDLES_TIER.name:
+            kinds = tuple(
+                dict.fromkeys((*kinds, *tier.market_data_kinds))
+            )
 
-        if mode is CoverageMode.STRICT:
-            if gaps:
-                raise FundingCoverageError(gaps, funding_avail, requested)
-            effective = requested
+        # 1. Funding hard gate up front, over the requested range — EXECUTABLE
+        #    legs only (§2.11, D28), and only the FINAL/settled series counts:
+        #    that is what settles money (§6.4). Predicted-rate captures (the
+        #    recorder's ctx fold, Tardis derivative_ticker) drive the fidelity
+        #    flag below, never this gate. Signal-only lab legs degrade, never gate.
+        #    The gate protects *runs*: a request that does not consume FUNDING at
+        #    all (``pull_data`` warming trades/quotes) is a fetch, not a run —
+        #    nothing settles, so there is nothing to gate or clip against.
+        if Kind.FUNDING in kinds:
+            funding_avail = {
+                leg: self.funding_coverage(leg, requested) for leg in exec_legs
+            }
+            gaps = {
+                leg: RangeSet((requested,)).subtract(avail)
+                for leg, avail in funding_avail.items()
+            }
+            gaps = {leg: g for leg, g in gaps.items() if not g.is_empty}
+
+            if mode is CoverageMode.STRICT:
+                if gaps:
+                    raise FundingCoverageError(gaps, funding_avail, requested)
+                effective = requested
+            else:
+                effective = self._clip_range(exec_legs, funding_avail, requested)
         else:
-            effective = self._clip_range(exec_legs, funding_avail, requested)
+            effective = requested
 
         # 2. Resolve every leg × kind over the effective range + build fidelity.
         #    Executable legs first; then signal legs, flagged so their funding
@@ -255,14 +396,177 @@ class DataManager:
                     self._fidelity(leg, kind, effective, covered, signal=True)
                 )
 
+        # 3. Funding fidelity sub-entry (§B4): report the *predicted* series
+        #    separately from the settled one the gate enforced — a tick-lane
+        #    strategy sees the true recorded rate path only where predicted
+        #    coverage exists; elsewhere the engine bridges from settled, and
+        #    the tearsheet must say so.
+        if Kind.FUNDING in kinds:
+            for leg in exec_legs:
+                entries.append(self._funding_predicted_entry(leg, effective))
+
         return PreparedData(
             requested=requested,
             effective_range=effective,
             tables=tables,
             fidelity=FidelitySummary(tuple(entries)),
+            granularity=tier.name,
+            granularity_detail=self._granularity_detail(tier, exec_legs, effective),
         )
 
     # --- internals ---------------------------------------------------------
+
+    def _resolve_tier(
+        self, exec_legs: list[Leg], requested: TimeRange, granularity: str
+    ) -> Tier:
+        """Resolve ``granularity`` to a tier — coverage queries only (§B7).
+
+        ``"candles"`` is the floor and never granularity-rejects (candle gaps
+        keep their established flagged behavior; funding gaps stay the funding
+        gate's). ``"auto"`` walks the ladder top-down and takes the highest
+        fully covered tier, else the floor. An explicit ``"ticks"``/``"book"``
+        with a gap raises the structured rejection with the ways out.
+        """
+        if granularity == CANDLES_TIER.name:
+            return CANDLES_TIER
+        if granularity == "auto":
+            for tier in reversed(TIERS):
+                if tier.name == CANDLES_TIER.name:
+                    continue
+                if _tier_fully_covered(
+                    self.tier_coverage(exec_legs, tier, requested), requested
+                ):
+                    return tier
+            return CANDLES_TIER
+        tier = TIER_BY_NAME[granularity]
+        coverage = self.tier_coverage(exec_legs, tier, requested)
+        if _tier_fully_covered(coverage, requested):
+            return tier
+        raise GranularityUnavailableError(
+            granularity,
+            coverage,
+            self._tier_options(exec_legs, tier, coverage, requested),
+            requested,
+        )
+
+    def _tier_options(
+        self,
+        exec_legs: list[Leg],
+        tier: Tier,
+        coverage: dict[Leg, dict[Kind, RangeSet]],
+        requested: TimeRange,
+    ) -> list[dict[str, object]]:
+        """The machine-readable ways out of a granularity gap (§B7, §19.1)."""
+        options: list[dict[str, object]] = []
+
+        # run_bars — only offered when the candles tier actually covers.
+        candles_cov = self.tier_coverage(exec_legs, CANDLES_TIER, requested)
+        if _tier_fully_covered(candles_cov, requested):
+            options.append({"action": "run_bars", "granularity": CANDLES_TIER.name})
+
+        # clip_to_coverage — largest contiguous window where every required
+        # kind of the requested tier covers every leg (same contiguity rule as
+        # the funding-gate clip: an internal gap must never be spanned).
+        common = RangeSet((requested,))
+        for per_kind in coverage.values():
+            for rs in per_kind.values():
+                common = common.intersect(rs)
+        if not common.is_empty:
+            best = max(common.ranges, key=lambda r: r.duration_ms)
+            options.append(
+                {
+                    "action": "clip_to_coverage",
+                    "effective_range": {
+                        "start_ms": best.start_ms,
+                        "end_ms": best.end_ms,
+                    },
+                }
+            )
+
+        # vendor_backfill — advertised even without a key (D23 gates coverage,
+        # not knowledge): per missing (leg, kind), the vendor window from
+        # exchange metadata when a vendor tier is wired; a static advert
+        # otherwise, so the user still learns the fix exists.
+        available: dict[str, dict[str, object]] = {}
+        for leg, per_kind in coverage.items():
+            for kind, rs in per_kind.items():
+                if rs.covers(requested) or kind is Kind.FUNDING:
+                    continue
+                advert = self._backfill_advert(leg, kind)
+                if advert is not None:
+                    available.setdefault(leg.label(), {})[kind.value] = advert[
+                        "available"
+                    ]
+        options.append(
+            {
+                "action": "vendor_backfill",
+                "vendor": "tardis",
+                "requires_secret": "TARDIS_API_KEY",
+                "available": available or None,
+            }
+        )
+
+        options.append(
+            {
+                "action": "record_forward",
+                "hint": (
+                    "flint data record --venue "
+                    + ",".join(sorted({leg.venue for leg in exec_legs}))
+                    + " --market "
+                    + ",".join(sorted({leg.market for leg in exec_legs}))
+                ),
+            }
+        )
+        return options
+
+    def _backfill_advert(self, leg: Leg, kind: Kind) -> dict[str, object] | None:
+        for src in self._sources:
+            advert = getattr(src, "backfill_advert", None)
+            if advert is None:
+                continue
+            got = advert(leg.venue, leg.market, kind)
+            if got is not None:
+                return got
+        return None
+
+    def _funding_predicted_entry(self, leg: Leg, effective: TimeRange) -> FidelityEntry:
+        """The §B4 funding sub-entry: true predicted series vs settled-bridge."""
+        predicted = self.funding_coverage(leg, effective, rate_type="predicted")
+        if predicted.covers(effective):
+            labels = sorted(
+                {
+                    src.name
+                    for src in self._sources
+                    if not src.available_funding(
+                        leg.venue, leg.market, effective, rate_type="predicted"
+                    ).is_empty
+                }
+            )
+            note = f"predicted series: true ({'|'.join(labels)})"
+        else:
+            note = "predicted series: derived from settled — bridge"
+        return FidelityEntry(
+            leg=leg, kind=Kind.FUNDING, full=True, source="funding", note=note
+        )
+
+    def _granularity_detail(
+        self, tier: Tier, exec_legs: list[Leg], effective: TimeRange
+    ) -> tuple[str, ...]:
+        """Tearsheet lines: the resolved tier + who serves its tick-scale kinds."""
+        lines = [f"granularity: {tier.name}"]
+        if tier.name == CANDLES_TIER.name:
+            return tuple(lines)
+        for leg in exec_legs:
+            for kind in tier.market_data_kinds:
+                pieces = self.coverage_detail(leg, kind, effective)
+                if not pieces:
+                    continue
+                spans = ", ".join(
+                    f"{label} {_fmt_date(r.start_ms)} → {_fmt_date(r.end_ms)}"
+                    for r, label in pieces
+                )
+                lines.append(f"  {leg.label()} {kind.value}: {spans}")
+        return tuple(lines)
 
     def _clip_range(
         self, legs: list[Leg], funding_avail: dict[Leg, RangeSet], requested: TimeRange
@@ -355,6 +659,17 @@ class DataManager:
             leg=leg, kind=kind, full=False, source="none",
             note="partial coverage for this range",
         )
+
+
+def _tier_fully_covered(
+    coverage: dict[Leg, dict[Kind, RangeSet]], requested: TimeRange
+) -> bool:
+    """True when every required kind of every leg covers the whole range."""
+    return all(
+        rs.covers(requested)
+        for per_kind in coverage.values()
+        for rs in per_kind.values()
+    )
 
 
 # --- formatting -------------------------------------------------------------

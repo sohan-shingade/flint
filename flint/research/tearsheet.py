@@ -233,6 +233,21 @@ def equity_series_from_events(events: Iterable[Event]) -> list[float]:
     return [float(ev.payload["equity"]) for ev in events if ev.kind == EQUITY]
 
 
+def equity_points_from_events(events: Iterable[Event]) -> list[list[float]]:
+    """The EQUITY stream as ``[ts_ms, value]`` pairs — the wire equity curve (§B7).
+
+    Bar-lane runs sample equity on a regular bar clock; tick-lane runs sample on a
+    fixed interval, so the curve's x-axis is time, not a bar index. Emitting the
+    timestamp with each point makes the one shape carry both: a bar run ships
+    regularly-spaced pairs, a tick run irregular ones, and every surface (the
+    charts especially) reads the same ``[ts_ms, value][]``. ``ts`` is the EQUITY
+    event's domain time (bar START in unix ms); ``value`` is total equity.
+    """
+    return [
+        [ev.ts, float(ev.payload["equity"])] for ev in events if ev.kind == EQUITY
+    ]
+
+
 @dataclass(frozen=True)
 class PerformanceReport:
     """The trust report: §11.1 metrics + the engine's full-cost decomposition + the

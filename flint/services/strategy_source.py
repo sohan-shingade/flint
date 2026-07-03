@@ -32,10 +32,20 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from flint.data import CoverageMode, DataManager, FundingCoverageError
+from flint.data import (
+    CoverageMode,
+    DataManager,
+    FundingCoverageError,
+    GranularityUnavailableError,
+)
 from flint.engine.portfolio import EventLog
 from flint.ports import TenantContext, UserDataPort
-from flint.research import analyze, build_report, equity_series_from_events
+from flint.research import (
+    analyze,
+    build_report,
+    equity_points_from_events,
+    equity_series_from_events,
+)
 from flint.strategy.sandbox import (
     SandboxError,
     SandboxTimeout,
@@ -54,7 +64,7 @@ from .backtest import (
     BacktestRequest,
     _manifest,
     _persist,
-    _rejection_from_gate,
+    _rejection_from_exc,
     _summary,
     _timed,
 )
@@ -264,6 +274,7 @@ def run_backtest_source(
     initial_capital: str = "100000",
     overrides: Mapping[str, Any] | None = None,
     signal_venues: Sequence[str] = (),
+    granularity: str = "auto",
     user_data: UserDataPort,
     data: DataManager,
     now_ms: int = 0,
@@ -314,6 +325,7 @@ def run_backtest_source(
         initial_capital=initial_capital,
         overrides=dict(overrides or {}),
         signal_venues=tuple(signal_venues),
+        granularity=granularity,
     )
 
     # No "running" head is written up front: an invalid verdict (validation OR a
@@ -328,8 +340,8 @@ def run_backtest_source(
             data=data,
             user_data=user_data,
         )
-    except FundingCoverageError as exc:
-        rejection = _rejection_from_gate(exc)
+    except (FundingCoverageError, GranularityUnavailableError) as exc:
+        rejection = _rejection_from_exc(exc)
         manifest = _manifest(
             request, now_ms=now_ms, note=f"rejected: {rejection.code}", source=source
         )
@@ -400,6 +412,7 @@ def _run_source_in_sandbox(
             request.range,
             mode=CoverageMode.STRICT,  # funding hard gate (§6.4); raises on a gap
             signal_venues=request.signal_venues,
+            granularity=request.granularity,
         )
     with _timed(timing, "input_build_ms"):
         inputs = build_engine_inputs(prepared.tables, executable)
@@ -427,7 +440,10 @@ def _run_source_in_sandbox(
         equity = equity_series_from_events(events)
         report = build_report(equity, resolution_s=request.resolution_s, events=events)
 
-    summary = _summary(request, prepared, report, equity, [], sandboxed.notes, timing)
+    equity_curve = equity_points_from_events(events)
+    summary = _summary(
+        request, prepared, report, equity_curve, [], sandboxed.notes, timing
+    )
     summary["rejections"] = sandboxed.rejections
     return summary
 

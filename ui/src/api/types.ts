@@ -76,14 +76,35 @@ export interface InRunRejection {
   action?: string
 }
 
+// A granularity-rejection option — one machine-readable way out of a tier gap
+// (§B7). `action` discriminates the shape; extra fields ride alongside.
+export interface RejectionOption {
+  action: 'run_bars' | 'clip_to_coverage' | 'vendor_backfill' | 'record_forward'
+  granularity?: string // run_bars: the tier to fall back to ("candles")
+  effective_range?: Range // clip_to_coverage: the largest covered window
+  vendor?: string // vendor_backfill: "tardis"
+  requires_secret?: string // vendor_backfill: "TARDIS_API_KEY"
+  available?: Record<string, Record<string, Range | null>> | null // vendor_backfill window(s)
+  hint?: string // record_forward: the CLI invocation
+}
+
 // The structured funding-gap (or other scarcity) rejection — data, not an error.
+// A funding_gap uses missing/available; a granularity_unavailable adds the
+// per-leg per-kind `coverage` and the machine-readable `options` (§B7).
 export interface RejectedPayload {
   code: string
   message: string
   missing: string[]
   available: Record<string, Range | null>
   hint: string
+  granularity?: string // requested tier (granularity_unavailable)
+  coverage?: Record<string, Record<string, Range[]>> // leg → kind → covered pieces
+  options?: RejectionOption[]
 }
+
+// One [ts_ms, value] point of the equity curve. The wire ships time with each
+// point so bar runs (regular spacing) and tick runs (irregular) share one shape.
+export type EquityPoint = [number, number]
 
 export interface BacktestResult {
   verdict: 'ok' | 'rejected' | 'invalid'
@@ -101,16 +122,26 @@ export interface BacktestResult {
   n_trials?: number
   win_rate?: number
   cost?: Cost | null
-  equity_curve?: number[]
+  equity_curve?: EquityPoint[]
   rejections?: InRunRejection[]
   fidelity_lines?: string[]
   notes?: string[]
   timing?: Record<string, number>
+  // the resolved granularity tier + its per-leg provenance lines (§B7)
+  granularity?: string
+  granularity_detail?: string[]
   // present only when verdict === "rejected"
   rejected?: RejectedPayload
 }
 
 // ---- data coverage (GET /data/coverage) — services.data_coverage ------------
+
+// One covered piece with the provenance that would serve it (§B7 ladder).
+export interface CoveragePiece {
+  start_ms: number
+  end_ms: number
+  source: string // hl_rest | tardis | recorder | local_cache | free_venue_provider
+}
 
 export interface Coverage {
   market: string
@@ -119,7 +150,12 @@ export interface Coverage {
     candles?: Range | null
     funding?: Range | null
     oi?: Range | null
+    [kind: string]: Range | null | undefined
   }
+  // per-kind covered pieces with provenance (drives the ladder's segment colors)
+  detail?: Record<string, CoveragePiece[]>
+  // one RangeSet per granularity tier (candles/ticks/book) — the coverage ladder
+  tiers?: Record<string, Range[]>
 }
 
 // ---- funding lab (GET /lab/funding) — services.funding_lab -----------------

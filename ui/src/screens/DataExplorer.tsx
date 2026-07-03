@@ -8,6 +8,7 @@
 
 import { useState } from 'react'
 import { GridControls } from '../components/GridControls'
+import { CoverageLadder } from '../components/CoverageLadder'
 import { Loading } from '../components/states'
 import { cellKey, useCoverageMatrix } from '../hooks/useCoverageMatrix'
 import type { Range } from '../api/types'
@@ -71,10 +72,22 @@ export default function DataExplorer() {
                   {cell?.error ? (
                     <div className="text-loss">coverage query failed: {cell.error.message}</div>
                   ) : (
-                    <div className="space-y-1">
-                      {KINDS.map((k) => (
-                        <KindRow key={k} label={k} range={cell?.coverage?.[k]} />
-                      ))}
+                    <div className="space-y-3">
+                      <div className="space-y-1" data-testid="kinds">
+                        {KINDS.map((k) => (
+                          <KindRow key={k} label={k} range={cell?.coverage?.[k]} />
+                        ))}
+                      </div>
+                      <div>
+                        <div className="mb-1 text-[10px] uppercase tracking-wide text-ghost">
+                          granularity tiers
+                        </div>
+                        <CoverageLadder
+                          tiers={cell?.tiers}
+                          detail={cell?.detail}
+                          testid={`ladder-${venue}-${market}`}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>

@@ -38,6 +38,14 @@ _LEDGER_SCHEMA_VERSION = 1
 # this set is a deliberate act with its own gap-semantics review (§B2).
 KNOWN_SOURCES = frozenset({"tardis", "recorder", "hl_rest"})
 
+# FUNDING coverage is asserted per rate_type series (§6.4): the default variant
+# ``""`` is the **final/settled** series — the one that settles money and the
+# only one the funding hard gate may accept — while predicted-rate captures
+# (the live recorder's ctx fold, Tardis ``derivative_ticker``) assert under
+# this variant so watching-the-predicted-rate never masquerades as settled
+# history. Predicted coverage drives the fidelity flag, never the gate.
+FUNDING_PREDICTED_VARIANT = "predicted"
+
 
 @dataclass(frozen=True, slots=True)
 class CoverageEntry:
@@ -95,6 +103,16 @@ class CoverageLedger:
         return RangeSet(
             e.range for e in self._entries if e.variant == variant
         )
+
+    def covered_any(self) -> RangeSet:
+        """The union across *all* variants — "are there rows worth serving?".
+
+        The serve path (``available``/``fetch``) wants every asserted range
+        regardless of variant (predicted funding rows are real, servable rows);
+        only the funding hard gate must discriminate, via ``covered("")`` vs
+        ``covered(FUNDING_PREDICTED_VARIANT)``.
+        """
+        return RangeSet(e.range for e in self._entries)
 
     # --- write surface ------------------------------------------------------
 
