@@ -34,6 +34,15 @@ class EngineFeed:
     N8, so they are typed as generic sequences here to keep this seam stable before
     those models exist; the bar lane leaves them empty and no bar-lane code reads
     them.
+
+    **Canonical event ordering (§19.4).** ``candles`` are normalized to ``(ts,
+    market)`` order at construction — the one seam where both engines are handed
+    the same multi-market interleaving. Both engines emit multi-market events in
+    this order: the legacy bar loop walks candles in feed order (now canonical),
+    and the Nautilus lane delivers same-ts bars market-name-sorted, so a shared
+    timestamp settles the same way byte-for-byte regardless of the caller's feed
+    order. The sort is stable, so it never reorders candles that already share a
+    ``(ts, market)`` key.
     """
 
     candles: list[Candle] = field(default_factory=list)
@@ -44,6 +53,14 @@ class EngineFeed:
     oi: dict[str, list[OpenInterestSnapshot]] = field(default_factory=dict)
     quotes: dict[str, Sequence[object]] = field(default_factory=dict)
     book_deltas: dict[str, Sequence[object]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Canonicalize the multi-market interleaving at the seam so both engines
+        # emit shared-ts events in the same (ts, market) order (§19.4). Stable, so
+        # candles already sharing a (ts, market) key keep their relative order.
+        object.__setattr__(
+            self, "candles", sorted(self.candles, key=lambda c: (c.ts, c.market))
+        )
 
 
 @dataclass(frozen=True)

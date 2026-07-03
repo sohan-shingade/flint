@@ -12,11 +12,13 @@ this suite is the CI-required *superset* the N9 default flip waits on.
 Two goldens beyond the hand-authored set:
 
 * **cross-market** (``test_cross_market_*``) — the N3-flagged divergence, now
-  verified: two markets sharing timestamps in one run. It is an **xfail** because
-  the Nautilus lane and the legacy lane interleave per-market events differently
-  at shared timestamps (documented in the test + reported to main). Crucially the
-  *input-parity* layer still passes, so the divergence is proven to be ordering,
-  never the settlement math.
+  **closed**: two markets sharing timestamps in one run. The N6 finding was that
+  the legacy lane emitted per-market events in feed order while the Nautilus lane
+  emitted them market-name-sorted, so an unsorted feed diverged on the byte diff
+  (never on input parity — the settlement math was always engine-independent).
+  N9 canonicalizes ``EngineFeed`` candles to ``(ts, market)`` at the seam, so both
+  engines now emit shared-ts events in the same order and the byte diff holds for
+  either feed order.
 * **real fragment** (``test_real_fragment_golden``) — one recorded HL day, built
   from the committed truncated real Tardis SOL 2026-06-01 fixtures: candles
   aggregated from real trade prints + real predicted funding (settlement absent,
@@ -123,23 +125,11 @@ def _feed_cross_market(*, sol_first: bool, same_ts: bool) -> EngineFeed:
     return EngineFeed(candles=candles, marks=marks, funding=funding)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "N6 FINDING (N3 flag confirmed, reported to main): the Nautilus lane and the "
-        "legacy lane interleave per-market EQUITY/FUNDING events differently when two "
-        "markets share bar timestamps. Legacy emits in candle-feed order; the Nautilus "
-        "lane emits in its canonical (market-name-sorted) order. The divergence is "
-        "event ORDERING only — the input-parity layer (§19.4a) passes, so the same "
-        "settlement inputs reach the same pure math in both engines; only the (ts, seq) "
-        "interleaving of the surrounding stream differs. Not fixed here (N6 touches no "
-        "flint/ source); tracked for the N9 flip. See test_cross_market_divergence_is_"
-        "ordering_only for the precise characterisation."
-    ),
-    strict=True,
-)
 def test_cross_market_shared_ts_byte_parity():
-    # SOL-first feed order at shared timestamps → the legacy interleaving differs
-    # from Nautilus's market-sorted one → the full byte diff diverges.
+    # SOL-first feed order at shared timestamps. Pre-N9 this diverged (legacy
+    # walked feed order, Nautilus market-sorted order); with EngineFeed now
+    # canonicalizing candles to (ts, market), the SOL-first feed is sorted to the
+    # same interleaving both engines emit, so the full byte diff holds.
     legacy_log, nautilus_log = run_both(
         lambda: b.OpenSolAndEth(sol_at=0, eth_at=0),
         _feed_cross_market(sol_first=True, same_ts=True),
@@ -148,34 +138,35 @@ def test_cross_market_shared_ts_byte_parity():
     assert_parity(legacy_log, nautilus_log)
 
 
-def test_cross_market_divergence_is_ordering_only():
-    """Characterise the xfail: layer (a) clean, layer (b) diverges — pure ordering.
+def test_cross_market_feed_order_is_canonicalized():
+    """The N9 fix: EngineFeed normalizes candles to (ts, market), so the feed
+    order the caller happened to build in no longer affects the event stream.
 
-    This test PASSES: it pins the finding as ordering-only (not a math/reach bug)
-    so the divergence stays understood while ``test_cross_market_shared_ts_byte_
-    parity`` documents the byte-diff via xfail.
+    SOL-first and ETH-first feeds over the same shared-ts data are byte-identical
+    through both engines — the divergence the N6 harness flagged is closed at the
+    seam, not merely masked when the caller pre-sorts. Input parity was never the
+    issue (the settlement math is engine-independent); this proves the *ordering*
+    now agrees too, for either construction order.
     """
-    # same-ts, SOL-first feed order → byte diff diverges, input parity does not.
-    legacy_log, nautilus_log = run_both(
-        lambda: b.OpenSolAndEth(sol_at=0, eth_at=0),
-        _feed_cross_market(sol_first=True, same_ts=True),
-        b.spec(),
-    )
-    assert layer_a_matches(legacy_log, nautilus_log), (
-        "input parity should hold — the settlement math is engine-independent:\n"
-        + parity_diff(legacy_log, nautilus_log)
-    )
-    assert not layer_b_matches(legacy_log, nautilus_log), "expected the byte diff to diverge"
+    # EngineFeed canonicalizes at construction regardless of the order passed in.
+    sol_first = _feed_cross_market(sol_first=True, same_ts=True)
+    eth_first = _feed_cross_market(sol_first=False, same_ts=True)
+    assert [(c.ts, c.market) for c in sol_first.candles] == [
+        (c.ts, c.market) for c in eth_first.candles
+    ], "EngineFeed should sort candles to a canonical (ts, market) order"
 
-    # When the feed order matches Nautilus's canonical market sort (ETH < SOL),
-    # even the byte diff agrees — proving the divergence is feed-order vs canonical
-    # order, nothing deeper.
-    legacy2, nautilus2 = run_both(
-        lambda: b.OpenSolAndEth(sol_at=0, eth_at=0),
-        _feed_cross_market(sol_first=False, same_ts=True),
-        b.spec(),
-    )
-    assert layer_b_matches(legacy2, nautilus2), parity_diff(legacy2, nautilus2)
+    # Both feed orders now agree byte-for-byte across both engines.
+    for feed in (sol_first, eth_first):
+        legacy_log, nautilus_log = run_both(
+            lambda: b.OpenSolAndEth(sol_at=0, eth_at=0), feed, b.spec()
+        )
+        assert layer_a_matches(legacy_log, nautilus_log), (
+            "input parity should hold — the settlement math is engine-independent:\n"
+            + parity_diff(legacy_log, nautilus_log)
+        )
+        assert layer_b_matches(legacy_log, nautilus_log), parity_diff(
+            legacy_log, nautilus_log
+        )
 
 
 # --- real recorded fragment (one HL day, §19.3) ------------------------------
