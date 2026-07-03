@@ -1,0 +1,121 @@
+"""Parquet lake layout + upgrade-on-read migration (§9.0).
+
+The lake is Parquet on object storage, partitioned ``kind/venue/market/date/``
+(hour-partitioned for depth), with the ``schema_version`` stamped in each file's
+metadata. Historical files are **never mass-rewritten**: a reader that finds an
+older ``schema_version`` walks it forward through a migration registry (v*N* →
+v*N+1* transforms) up to the current version — the same upgrade-on-read contract
+the event log uses for events (§2.10), applied to columnar market-data files.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+# The current lake schema version. Bump when a file layout changes and register a
+# migration from the previous version so old files upgrade on read.
+SCHEMA_VERSION = 1
+
+_SCHEMA_VERSION_KEY = b"flint_schema_version"
+# Depth is hour-partitioned; every other kind is day-partitioned (§9.0).
+_HOUR_PARTITIONED = frozenset({"depth"})
+
+
+def partition_path(
+    kind: str, venue: str, market: str, date: str, *, hour: int | None = None
+) -> str:
+    """Return the partition sub-path ``kind/venue/market/date[/hour]`` (§9.0).
+
+    ``date`` is an ISO ``YYYY-MM-DD`` string. Depth is hour-partitioned, so an
+    ``hour`` (0–23) is required for it and rejected for every other kind.
+    """
+    if kind in _HOUR_PARTITIONED:
+        if hour is None:
+            raise ValueError(f"{kind!r} is hour-partitioned; pass hour=")
+        return f"{kind}/{venue}/{market}/{date}/{hour:02d}"
+    if hour is not None:
+        raise ValueError(f"{kind!r} is day-partitioned; hour= is not allowed")
+    return f"{kind}/{venue}/{market}/{date}"
+
+
+def write_parquet(
+    table: pa.Table, path: str, *, schema_version: int = SCHEMA_VERSION
+) -> None:
+    """Write ``table`` to ``path`` with ``schema_version`` stamped in metadata."""
+    existing = dict(table.schema.metadata or {})
+    existing[_SCHEMA_VERSION_KEY] = str(schema_version).encode()
+    pq.write_table(table.replace_schema_metadata(existing), path)
+
+
+def read_schema_version(path: str) -> int:
+    """Return the ``schema_version`` stamped in ``path`` (0 if unstamped)."""
+    metadata = pq.read_metadata(path).metadata or {}
+    raw = metadata.get(_SCHEMA_VERSION_KEY)
+    return int(raw) if raw is not None else 0
+
+
+class MigrationRegistry:
+    """Upgrade-on-read for lake Parquet files (§9.0).
+
+    Register a transform per *from* version; ``upgrade`` walks a table forward
+    one version at a time to the target. Mirrors the event ``UpcasterRegistry``:
+    on-disk files are never rewritten — the promotion happens in memory on read.
+    """
+
+    def __init__(self) -> None:
+        self._migrations: dict[int, Callable[[pa.Table], pa.Table]] = {}
+
+    def register(
+        self, from_version: int
+    ) -> Callable[[Callable[[pa.Table], pa.Table]], Callable[[pa.Table], pa.Table]]:
+        """Register the transform that promotes ``from_version`` → ``from_version + 1``."""
+
+        def decorator(
+            fn: Callable[[pa.Table], pa.Table]
+        ) -> Callable[[pa.Table], pa.Table]:
+            if from_version in self._migrations:
+                raise ValueError(
+                    f"migration from schema v{from_version} already registered"
+                )
+            self._migrations[from_version] = fn
+            return fn
+
+        return decorator
+
+    def upgrade(
+        self, table: pa.Table, from_version: int, to_version: int = SCHEMA_VERSION
+    ) -> pa.Table:
+        """Walk ``table`` from ``from_version`` up to ``to_version``, one step at a time."""
+        version = from_version
+        while version < to_version:
+            step = self._migrations.get(version)
+            if step is None:
+                raise KeyError(f"no migration registered from schema v{version}")
+            table = step(table)
+            version += 1
+        return table
+
+
+def read_parquet(
+    path: str,
+    *,
+    registry: MigrationRegistry | None = None,
+    to_version: int = SCHEMA_VERSION,
+) -> pa.Table:
+    """Read ``path`` and upgrade it on read to ``to_version`` if it is older.
+
+    An older file needs a ``registry`` covering the version gap; a current file
+    is returned as-is. The stored file is untouched (upgrade happens in memory).
+    """
+    table = pq.read_table(path)
+    version = read_schema_version(path)
+    if version < to_version:
+        if registry is None:
+            raise KeyError(
+                f"{path} is schema v{version}; need v{to_version} and a registry"
+            )
+        table = registry.upgrade(table, version, to_version)
+    return table

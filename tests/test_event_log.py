@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from flint.adapters import InMemoryUserData
+from flint.data.store import DuckDBUserData
 from flint.engine.portfolio import (
     NOOP,
     RUN_FINISHED,
@@ -29,6 +30,7 @@ BOB = TenantContext(tenant_id="bob")
 # Task #2.1 appends its DuckDB factory here; the tests below do not change.
 USERDATA_ADAPTERS = [
     ("in_memory", InMemoryUserData),
+    ("duckdb", DuckDBUserData),
 ]
 
 
