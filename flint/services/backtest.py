@@ -1,54 +1,100 @@
-"""The backtest front door (§4, §18 item 1).
+"""The backtest front door — drives the real engine under a TenantContext (§4, §6).
 
-``run_backtest`` is the one place a backtest is orchestrated. It takes a
-``TenantContext`` (like every service function), and composes the Phase-1 seams
-into a walking skeleton: it persists a run through ``UserDataPort``, runs the
-strategy **inside the sandbox** (via the unconditional ``run_strategy_sandboxed``
-entry, carried on the ``JobRunnerPort`` quota), and appends **versioned events**
-through the ``EventLog``. The engine is still empty — no bars, no fills — so this
-is a *no-op* backtest end-to-end; the honest per-bar engine (Phase 3) slots in
-behind this same surface without changing the front door.
+This is the one place a backtest is orchestrated, and every surface (api/sdk/mcp)
+reaches it here, never into the engine or a store (§4, §17). It composes the
+pieces the earlier phases built, in one direction only:
 
-Layering: this depends only on ports + the domain (engine.portfolio, sandbox),
-never on a concrete adapter. The composition root (sdk/api) injects the ports.
+* **data** (§9): :class:`~flint.data.DataManager` resolves the run's candles +
+  funding + marks over the requested range and applies the **funding hard gate**
+  (§6.4). A gap is not an error — it is a structured :class:`Rejection` carrying
+  the ranges available and the fix (§19.1), returned in the result body.
+* **strategy** (§8.4): the template name resolves through the registry and is
+  wrapped by :func:`flint.live.build_adapter` — classic → ``EngineStrategy``,
+  ML → ``MLEngineStrategy`` + tenant-scoped ``ModelStore`` + seed. The exact
+  runner contract paper uses (5.6), reused here rather than re-implemented.
+* **engine** (§6): :class:`~flint.engine.BacktestEngine` walks the candles; after
+  the run the adapter's ``drain_rejections()`` / ``tearsheet_notes()`` are drained
+  into the result, and the per-bar EQUITY event stream folds into the trust report
+  (§11) via :func:`flint.research.build_report`.
+
+The run's durable head is a tenant-scoped ``RunRecord`` (via ``UserDataPort``);
+the authoritative per-bar/per-fill history is the event log, folded on read.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from flint.engine.portfolio import NOOP, RUN_FINISHED, RUN_STARTED, EventLog
-from flint.ports import (
-    JobRunnerPort,
-    ResourceQuota,
-    RunRecord,
-    TenantContext,
-    UserDataPort,
+from flint.adapters import InMemoryUserData
+from flint.data import CoverageMode, DataManager, FundingCoverageError
+from flint.data.ranges import Kind, TimeRange
+from flint.engine import BacktestEngine, EngineConfig, PortfolioState, money
+from flint.engine.portfolio import EventLog
+from flint.live import build_adapter
+from flint.ports import RunRecord, TenantContext, UserDataPort
+from flint.research import (
+    DataSource,
+    RunManifest,
+    build_report,
+    engine_version,
+    equity_series_from_events,
 )
-from flint.strategy.sandbox import SandboxError, run_strategy_sandboxed
+from flint.strategy.base import StrategyRejection
+from flint.strategy.templates.registry import TemplateNotFound, get_template
+from flint.venues import HYPERLIQUID
+
+from .errors import Rejection, ValidationError
+
+# Candles + funding are the executable-venue backbone; OI carries real mark/index
+# prices when the lake has them (else marks fall back to the candle close).
+_KINDS: tuple[Kind, ...] = (Kind.CANDLES, Kind.FUNDING, Kind.OI)
 
 
 @dataclass(frozen=True)
 class BacktestRequest:
-    """What to run. Minimal for the skeleton; grows into universe/range (§2.11)."""
+    """What to run: a template name over a universe/venue set and a time range."""
 
     run_id: str
-    strategy_source: str
-    entry: str = "run"
-    venue: str = "hyperliquid"
+    strategy: str  # template name (registry key)
     universe: tuple[str, ...] = ("SOL-PERP",)
+    venues: tuple[str, ...] = (HYPERLIQUID.name,)
+    start_ms: int = 0
+    end_ms: int = 0
+    resolution_s: int = 3600
+    fill_mode: str = "auto"
+    seed: int = 0
+    initial_capital: str = "100000"
+    overrides: Mapping[str, Any] = field(default_factory=dict)
+    signal_venues: tuple[str, ...] = ()
+
+    @property
+    def range(self) -> TimeRange:
+        return TimeRange(self.start_ms, self.end_ms)
 
 
 @dataclass(frozen=True)
-class BacktestResult:
-    """The head of a finished run — the durable detail is the event log."""
+class BacktestOutcome:
+    """The head of a finished run: an ``ok`` report or a structured ``rejected``.
+
+    ``verdict`` is the *backtest verdict* (``ok`` | ``rejected``), a separate axis
+    from the job-execution state (queued/running/done/…): a funding-gap rejection
+    is a run that completed with a "rejected" verdict, carried as data (§19.1).
+    """
 
     run_id: str
-    status: str  # "done" | "failed"
-    events: int
-    summary: Mapping[str, Any] = field(default_factory=dict)
+    verdict: str  # "ok" | "rejected"
+    summary: Mapping[str, Any]
+    rejection: Rejection | None = None
+
+
+@dataclass(frozen=True)
+class _Run:
+    """Internal engine-run result before persistence (shared by the WF runner)."""
+
+    summary: dict[str, Any]
+    equity: list[float]
 
 
 def run_backtest(
@@ -56,62 +102,304 @@ def run_backtest(
     request: BacktestRequest,
     *,
     user_data: UserDataPort,
-    job_runner: JobRunnerPort,
-    quota: ResourceQuota | None = None,
+    data: DataManager,
     now_ms: int = 0,
-) -> BacktestResult:
-    """Run ``request`` for ``tenant`` end-to-end: persist -> sandbox -> events.
+) -> BacktestOutcome:
+    """Run ``request`` for ``tenant`` end-to-end and persist its head record.
 
-    Returns a ``BacktestResult``. A strategy failure (raise or denied import)
-    yields ``status="failed"`` with the error in the summary — the run is still
-    recorded and closed, never left dangling.
+    Raises :class:`ValidationError` for an unknown template (user error). A
+    funding hard-gate gap returns a ``verdict="rejected"`` outcome (data, not an
+    error). Otherwise returns ``verdict="ok"`` with the trust report in the
+    summary. The run is always recorded and closed — never left dangling.
     """
-    quota = quota or ResourceQuota.default()
-
-    # 1. Record the run as in-flight, scoped to the tenant.
-    user_data.save_run(
-        tenant,
-        RunRecord(run_id=request.run_id, kind="backtest", status="running", created_ts=now_ms),
-    )
-
-    # 2. Open the event log (durability behind UserDataPort) and mark the start.
-    log = EventLog(user_data, tenant, request.run_id)
-    log.emit(
-        RUN_STARTED,
-        {"venue": request.venue, "universe": list(request.universe)},
-        ts=now_ms,
-    )
-
-    # 3. Run the strategy INSIDE THE SANDBOX, carried on the job runner's quota.
-    #    The empty engine hands it only its context; there are no bars yet.
-    ctx = {"venue": request.venue, "universe": list(request.universe)}
-
-    def _job() -> Any:
-        return run_strategy_sandboxed(
-            request.strategy_source, request.entry, ctx, quota=quota
+    if not _template_exists(request.strategy):
+        raise ValidationError(
+            f"unknown strategy template {request.strategy!r}",
+            detail="strategy must be a registered template name",
+            hint="call list_universe/list_templates for valid names",
         )
 
-    try:
-        strategy_out = job_runner.submit(tenant, _job, quota)
-        status = "done"
-        summary: dict[str, Any] = {"bars": 0, "strategy_result": strategy_out}
-        log.emit(NOOP, {"strategy_result": strategy_out}, ts=now_ms)
-    except SandboxError as exc:
-        status = "failed"
-        summary = {"bars": 0, "error": str(exc)}
-
-    # 4. Close the run: final event + persisted head record.
-    log.emit(RUN_FINISHED, {"status": status}, ts=now_ms)
     user_data.save_run(
         tenant,
         RunRecord(
-            run_id=request.run_id,
+            run_id=request.run_id, kind="backtest", status="running", created_ts=now_ms
+        ),
+    )
+
+    try:
+        run = _execute(tenant, request, data=data, event_store=user_data)
+    except FundingCoverageError as exc:
+        rejection = _rejection_from_gate(exc)
+        manifest = _manifest(request, now_ms=now_ms, note=f"rejected: {rejection.code}")
+        summary = {
+            **manifest.to_summary(),
+            "verdict": "rejected",
+            **rejection.to_payload(),
+        }
+        _persist(user_data, tenant, request.run_id, now_ms, summary)
+        return BacktestOutcome(request.run_id, "rejected", summary, rejection)
+
+    manifest = _manifest(
+        request,
+        now_ms=now_ms,
+        effective=run.summary["effective_range"],
+        metrics=run.summary["metrics"],
+        fidelity_lines=run.summary["fidelity_lines"],
+    )
+    summary = {**manifest.to_summary(), **run.summary}
+    _persist(user_data, tenant, request.run_id, now_ms, summary)
+    return BacktestOutcome(request.run_id, "ok", summary)
+
+
+def make_backtest_runner(
+    tenant: TenantContext,
+    *,
+    data: DataManager,
+    strategy: str,
+    universe: Sequence[str],
+    venues: Sequence[str],
+    resolution_s: int = 3600,
+    initial_capital: str = "100000",
+    seed: int = 0,
+) -> Callable[[Mapping[str, Any], int, int], float]:
+    """Production wiring for ``research.walkforward``'s injected ``BacktestRunner``.
+
+    Returns a ``(params, start, end) -> float`` closure that runs a real backtest
+    for ``tenant`` over ``[start, end)`` with ``params`` as strategy overrides and
+    scores it by (in-sample/OOS) Sharpe. Trial event logs go to a throwaway store
+    so walk-forward search never pollutes the tenant's Run Library.
+    """
+
+    def runner(params: Mapping[str, Any], start: int, end: int) -> float:
+        request = BacktestRequest(
+            run_id=f"wf-{start}-{end}",
+            strategy=strategy,
+            universe=tuple(universe),
+            venues=tuple(venues),
+            start_ms=start,
+            end_ms=end,
+            resolution_s=resolution_s,
+            seed=seed,
+            initial_capital=initial_capital,
+            overrides=dict(params),
+        )
+        run = _execute(tenant, request, data=data, event_store=InMemoryUserData())
+        return float(run.summary["metrics"]["sharpe"])
+
+    return runner
+
+
+# -- internals ---------------------------------------------------------------
+
+
+def _template_exists(name: str) -> bool:
+    try:
+        get_template(name)
+    except TemplateNotFound:
+        return False
+    return True
+
+
+def _execute(
+    tenant: TenantContext,
+    request: BacktestRequest,
+    *,
+    data: DataManager,
+    event_store: UserDataPort,
+) -> _Run:
+    """Resolve data (funding-gated), run the engine, fold the trust report.
+
+    Import-local to keep this module's import graph shallow at load time.
+    """
+    from ._engine_inputs import build_engine_inputs
+
+    executable = set(request.venues)
+    prepared = data.prepare(
+        request.universe,
+        request.venues,
+        _KINDS,
+        request.range,
+        mode=CoverageMode.STRICT,  # funding hard gate (§6.4); raises on a gap
+        signal_venues=request.signal_venues,
+    )
+    inputs = build_engine_inputs(prepared.tables, executable)
+
+    adapter = build_adapter(
+        request.strategy,
+        tenant,
+        seed=request.seed,
+        strategy_id=request.run_id,
+        overrides=dict(request.overrides),
+    )
+
+    state = PortfolioState()
+    state.fund(request.venues[0], money(request.initial_capital))
+    log = EventLog(event_store, tenant, request.run_id)
+    engine = BacktestEngine(
+        log, config=EngineConfig(), state=state, venue_spec=HYPERLIQUID
+    )
+    engine.run(inputs.candles, strategy=adapter, **inputs.run_kwargs())
+
+    rejections = adapter.drain_rejections()
+    notes = adapter.tearsheet_notes()
+    events = log.read()
+    equity = equity_series_from_events(events)
+    report = build_report(equity, resolution_s=request.resolution_s, events=events)
+
+    summary = _summary(request, prepared, report, equity, rejections, notes)
+    return _Run(summary=summary, equity=equity)
+
+
+def _summary(
+    request: BacktestRequest,
+    prepared: Any,
+    report: Any,
+    equity: list[float],
+    rejections: list[StrategyRejection],
+    notes: list[str],
+) -> dict[str, Any]:
+    m = report.metrics
+    cost = report.cost
+    return {
+        "verdict": "ok",
+        "strategy": request.strategy,
+        "universe": list(request.universe),
+        "venues": list(request.venues),
+        "fill_mode": request.fill_mode,
+        "requested_range": _range(prepared.requested),
+        "effective_range": _range(prepared.effective_range),
+        "clipped": prepared.clipped,
+        "metrics": {
+            "sharpe": m.sharpe,
+            "annualized_sharpe": m.annualized_sharpe,
+            "sortino": m.sortino,
+            "annualized_sortino": m.annualized_sortino,
+            "max_drawdown": m.max_drawdown,
+            "mean_bar_return": m.mean_bar_return,
+            "n_returns": m.n_returns,
+            "annualization_factor": m.annualization_factor,
+            "evaluated_start_ts": m.evaluated_start_ts,
+            "evaluated_end_ts": m.evaluated_end_ts,
+        },
+        # A single un-tuned backtest has no trial family: DSR is n/a with N=0
+        # trials, shown honestly by the tearsheet (carry-forward (i)).
+        "deflated_sharpe": None,
+        "n_trials": report.n_trials,
+        "win_rate": report.win_rate,
+        "cost": _cost(cost),
+        "equity_curve": equity,
+        "rejections": [_rej(r) for r in rejections],
+        "fidelity_lines": prepared.fidelity.lines(),
+        "notes": list(notes),
+    }
+
+
+def _persist(
+    user_data: UserDataPort,
+    tenant: TenantContext,
+    run_id: str,
+    now_ms: int,
+    summary: dict[str, Any],
+) -> None:
+    user_data.save_run(
+        tenant,
+        RunRecord(
+            run_id=run_id,
             kind="backtest",
-            status=status,
+            status="done",
             created_ts=now_ms,
             summary=summary,
         ),
     )
-    return BacktestResult(
-        run_id=request.run_id, status=status, events=len(log), summary=summary
+
+
+def _manifest(
+    request: BacktestRequest,
+    *,
+    now_ms: int,
+    effective: dict[str, int] | None = None,
+    metrics: Mapping[str, Any] | None = None,
+    fidelity_lines: Sequence[str] = (),
+    note: str = "",
+) -> RunManifest:
+    """Build the §11.2 Run-Library head so GET /runs (runlib) can list + compare it.
+
+    Templates carry no user source, so ``strategy_source`` is empty; ``params`` are
+    the run's overrides and ``metrics`` come from the tearsheet. The manifest is
+    merged with the full result blob under one ``RunRecord.summary`` — ``from_record``
+    reads only the manifest keys and ignores the result extras.
+    """
+    data_manifest = tuple(
+        DataSource(
+            venue=v,
+            market=m,
+            kind=kind.value,
+            start_ts=effective["start_ms"] if effective else request.start_ms,
+            end_ts=effective["end_ms"] if effective else request.end_ms,
+        )
+        for v in request.venues
+        for m in request.universe
+        for kind in (Kind.CANDLES, Kind.FUNDING)
+    )
+    return RunManifest(
+        run_id=request.run_id,
+        strategy_name=request.strategy,
+        strategy_source="",
+        params=dict(request.overrides),
+        effective_start_ts=effective["start_ms"] if effective else None,
+        effective_end_ts=effective["end_ms"] if effective else None,
+        fidelity={"lines": list(fidelity_lines)},
+        metrics=dict(metrics or {}),
+        engine_version=engine_version(),
+        seed=request.seed,
+        data_manifest=data_manifest,
+        note=note,
+        kind="backtest",
+        created_ts=now_ms,
+    )
+
+
+def _range(tr: TimeRange) -> dict[str, int]:
+    return {"start_ms": tr.start_ms, "end_ms": tr.end_ms}
+
+
+def _cost(cost: Any) -> dict[str, Any] | None:
+    if cost is None:
+        return None
+    return {
+        "funding": float(cost.funding),
+        "trading_pnl": float(cost.trading_pnl),
+        "fees": float(cost.fees),
+        "slippage": float(cost.slippage_cost),
+        "funding_settlements": cost.funding_settlements,
+    }
+
+
+def _rej(r: StrategyRejection) -> dict[str, Any]:
+    return {
+        "reason": r.reason,
+        "detail": r.detail,
+        "ts": r.ts,
+        "venue": r.signal.venue,
+        "market": r.signal.market,
+        "action": r.signal.action,
+    }
+
+
+def _rejection_from_gate(exc: FundingCoverageError) -> Rejection:
+    missing = tuple(leg.label() for leg in exc.gaps)
+    available: dict[str, Any] = {}
+    for leg, rs in exc.available.items():
+        bounds = rs.bounds()
+        available[leg.label()] = (
+            {"start_ms": bounds.start_ms, "end_ms": bounds.end_ms}
+            if bounds is not None
+            else None
+        )
+    return Rejection(
+        code="funding_gap",
+        message="Funding data missing — backtest rejected (funding is a hard requirement).",
+        missing=missing,
+        available=available,
+        hint="Re-run over a covered range, or pass a clip-to-coverage mode.",
     )
