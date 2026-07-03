@@ -1,5 +1,6 @@
 """data — on-demand data layer: DataManager source chain (local cache -> Flint Data API -> providers), UniverseResolver, livefeed, ingestion, store (§9, §17)."""
 
+from .api_client import HttpxLakeHttp, LakeAPIClient, LakeHttp
 from .manager import (
     CoverageMode,
     DataManager,
@@ -47,6 +48,9 @@ __all__ = [
     "FreeVenueProvider",
     "InMemoryCacheSource",
     "VenueProvider",
+    "HttpxLakeHttp",
+    "LakeAPIClient",
+    "LakeHttp",
     "UNIVERSE_SNAPSHOT",
     "DynamicUniverse",
     "ExitBehavior",

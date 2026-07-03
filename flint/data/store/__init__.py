@@ -13,6 +13,7 @@ from .cache import (
     is_fresh,
     is_immutable,
 )
+from .durable_cache import DurableCacheSource
 from .duckdb_adapter import DuckDBMarketData, DuckDBUserData
 from .layout import (
     SCHEMA_VERSION,
@@ -26,6 +27,7 @@ from .layout import (
 __all__ = [
     "DuckDBMarketData",
     "DuckDBUserData",
+    "DurableCacheSource",
     "SCHEMA_VERSION",
     "MigrationRegistry",
     "partition_path",
