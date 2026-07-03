@@ -8,9 +8,11 @@ from .manager import (
     FidelityEntry,
     FidelitySummary,
     FundingCoverageError,
+    GranularityUnavailableError,
     Leg,
     PreparedData,
 )
+from .tiers import GRANULARITIES, TIERS, Tier
 from .migrate import MigrationReport, MigrationSink, migrate_legacy_duckdb
 from .normalize import AssetContext, TradePrint
 from .ranges import Kind, RangeSet, TimeRange
@@ -38,8 +40,12 @@ __all__ = [
     "FidelityEntry",
     "FidelitySummary",
     "FundingCoverageError",
+    "GranularityUnavailableError",
     "Leg",
     "PreparedData",
+    "GRANULARITIES",
+    "TIERS",
+    "Tier",
     "MigrationReport",
     "MigrationSink",
     "migrate_legacy_duckdb",

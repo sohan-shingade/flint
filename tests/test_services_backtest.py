@@ -16,8 +16,9 @@ import pytest
 
 from flint.adapters import InMemoryUserData
 from flint.data import DataManager
-from flint.data.ranges import Kind
+from flint.data.ranges import Kind, TimeRange
 from flint.data.sources import InMemoryCacheSource
+from flint.data.store import DurableCacheSource
 from flint.ports import TenantContext
 from flint.research import list_runs as runlib_list_runs
 from flint.services import (
@@ -143,6 +144,73 @@ def test_no_funding_data_at_all_rejects():
     out = run_backtest(ALICE, _request(), user_data=ud, data=_data(with_funding=False))
     assert out.verdict == "rejected"
     assert out.rejection.code == "funding_gap"
+
+
+# --- equity wire shape: [ts_ms, value] pairs end-to-end (§B7) ---------------
+
+
+def test_equity_curve_is_timestamped_pairs():
+    ud = InMemoryUserData()
+    out = run_backtest(ALICE, _request(), user_data=ud, data=_data())
+    curve = out.summary["equity_curve"]
+    assert len(curve) == N
+    # Every point is a [ts_ms, value] pair, not a bare float.
+    assert all(isinstance(p, list) and len(p) == 2 for p in curve)
+    # The x-axis is the per-bar domain time (bar START), one point per bar.
+    assert [p[0] for p in curve] == [T0 + i * H for i in range(N)]
+    assert all(isinstance(p[1], float) for p in curve)
+    # The persisted head carries the same shape (surfaces read it verbatim).
+    assert ud.load_run(ALICE, "run-1").summary["equity_curve"] == curve
+
+
+# --- granularity gate: explicit tier gap → structured rejection (§B7) -------
+
+
+def _data_with_partial_trades(tmp_path, *, trades_end: int) -> DataManager:
+    """Candles + funding fully cover the run; trades cover only [T0, trades_end)."""
+    inmem = InMemoryCacheSource()
+    inmem.store(VENUE, MARKET, Kind.CANDLES, _candles())
+    inmem.store(VENUE, MARKET, Kind.FUNDING, _funding())
+    durable = DurableCacheSource(tmp_path)
+    durable.coverage_ledger(VENUE, MARKET, Kind.TRADES).assert_covered(
+        TimeRange(T0, trades_end), "recorder"
+    )
+    return DataManager(sources=[inmem, durable])
+
+
+def test_explicit_granularity_gap_returns_a_structured_rejection(tmp_path):
+    # Candles fully cover [T0, last bar], trades cover only the first 3 bars.
+    # An explicit "ticks" run is REJECTED (data, §19.1) — never a stack trace —
+    # with the coverage and the machine-readable ways out, resolved BEFORE the
+    # funding gate.
+    end = T0 + (N - 1) * H + 1
+    dm = _data_with_partial_trades(tmp_path, trades_end=T0 + 3 * H)
+    ud = InMemoryUserData()
+    out = run_backtest(
+        ALICE, _request(end_ms=end, granularity="ticks"), user_data=ud, data=dm
+    )
+
+    assert out.verdict == "rejected"
+    assert out.rejection.code == "granularity_unavailable"
+    payload = ud.load_run(ALICE, "run-1").summary["rejected"]
+    assert payload["code"] == "granularity_unavailable"
+    assert payload["granularity"] == "ticks"
+    # Per-leg per-kind coverage is present; trades show the gap.
+    assert payload["coverage"]["SOL-PERP@hyperliquid"]["trades"] == [
+        {"start_ms": T0, "end_ms": T0 + 3 * H}
+    ]
+    actions = {o["action"] for o in payload["options"]}
+    assert {"run_bars", "clip_to_coverage", "vendor_backfill", "record_forward"} <= actions
+
+
+def test_auto_granularity_never_rejects_and_falls_back_to_candles(tmp_path):
+    dm = _data_with_partial_trades(tmp_path, trades_end=T0 + 3 * H)
+    ud = InMemoryUserData()
+    out = run_backtest(
+        ALICE, _request(granularity="auto"), user_data=ud, data=dm
+    )
+    assert out.verdict == "ok"
+    assert out.summary["granularity"] == "candles"
 
 
 def test_unknown_template_is_a_validation_error():

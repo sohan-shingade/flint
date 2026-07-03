@@ -8,9 +8,14 @@ the services own the result schema (metrics, cost, equity curve, …).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+# The wire vocabulary for the market-data granularity tier (§B7). Enum-validated
+# here so a bad value is a uniform ``validation`` error before it reaches the
+# services; "auto" resolves to the highest fully-covered tier (candles floor).
+Granularity = Literal["auto", "candles", "ticks", "book"]
 
 
 class RangeModel(BaseModel):
@@ -25,6 +30,7 @@ class BacktestBody(BaseModel):
     range: RangeModel
     fill_mode: str = "auto"
     resolution_s: int = Field(default=3600, gt=0)
+    granularity: Granularity = "auto"
     seed: int = 0
     initial_capital: str = "100000"
     overrides: dict[str, Any] = Field(default_factory=dict)
@@ -41,6 +47,7 @@ class SourceBacktestBody(BaseModel):
     range: RangeModel
     fill_mode: str = "auto"
     resolution_s: int = Field(default=3600, gt=0)
+    granularity: Granularity = "auto"
     seed: int = 0
     initial_capital: str = "100000"
     overrides: dict[str, Any] = Field(default_factory=dict)

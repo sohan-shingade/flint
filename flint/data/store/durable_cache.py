@@ -40,7 +40,7 @@ import pyarrow.parquet as pq
 
 from ..ranges import Kind, RangeSet, TimeRange
 from ..sources import DEFAULT_BATCH_SIZE, DataSource
-from .coverage import CoverageLedger
+from .coverage import FUNDING_PREDICTED_VARIANT, CoverageLedger
 from .layout import (
     DEFAULT_MIGRATIONS,
     SCHEMA_VERSION,
@@ -87,6 +87,33 @@ def _hour_of(ts_ms: int) -> int:
     return datetime.fromtimestamp(ts_ms / 1000, tz=UTC).hour
 
 
+def _funding_assertion_spans(
+    table: pa.Table,
+) -> list[tuple[TimeRange, str]]:
+    """(envelope, ledger-variant) per rate_type series in a FUNDING write (§6.4).
+
+    Predicted rows assert under ``FUNDING_PREDICTED_VARIANT``; everything else
+    (final, and the pre-greenfield import's ``legacy``) under the default final
+    variant — so a mixed write extends both series honestly and a predicted-only
+    write never extends the gate-satisfying one.
+    """
+    import pyarrow.compute as pc
+
+    out: list[tuple[TimeRange, str]] = []
+    predicted_mask = pc.equal(table.column("rate_type"), "predicted")
+    for mask, variant in (
+        (predicted_mask, FUNDING_PREDICTED_VARIANT),
+        (pc.invert(predicted_mask), ""),
+    ):
+        rows = table.filter(mask)
+        if rows.num_rows == 0:
+            continue
+        lo = int(pc.min(rows["ts"]).as_py())
+        hi = int(pc.max(rows["ts"]).as_py())
+        out.append((TimeRange(lo, hi + 1), variant))
+    return out
+
+
 def _dedupe_sorted(table: pa.Table, kind: Kind) -> pa.Table:
     """Sort by the kind's identity key and drop consecutive duplicates."""
     import pyarrow.compute as pc
@@ -130,8 +157,11 @@ class DurableCacheSource(DataSource):
     ) -> RangeSet:
         ledger = CoverageLedger.load(self._market_dir(venue, market, kind))
         if ledger is not None:
-            # Asserted coverage is authoritative once a ledger exists.
-            return ledger.covered().intersect(RangeSet((want,)))
+            # Asserted coverage is authoritative once a ledger exists. The serve
+            # path unions every variant — FUNDING's predicted-series assertions
+            # are real, servable rows; only the hard gate discriminates, via
+            # available_funding() below.
+            return ledger.covered_any().intersect(RangeSet((want,)))
         if kind.is_tick_scale:
             # Ledger-mandatory: rows without an asserted ledger contribute NO
             # coverage — a quiet market and a capture gap look identical at the
@@ -150,6 +180,49 @@ class DurableCacheSource(DataSource):
         seeded = CoverageLedger(self._market_dir(venue, market, kind))
         seeded.assert_covered(envelope, "hl_rest")
         return RangeSet((envelope,)).intersect(RangeSet((want,)))
+
+    def available_funding(
+        self, venue: str, market: str, want: TimeRange, *, rate_type: str = "final"
+    ) -> RangeSet:
+        """Per-series FUNDING coverage — what the hard gate consults (§6.4).
+
+        With a ledger, the variants discriminate: the default variant ``""`` is
+        the settled/final series (REST backfills, write-through self-assertions
+        of final rows); ``FUNDING_PREDICTED_VARIANT`` holds recorder/Tardis
+        predicted captures, which must never satisfy the gate. Without a ledger
+        the inferred envelope counts as final: pre-ledger caches predate the
+        recorder and hold REST-backfilled settled history (the same assumption
+        the one-shot envelope-seed makes).
+        """
+        ledger = CoverageLedger.load(self._market_dir(venue, market, Kind.FUNDING))
+        if ledger is not None:
+            variant = "" if rate_type == "final" else FUNDING_PREDICTED_VARIANT
+            return ledger.covered(variant).intersect(RangeSet((want,)))
+        if rate_type != "final":
+            return RangeSet()
+        return self.available(venue, market, Kind.FUNDING, want)
+
+    def provenance(
+        self, venue: str, market: str, kind: Kind, want: TimeRange
+    ) -> tuple[tuple[TimeRange, str], ...]:
+        """Coverage broken into (range, who-captured-it) pieces from the ledger.
+
+        Ledger entries carry their asserting source (tardis / recorder /
+        hl_rest); without a ledger the inferred envelope is attributed to
+        ``hl_rest`` — the same provenance the one-shot envelope-seed records.
+        """
+        ledger = CoverageLedger.load(self._market_dir(venue, market, kind))
+        want_set = RangeSet((want,))
+        if ledger is not None:
+            out: list[tuple[TimeRange, str]] = []
+            for entry in ledger.entries:
+                for piece in RangeSet((entry.range,)).intersect(want_set).ranges:
+                    out.append((piece, entry.source))
+            return tuple(out)
+        return tuple(
+            (r, "hl_rest")
+            for r in self.available(venue, market, kind, want).ranges
+        )
 
     def coverage_ledger(self, venue: str, market: str, kind: Kind) -> CoverageLedger:
         """The asserted-coverage ledger of one stream directory, created if absent.
@@ -251,7 +324,15 @@ class DurableCacheSource(DataSource):
             # Tick kinds never self-assert: their ingesters own the assertion.
             ledger = CoverageLedger.load(self._market_dir(venue, market, kind))
             if ledger is not None:
-                ledger.assert_covered(TimeRange(lo, hi + 1), "hl_rest")
+                if kind is Kind.FUNDING and "rate_type" in table.column_names:
+                    # FUNDING self-assertions are split per rate_type series
+                    # (§6.4): a predicted-only write-through (e.g. Tardis
+                    # derivative_ticker landing in the cache) must never extend
+                    # the gate-satisfying final-series coverage.
+                    for span, variant in _funding_assertion_spans(table):
+                        ledger.assert_covered(span, "hl_rest", variant=variant)
+                else:
+                    ledger.assert_covered(TimeRange(lo, hi + 1), "hl_rest")
 
     # --- partition layout --------------------------------------------------
 

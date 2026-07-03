@@ -68,6 +68,7 @@ from ...normalize import (
     trades_to_arrow,
 )
 from ...ranges import Kind, TimeRange
+from ...store.coverage import FUNDING_PREDICTED_VARIANT
 from ...store.coverage import CoverageLedger
 from ..backfillers.hyperliquid import UpsertSink
 from .monitor import LagMonitor, SeqMode, SequenceTracker
@@ -292,7 +293,12 @@ class HyperliquidRecorder:
             return
         market, kind = key
         ledger = self._ledger_of(self._venue, market, kind)
-        ledger.assert_covered(TimeRange(start, newest), "recorder")
+        # The recorder's FUNDING rows are the ctx fold's *predicted* rates
+        # (rate_type="predicted") — real observation, but not settled history.
+        # Assert them under the predicted variant so watching the rate path
+        # never satisfies the final-series funding hard gate (§6.4).
+        variant = FUNDING_PREDICTED_VARIANT if kind is Kind.FUNDING else ""
+        ledger.assert_covered(TimeRange(start, newest), "recorder", variant=variant)
 
     def mark_disconnect(self) -> None:
         """Close every open coverage window at its last good event (reconnect).

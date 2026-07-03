@@ -49,6 +49,7 @@ from .tearsheet import (
     bars_per_year,
     build_report,
     downside_deviation,
+    equity_points_from_events,
     equity_series_from_events,
     max_drawdown,
     sharpe,
@@ -129,6 +130,7 @@ __all__ = [
     "summarize_equity",
     "win_rate_from_events",
     "equity_series_from_events",
+    "equity_points_from_events",
     # funding/basis lab (6.5, §10/D28)
     "HOURS_PER_YEAR_365",
     "settlements_per_day",

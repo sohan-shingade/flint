@@ -9,9 +9,17 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiGet, apiPost, ApiError } from '../api/client'
-import type { BacktestResult, BacktestStatus, SubmitResponse, Template, TemplatesResponse } from '../api/types'
+import type {
+  BacktestResult,
+  BacktestStatus,
+  Range,
+  SubmitResponse,
+  Template,
+  TemplatesResponse,
+} from '../api/types'
 import CodeEditor from '../components/CodeEditor'
 import { ResultPanel } from '../components/ResultPanel'
+import type { GranularityActions } from '../components/GranularityOptionsCard'
 import { ErrorState, Loading } from '../components/states'
 
 type Mode = 'template' | 'editor'
@@ -166,12 +174,15 @@ export default function Lab() {
     throw new ApiError(0, 'timeout', 'the backtest did not finish in time', undefined, 'check the server logs')
   }
 
-  async function run() {
+  // `patch` lets a granularity-rejection option resubmit the same run at a lower
+  // tier (run at bars) or over the clipped window — the ways out of a tier gap
+  // are one-click re-runs, not a manual reconfigure (§B7).
+  async function run(patch?: { granularity?: string; range?: Range }) {
     setRunError(null)
     setResult(null)
 
-    const start_ms = msFromInput(startInput)
-    const end_ms = msFromInput(endInput)
+    const start_ms = patch?.range?.start_ms ?? msFromInput(startInput)
+    const end_ms = patch?.range?.end_ms ?? msFromInput(endInput)
     const uni = parseUniverse(universe)
     if (Number.isNaN(start_ms) || Number.isNaN(end_ms) || end_ms <= start_ms) {
       setRunError(new Error('pick a valid date range (end after start)'))
@@ -188,6 +199,7 @@ export default function Lab() {
       range: { start_ms, end_ms },
       resolution_s: resolution,
       initial_capital: capital,
+      granularity: patch?.granularity ?? 'auto',
     }
 
     setRunning(true)
@@ -216,6 +228,28 @@ export default function Lab() {
         setPhase('')
       }
     }
+  }
+
+  // Backfill via Tardis (a granularity-gap "way out") fires the pull_data job for
+  // the tick kind over the vendor window (or the current range), then invites a
+  // re-run once coverage lands. Needs TARDIS_API_KEY server-side to actually pull.
+  async function backfill(window: Range | null) {
+    const uni = parseUniverse(universe)
+    const range = window ?? { start_ms: msFromInput(startInput), end_ms: msFromInput(endInput) }
+    if (uni.length === 0) return
+    setPhase('backfilling via tardis…')
+    try {
+      await apiPost('/data/pull', { market: uni[0], venues: VENUES, kind: 'trades', range })
+      setPhase('backfill submitted — re-run to pick up new coverage')
+    } catch (e) {
+      if (liveRef.current) setRunError(e as ApiError | Error)
+    }
+  }
+
+  const granularityActions: GranularityActions = {
+    onRunAtBars: (g) => run({ granularity: g }),
+    onClip: (range) => run({ granularity: result?.rejected?.granularity, range }),
+    onBackfill: backfill,
   }
 
   const tab = (m: Mode, label: string) => (
@@ -375,7 +409,7 @@ export default function Lab() {
           </div>
 
           <button
-            onClick={run}
+            onClick={() => run()}
             disabled={running}
             className="w-full rounded border border-amber/50 bg-amber/10 px-4 py-2 font-mono text-sm uppercase tracking-widest text-amber transition-colors hover:bg-amber/20 disabled:opacity-40"
           >
@@ -389,7 +423,7 @@ export default function Lab() {
       {runError && <ErrorState error={runError} />}
       {result && (
         <div className="border-t border-border pt-4">
-          <ResultPanel result={result} />
+          <ResultPanel result={result} granularityActions={granularityActions} />
         </div>
       )}
     </div>
