@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from flint.engine.portfolio import FILL
+from flint.engine.portfolio.events import EQUITY
 from flint.engine.tearsheet import Tearsheet, build_tearsheet
 
 if TYPE_CHECKING:  # avoid an import cycle — deflated imports sharpe() from here
@@ -215,6 +216,23 @@ def win_rate_from_events(events: Iterable[Event]) -> float | None:
     return wins / decided if decided else None
 
 
+def equity_series_from_events(events: Iterable[Event]) -> list[float]:
+    """Fold the per-bar EQUITY event stream into a total-equity curve (§6.1/§11.1).
+
+    The trivial extractor promised by the 6.2 carry-forward, now that slice 7.3 emits an
+    additive per-bar ``EQUITY`` event: one snapshot per bar carrying total equity (cash +
+    unrealized, inclusive of accrued unpaid funding — Decimal-as-str) at the bar boundary.
+    Taken in event order, that is exactly the total-equity series ``build_report`` and
+    ``summarize_equity`` expect. Non-EQUITY events are ignored; ``EQUITY`` is additive and
+    changes no other kind's ordering, so folding it is side-effect-free.
+
+    ``build_report``'s explicit-``equity`` parameter stays the stable interface — a caller
+    that has an engine event log now passes ``equity_series_from_events(events)`` instead
+    of threading an equity series by hand.
+    """
+    return [float(ev.payload["equity"]) for ev in events if ev.kind == EQUITY]
+
+
 @dataclass(frozen=True)
 class PerformanceReport:
     """The trust report: §11.1 metrics + the engine's full-cost decomposition + the
@@ -316,6 +334,7 @@ __all__ = [
     "MetricSummary",
     "summarize_equity",
     "win_rate_from_events",
+    "equity_series_from_events",
     "PerformanceReport",
     "build_report",
 ]
