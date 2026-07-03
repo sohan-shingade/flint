@@ -34,15 +34,17 @@ BOB = TenantContext(tenant_id="bob")
 # --- DuckDBMarketData: Arrow boundary + half-open loads --------------------
 
 
-def test_market_data_arrow_roundtrip_is_half_open():
-    store = DuckDBMarketData()
-    table = pa.table({"ts": [100, 200, 300], "close": [1.0, 2.0, 3.0]})
-    assert store.save_candles("hyperliquid", "SOL-PERP", table) == 3
+# The generic port contracts (half-open Arrow roundtrip, tenant cross-leak,
+# list_runs isolation) run against BOTH adapters in the parametrized
+# tests/test_ports_tenant_isolation.py suite. This file keeps only the
+# DuckDB-specific behaviour those don't cover.
 
-    got = store.load_candles("hyperliquid", "SOL-PERP", 100, 300)
-    assert got.column("ts").to_pylist() == [100, 200]  # 300 excluded (half-open)
-    assert got.column("close").to_pylist() == [1.0, 2.0]
-    # venue/market are storage keys, not part of the returned candle schema.
+
+def test_market_data_returns_only_the_candle_schema():
+    store = DuckDBMarketData()
+    store.save_candles("hyperliquid", "SOL-PERP", pa.table({"ts": [100], "close": [1.0]}))
+    got = store.load_candles("hyperliquid", "SOL-PERP", 0, 200)
+    # venue/market are storage keys, stripped from the returned candle schema.
     assert set(got.column_names) == {"ts", "close"}
 
 
@@ -77,39 +79,9 @@ def test_market_data_survives_reopen(tmp_path):
     assert reopened.load_candles("hyperliquid", "SOL-PERP", 0, 10).column("close").to_pylist() == [7.0]
 
 
-# --- DuckDBUserData: the tenant cross-leak seam (§2.7) ----------------------
-
-
-def test_tenant_cannot_read_other_tenants_run():
-    store = DuckDBUserData()
-    store.save_run(ALICE, RunRecord(run_id="r1"))
-    store.save_run(BOB, RunRecord(run_id="r2"))
-
-    assert store.load_run(ALICE, "r1").run_id == "r1"
-    assert store.load_run(BOB, "r2").run_id == "r2"
-    with pytest.raises(KeyError):
-        store.load_run(BOB, "r1")
-    with pytest.raises(KeyError):
-        store.load_run(ALICE, "r2")
-
-
-def test_list_runs_never_shows_another_tenant():
-    store = DuckDBUserData()
-    store.save_run(ALICE, RunRecord(run_id="r1"))
-    store.save_run(ALICE, RunRecord(run_id="r2"))
-    store.save_run(BOB, RunRecord(run_id="r3"))
-    assert {r.run_id for r in store.list_runs(ALICE)} == {"r1", "r2"}
-    assert {r.run_id for r in store.list_runs(BOB)} == {"r3"}
-
-
-def test_cross_leak_error_does_not_reveal_existence():
-    store = DuckDBUserData()
-    store.save_run(ALICE, RunRecord(run_id="secret"))
-    with pytest.raises(KeyError) as owned:
-        store.load_run(BOB, "secret")
-    with pytest.raises(KeyError) as absent:
-        store.load_run(BOB, "never-existed")
-    assert str(owned.value) == str(absent.value)
+# --- DuckDBUserData: durable-adapter-specific behaviour --------------------
+# (the tenant cross-leak + list_runs isolation contracts run against this
+# adapter in the parametrized tests/test_ports_tenant_isolation.py suite.)
 
 
 def test_run_record_round_trips_all_fields():
