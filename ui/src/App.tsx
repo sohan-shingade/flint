@@ -1,155 +1,66 @@
-import { Routes, Route, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { useEffect, useState } from 'react'
-import AsciiBackground from './components/AsciiBackground'
-import ConnectionBanner from './components/ConnectionBanner'
-import Dashboard from './pages/Dashboard'
-import BacktestLab from './pages/BacktestLab'
-import DataExplorer from './pages/DataExplorer'
-import Docs from './pages/Docs'
-import MevDashboard from './pages/MevDashboard'
-import PaperTrading from './pages/PaperTrading'
-import Setup from './pages/Setup'
-import LiveMonitor from './pages/LiveMonitor'
-import FillAnalysis from './pages/FillAnalysis'
-import FundingHeatmap from './pages/FundingHeatmap'
-import Replay from './pages/Replay'
+// The Flint web UI shell (§12). Five screens, each reading ONLY the 7.1 REST/WS
+// API through src/api — the UI never imports Python or reaches services directly.
+//
+// Screens 1–3 (results, funding heatmap, data explorer) land in slice 7.4a.
+// Screens 4–5 (live monitor, run library) + deletion of the legacy pre-greenfield
+// pages land in 7.4b — they are placeholders here so the shell is whole and the
+// nav is stable for the successor to fill in.
 
-const navItems = [
-  { to: '/', label: 'HOME', key: '1' },
-  { to: '/backtest', label: 'LAB', key: '2' },
-  { to: '/data', label: 'DATA', key: '3' },
-  { to: '/docs', label: 'DOCS', key: '4' },
-  { to: '/mev', label: 'MEV', key: '5' },
-  { to: '/paper', label: 'PAPER', key: '6' },
-  { to: '/live', label: 'LIVE', key: '7' },
-  { to: '/fills', label: 'FILLS', key: '8' },
-  { to: '/funding', label: 'FUNDING', key: '9' },
-  { to: '/replay', label: 'REPLAY', key: '0' },
+import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
+import Tearsheet from './screens/Tearsheet'
+import FundingHeatmap from './screens/FundingHeatmap'
+import DataExplorer from './screens/DataExplorer'
+
+const NAV = [
+  { to: '/results', label: 'RESULTS' },
+  { to: '/funding', label: 'FUNDING' },
+  { to: '/data', label: 'DATA' },
+  { to: '/live', label: 'LIVE' },
+  { to: '/runs', label: 'RUNS' },
 ]
 
-export default function App() {
-  const [clock, setClock] = useState('')
-  // Phase 4 T4.6 / BUG-3 — pull live version from /api/v1/capabilities so
-  // the footer never drifts from pyproject. Falls back to "?.?.?" if probe
-  // fails (ConnectionBanner surfaces the connectivity error separately).
-  const [version, setVersion] = useState('?.?.?')
-  const navigate = useNavigate()
-  const location = useLocation()
-
-  useEffect(() => {
-    fetch('/api/v1/capabilities')
-      .then(r => r.json())
-      .then(d => { if (d?.version) setVersion(String(d.version)) })
-      .catch(err => { console.warn('capabilities probe failed:', err) })
-  }, [])
-
-  useEffect(() => {
-    const tick = () => {
-      const now = new Date()
-      setClock(now.toLocaleTimeString('en-US', { hour12: false, timeZone: 'UTC' }) + ' UTC')
-    }
-    tick()
-    const id = setInterval(tick, 1000)
-    return () => clearInterval(id)
-  }, [])
-
-  // Global keyboard navigation — press 1-5 to switch pages
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return
-      // Don't trigger in Monaco editor
-      if ((e.target as HTMLElement)?.closest?.('.monaco-editor')) return
-      const item = navItems.find(n => n.key === e.key)
-      if (item) navigate(item.to)
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [navigate])
-
-  useEffect(() => {
-    fetch('/api/v1/system/status')
-      .then(r => r.json())
-      .then(data => {
-        if (!data.initialized && location.pathname !== '/setup') {
-          navigate('/setup', { replace: true })
-        }
-      })
-      .catch(err => {
-        // Phase 4 T4.2 — ConnectionBanner handles user-facing signaling;
-        // log here so devtools still shows the failure cause.
-        console.warn('status probe failed:', err)
-      })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
+function ComingSoon({ name, slice }: { name: string; slice: string }) {
   return (
-    <div className="min-h-screen relative">
-      <ConnectionBanner />
-      <AsciiBackground />
+    <div className="p-8 font-mono text-sm text-ghost">
+      <div className="mb-1 text-terminal">{name}</div>
+      <div>landing in slice {slice}.</div>
+    </div>
+  )
+}
 
-      {/* top border accent line */}
-      <div className="fixed top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-amber to-transparent opacity-40 z-50" />
+export default function App() {
+  return (
+    <div className="min-h-screen bg-void text-terminal">
+      <header className="flex items-center gap-6 border-b border-border px-4 py-3">
+        <span className="font-display text-lg text-amber">flint</span>
+        <nav className="flex gap-1">
+          {NAV.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                `rounded px-3 py-1.5 font-mono text-xs tracking-wide transition-colors ${
+                  isActive ? 'bg-amber/15 text-amber' : 'text-ghost hover:text-terminal'
+                }`
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+      </header>
 
-      <nav className="sticky top-0 z-40 border-b border-border bg-void/90 backdrop-blur-sm">
-        <div className="max-w-[1400px] mx-auto px-6 flex items-center h-11">
-          {/* logo */}
-          <NavLink to="/" className="flex items-center gap-3 mr-8">
-            <span className="text-amber font-bold text-sm tracking-[0.2em]">FLINT</span>
-          </NavLink>
-
-          {/* nav links */}
-          <div className="flex items-center gap-0.5">
-            {navItems.map((n) => (
-              <NavLink
-                key={n.to}
-                to={n.to}
-                end={n.to === '/'}
-                className={({ isActive }) =>
-                  `px-3 py-1 text-[11px] tracking-[0.15em] transition-all duration-200 border border-transparent ${
-                    isActive
-                      ? 'text-amber border-border-bright bg-amber-glow'
-                      : 'text-ghost hover:text-terminal'
-                  }`
-                }
-              >
-                <span className="text-ghost/50 mr-1">{n.key}</span>{n.label}
-              </NavLink>
-            ))}
-          </div>
-
-          {/* right side */}
-          <div className="ml-auto flex items-center gap-4 text-[10px] text-ghost tracking-wider">
-            <span className="hidden sm:inline font-mono tabular-nums">{clock}</span>
-          </div>
-        </div>
-      </nav>
-
-      <main className="relative z-10 max-w-[1400px] mx-auto px-6 py-8">
+      <main>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/backtest" element={<BacktestLab />} />
-          <Route path="/data" element={<DataExplorer />} />
-          <Route path="/docs" element={<Docs />} />
-          <Route path="/mev" element={<MevDashboard />} />
-          <Route path="/paper" element={<PaperTrading />} />
-          <Route path="/live" element={<LiveMonitor />} />
-          <Route path="/fills" element={<FillAnalysis />} />
+          <Route path="/" element={<Navigate to="/results" replace />} />
+          <Route path="/results" element={<Tearsheet />} />
           <Route path="/funding" element={<FundingHeatmap />} />
-          <Route path="/replay" element={<Replay />} />
-          <Route path="/setup" element={<Setup />} />
+          <Route path="/data" element={<DataExplorer />} />
+          <Route path="/live" element={<ComingSoon name="Live monitor" slice="7.4b" />} />
+          <Route path="/runs" element={<ComingSoon name="Run library" slice="7.4b" />} />
+          <Route path="*" element={<Navigate to="/results" replace />} />
         </Routes>
       </main>
-
-      {/* footer */}
-      <footer className="relative z-10 border-t border-border py-3 px-6">
-        <div className="max-w-[1400px] mx-auto flex items-center justify-between text-[10px] text-ghost/70 tracking-wider">
-          <span>FLINT v{version}</span>
-          <span className="font-[var(--font-display)] italic text-[11px] text-ghost/60">
-            Strike alpha on Solana
-          </span>
-          <span>DRIFT &middot; JUPITER &middot; DUCKDB</span>
-        </div>
-      </footer>
     </div>
   )
 }
