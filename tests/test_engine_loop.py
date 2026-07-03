@@ -11,16 +11,20 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 from flint.adapters import InMemoryUserData
 from flint.core.models import (
     Candle,
     FundingRate,
     MarkSnapshot,
+    OrderbookSnapshot,
     Position,
     Side,
     Signal,
 )
 from flint.engine import BacktestEngine, EngineConfig, PortfolioState
+from flint.engine.fills import NaiveFillModel, TradePrint
 from flint.engine.portfolio import FILL, FUNDING, LIQUIDATION, EventLog
 from flint.ports import TenantContext
 
@@ -32,11 +36,14 @@ T0 = 1_700_000_000_000  # a bar start (unix ms)
 SETTLE_TS = T0 + 12 * 60 * 1000  # a funding settlement at minute 12 of the bar
 
 
-def _engine(state=None, config=None):
+def _engine(state=None, config=None, fill_model=None):
     store = InMemoryUserData()
     log = EventLog(store, TenantContext.local(), run_id="run-3.1")
     engine = BacktestEngine(
-        log, config=config or EngineConfig(), state=state or PortfolioState()
+        log,
+        config=config or EngineConfig(),
+        state=state or PortfolioState(),
+        fill_model=fill_model,
     )
     return engine, log
 
@@ -179,7 +186,8 @@ class _OpenOnceStrategy:
 def test_market_order_fills_at_the_next_bars_open_not_this_bars_close():
     state = PortfolioState()
     state.fund(VENUE, "1000")
-    engine, _ = _engine(state=state)
+    # Pin the naive fill so this test isolates T+1 *timing* from fill fidelity.
+    engine, _ = _engine(state=state, fill_model=NaiveFillModel())
 
     bar0 = Candle(T0, 100.0, 101.0, 99.0, 100.5, 500.0, MARKET, HOUR_S, VENUE)
     bar1 = Candle(T0 + HOUR_MS, 105.0, 106.0, 104.0, 105.5, 500.0, MARKET, HOUR_S, VENUE)
@@ -195,7 +203,7 @@ def test_market_order_fills_at_the_next_bars_open_not_this_bars_close():
 def test_market_order_is_not_filled_on_its_own_decision_bar():
     state = PortfolioState()
     state.fund(VENUE, "1000")
-    engine, _ = _engine(state=state)
+    engine, _ = _engine(state=state, fill_model=NaiveFillModel())
     bar0 = Candle(T0, 100.0, 101.0, 99.0, 100.5, 500.0, MARKET, HOUR_S, VENUE)
     engine.run([bar0], strategy=_OpenOnceStrategy())
     # Only one bar: the order is queued for a T+1 that never comes → no position.
@@ -230,6 +238,45 @@ def test_liquidation_with_recorded_marks_is_not_flagged_ambiguous():
 # --- lifecycle + shared fill path ------------------------------------------
 
 
+def test_loop_market_order_walks_a_provided_book_as_tier_a():
+    # With a recorded book + trades, the default CLOB model walks real depth and
+    # records the fill as Tier A — end-to-end through the loop's T+1 path.
+    state = PortfolioState()
+    state.fund(VENUE, "100000")
+    engine, log = _engine(state=state)  # default ClobFillModel
+    bar0 = Candle(T0, 100.0, 101.0, 99.0, 100.5, 500.0, MARKET, HOUR_S, VENUE)
+    bar1 = Candle(T0 + HOUR_MS, 100.0, 101.0, 99.0, 100.5, 500.0, MARKET, HOUR_S, VENUE)
+    book = OrderbookSnapshot(
+        MARKET, T0 + HOUR_MS, ((99.9, 10.0),), ((100.0, 5.0), (100.1, 5.0)), VENUE
+    )
+    engine.run(
+        [bar0, bar1],
+        books={MARKET: [book]},
+        trades={MARKET: [TradePrint(100.0, 1.0, T0 + HOUR_MS)]},
+        strategy=_OpenOnceStrategy(),
+    )
+    pos = state.position(VENUE, MARKET)
+    assert pos is not None
+    assert pos.entry_price == pytest.approx(100.0)  # walked the 100.0 ask level
+    fill_ev = next(e for e in log.read() if e.kind == FILL)
+    assert fill_ev.payload["fidelity_tier"] == "A"
+    assert fill_ev.payload["liquidity"] == "taker"
+
+
+def test_loop_market_order_without_a_book_is_tier_c_and_flags_flow_to_the_event():
+    # No book fixture → Tier-C parametric fill; the uncalibrated flag reaches the
+    # FILL event payload so the tearsheet can show it.
+    state = PortfolioState()
+    state.fund(VENUE, "100000")
+    engine, log = _engine(state=state)  # default ClobFillModel
+    bar0 = Candle(T0, 100.0, 101.0, 99.0, 100.5, 500.0, MARKET, HOUR_S, VENUE)
+    bar1 = Candle(T0 + HOUR_MS, 100.0, 101.0, 99.0, 100.5, 500.0, MARKET, HOUR_S, VENUE)
+    engine.run([bar0, bar1], strategy=_OpenOnceStrategy())
+    fill_ev = next(e for e in log.read() if e.kind == FILL)
+    assert fill_ev.payload["fidelity_tier"] == "C"
+    assert "uncalibrated" in fill_ev.payload["flags"]
+
+
 def test_run_brackets_events_with_run_started_and_finished():
     engine, log = _engine()
     engine.run([_bar()])
@@ -241,7 +288,7 @@ def test_run_brackets_events_with_run_started_and_finished():
 def test_close_signal_routes_a_reduce_only_fill_next_bar():
     # Open a position, then a close signal reduces it to flat via the T+1 path.
     state = _long_10_at_100("1000")
-    engine, log = _engine(state=state)
+    engine, log = _engine(state=state, fill_model=NaiveFillModel())
 
     class _CloseOnce:
         def __init__(self):

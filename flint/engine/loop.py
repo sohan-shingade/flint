@@ -41,10 +41,10 @@ from typing import Protocol
 
 from flint.core.models import (
     Candle,
-    Fill,
     FundingRate,
     MarkSnapshot,
     Order,
+    OrderbookSnapshot,
     OrderType,
     Position,
     Side,
@@ -61,8 +61,16 @@ from flint.engine.portfolio import (
     RUN_STARTED,
     EventLog,
 )
+from flint.venues import HYPERLIQUID, VenueSpec
 
-from .fills import FillContext, FillModel, NaiveFillModel
+from .fills import (
+    FillContext,
+    FillModel,
+    FillResult,
+    LatencyModel,
+    TradePrint,
+    fill_model_for,
+)
 from .funding.settlement import settlement_payment
 from .liquidation.check import (
     bankruptcy_price,
@@ -78,15 +86,12 @@ class EngineConfig:
     """The engine's locked-but-calibratable defaults for a run.
 
     ``maint_frac`` is the flat maintenance-margin fraction (slice 3.4 replaces it
-    with the venue's size-tiered table); the fee rates are Hyperliquid base-tier
-    placeholders that get their primary-source citation in slice 3.3 (D14).
-    ``rng_seed`` seeds ``ctx.rng`` so a run — and its latency draws, once slice
-    3.2 adds them — is deterministic.
+    with the venue's size-tiered table). Fees, latency, tick, and the oracle band
+    are venue law and live on the ``VenueSpec`` (D14), not here. ``rng_seed`` seeds
+    ``ctx.rng`` — and the fill-model latency draws — so a run is deterministic.
     """
 
     maint_frac: float = 0.025
-    taker_fee_rate: float = 0.00035
-    maker_fee_rate: float = 0.0001
     rng_seed: int = 0
 
 
@@ -139,12 +144,20 @@ class BacktestEngine:
         config: EngineConfig | None = None,
         fill_model: FillModel | None = None,
         state: PortfolioState | None = None,
+        venue_spec: VenueSpec | None = None,
     ) -> None:
         self._log = event_log
         self._cfg = config or EngineConfig()
-        self._fill = fill_model or NaiveFillModel()
+        self._spec = venue_spec or HYPERLIQUID
+        # The fill model is chosen by the venue's market structure (§6.3); a
+        # caller may inject one (tests pin NaiveFillModel for pure mechanics).
+        self._fill = fill_model or fill_model_for(self._spec.structure)
+        self._latency = LatencyModel(self._spec.latency)
         self.state = state or PortfolioState()
         self._rng = Random(self._cfg.rng_seed)
+        # Recorded microstructure fixtures, keyed by market (set on run()).
+        self._books: dict[str, list[OrderbookSnapshot]] = {}
+        self._trades: dict[str, list[TradePrint]] = {}
         # Market orders wait one bar and fill at the next bar's open (T+1).
         self._pending_market: list[Order] = []
         # Resting stop/limit/TP orders live until triggered, cancelled, or the
@@ -160,16 +173,22 @@ class BacktestEngine:
         *,
         marks: dict[str, list[MarkSnapshot]] | None = None,
         funding: dict[str, list[FundingRate]] | None = None,
+        books: dict[str, list[OrderbookSnapshot]] | None = None,
+        trades: dict[str, list[TradePrint]] | None = None,
         strategy: Strategy | None = None,
     ) -> PortfolioState:
         """Run the loop over ``candles`` and return the final portfolio state.
 
-        ``marks``/``funding`` are keyed by market, each ascending by ts. Both are
-        plain in-memory fixtures — the engine is pure domain and does no I/O
-        (§6): data arrives already loaded.
+        ``marks``/``funding``/``books``/``trades`` are keyed by market, each
+        ascending by ts. All are plain in-memory fixtures — the engine is pure
+        domain and does no I/O (§6): data arrives already loaded. Supplying
+        ``books`` (and ``trades``) lifts fills to Tier B (A); with only candles,
+        fills are the honest Tier-C parametric model.
         """
         marks = marks or {}
         funding = funding or {}
+        self._books = books or {}
+        self._trades = trades or {}
         strat = strategy or NoopStrategy()
         self._log.emit(RUN_STARTED, {"engine": "backtest"})
         for candle in candles:
@@ -194,13 +213,13 @@ class BacktestEngine:
         bar_marks = [m for m in market_marks if start <= m.ts < end]
 
         # (2) T+1: market orders decided last bar fill at this bar's open.
-        self._fill_pending_market(candle)
+        self._fill_pending_market(candle, market_marks)
         # (3) Funding: every settlement in [start, end), each in ts order.
         self._settle_funding(candle, funding.get(market, []), market_marks, end)
         # (4) Liquidation on the mark, AFTER funding.
         self._check_liquidations(candle, bar_marks)
         # (5) Resting stop/limit/TP — adverse-extreme-first on Tier-C.
-        self._process_resting(candle, bar_marks)
+        self._process_resting(candle, bar_marks, market_marks)
         # (6) Strategy sees a read-only ctx, returns signals; route them.
         ctx = EngineContext(
             state=self.state, default_venue=venue, now=start, rng=self._rng
@@ -210,7 +229,9 @@ class BacktestEngine:
 
     # -- (2) T+1 market fills --------------------------------------------------
 
-    def _fill_pending_market(self, candle: Candle) -> None:
+    def _fill_pending_market(
+        self, candle: Candle, market_marks: list[MarkSnapshot]
+    ) -> None:
         """Fill queued market orders at this bar's open (their T+1 moment)."""
         if not self._pending_market:
             return
@@ -219,10 +240,10 @@ class BacktestEngine:
             if order.market != candle.market or order.venue != candle.venue:
                 still_pending.append(order)  # a different market's bar
                 continue
-            ctx = self._fill_ctx(candle.open, candle.ts)
-            fill = self._fill.fill(order, ctx)
-            if fill is not None:
-                self._apply_fill(order, fill)
+            ctx = self._fill_ctx(candle, candle.open, order, market_marks)
+            result = self._fill.fill(order, ctx)
+            if result is not None:  # IOC: any unfilled remainder is cancelled
+                self._apply_fill(order, result)
         self._pending_market = still_pending
 
     # -- (3) funding -----------------------------------------------------------
@@ -329,7 +350,10 @@ class BacktestEngine:
     # -- (5) resting orders ----------------------------------------------------
 
     def _process_resting(
-        self, candle: Candle, bar_marks: list[MarkSnapshot]
+        self,
+        candle: Candle,
+        bar_marks: list[MarkSnapshot],
+        market_marks: list[MarkSnapshot],
     ) -> None:
         """Trigger resting stop/limit/TP orders, adverse (stops) first on Tier-C."""
         if not self._resting:
@@ -346,12 +370,16 @@ class BacktestEngine:
         # favourable take-profit / limit within the same bar (§6.1 D11).
         triggered.sort(key=lambda o: 0 if o.type is OrderType.STOP else 1)
         for order in triggered:
-            ctx = self._fill_ctx(order.price, candle.ts)
-            fill = self._fill.fill(order, ctx)
-            if fill is None:
-                continue
-            self._resting.remove(order)
-            self._apply_fill(order, fill, intrabar_ambiguous=ambiguous)
+            ctx = self._fill_ctx(candle, order.price, order, market_marks)
+            result = self._fill.fill(order, ctx)
+            if result is None:
+                continue  # e.g. a maker whose queue has not cleared → keeps resting
+            filled = result.fill.size
+            if filled < order.size - 1e-12:  # partial: shrink and keep resting
+                order.size -= filled
+            else:
+                self._resting.remove(order)
+            self._apply_fill(order, result, intrabar_ambiguous=ambiguous)
 
     @staticmethod
     def _is_triggered(order: Order, candle: Candle) -> bool:
@@ -428,9 +456,10 @@ class BacktestEngine:
     # -- shared fill application -----------------------------------------------
 
     def _apply_fill(
-        self, order: Order, fill: Fill, *, intrabar_ambiguous: bool = False
+        self, order: Order, result: FillResult, *, intrabar_ambiguous: bool = False
     ) -> None:
         """Apply a fill to cash + the position book and emit a FILL event."""
+        fill = result.fill
         acct = self.state.account(fill.venue)
         acct.cash -= money(fill.fee)
         acct.fees_paid += money(fill.fee)
@@ -480,19 +509,82 @@ class BacktestEngine:
                 "is_partial": fill.is_partial,
                 "realized_pnl": str(money(realized)),
                 "intrabar_ambiguous": intrabar_ambiguous,
+                "flags": list(result.flags),
             },
             ts=fill.ts,
         )
 
     # -- small helpers ---------------------------------------------------------
 
-    def _fill_ctx(self, reference_price: float, ts: int) -> FillContext:
+    def _fill_ctx(
+        self,
+        candle: Candle,
+        reference_price: float,
+        order: Order,
+        market_marks: list[MarkSnapshot],
+    ) -> FillContext:
+        """Assemble the fill context at the order's effective time (§6.3).
+
+        Effective time = submit + a seeded latency draw; the book and oracle are
+        selected as-of that time, so the fill sees the market as it had moved, not
+        as the strategy saw it. With no recorded book the model runs Tier-C.
+        """
+        spec = self._spec
+        submit_ts = candle.ts
+        effective_ts = submit_ts + int(self._latency.draw_ms(self._rng))
+        book, stale = self._book_as_of(order.market, effective_ts)
+        end = bar_end(candle.ts, candle.resolution_s)
         return FillContext(
             reference_price=reference_price,
-            ts=ts,
-            taker_fee_rate=self._cfg.taker_fee_rate,
-            maker_fee_rate=self._cfg.maker_fee_rate,
+            ts=submit_ts,
+            effective_ts=effective_ts,
+            taker_fee_rate=spec.taker_fee_rate,
+            maker_fee_rate=spec.maker_fee_rate,
+            book=book,
+            trades=self._trades_in_bar(order.market, candle.ts, end),
+            oracle_price=self._oracle_as_of(market_marks, effective_ts, candle.close),
+            oracle_band_bps=spec.oracle_band_bps,
+            stale_book=stale,
+            queue_ahead=self._queue_ahead(book, order),
+            bar_dollar_volume=candle.volume * candle.open,
+            half_spread_bps=spec.default_half_spread_bps,
+            impact_k=spec.tier_c_impact_k,
+            price_sig_figs=spec.price_sig_figs,
         )
+
+    def _book_as_of(
+        self, market: str, effective_ts: int
+    ) -> tuple[OrderbookSnapshot | None, bool]:
+        """The book at-or-before ``effective_ts`` and whether it is stale (§6.3)."""
+        snap = last_before(
+            self._books.get(market, []), effective_ts + 1, key=lambda b: b.ts
+        )
+        if snap is None:
+            return None, False
+        stale = (effective_ts - snap.ts) > self._spec.book_staleness_s * 1000
+        return snap, stale
+
+    def _trades_in_bar(
+        self, market: str, start: int, end: int
+    ) -> tuple[TradePrint, ...]:
+        return tuple(
+            t for t in self._trades.get(market, []) if start <= t.ts < end
+        )
+
+    @staticmethod
+    def _oracle_as_of(
+        market_marks: list[MarkSnapshot], effective_ts: int, fallback: float
+    ) -> float:
+        snap = last_before(market_marks, effective_ts + 1, key=lambda m: m.ts)
+        return snap.index_price if snap is not None else fallback
+
+    @staticmethod
+    def _queue_ahead(book: OrderbookSnapshot | None, order: Order) -> float:
+        """Resting size ahead of a maker limit at its price (Tier-A/B queue)."""
+        if book is None or order.type is not OrderType.LIMIT:
+            return 0.0
+        levels = book.bids if order.side is Side.LONG else book.asks
+        return sum(size for price, size in levels if price == order.price)
 
     def _new_order(self, **kwargs) -> Order:
         coid = kwargs.pop("client_order_id", "") or self._next_coid()
