@@ -12,7 +12,7 @@ point of ports.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TypeVar
 
 import pyarrow as pa
@@ -77,6 +77,8 @@ class InMemoryUserData(UserDataPort):
 
     def __init__(self) -> None:
         self._runs: dict[str, dict[str, RunRecord]] = {}
+        # event rows keyed by (tenant_id, run_id), append-only
+        self._events: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
     def save_run(self, tenant: TenantContext, run: RunRecord) -> str:
         self._runs.setdefault(tenant.tenant_id, {})[run.run_id] = run
@@ -92,6 +94,19 @@ class InMemoryUserData(UserDataPort):
 
     def list_runs(self, tenant: TenantContext) -> list[RunRecord]:
         return list(self._runs.get(tenant.tenant_id, {}).values())
+
+    def append_events(
+        self, tenant: TenantContext, run_id: str, rows: Sequence[Mapping[str, Any]]
+    ) -> int:
+        log = self._events.setdefault((tenant.tenant_id, run_id), [])
+        # Store defensive copies so callers can't mutate persisted rows.
+        log.extend(dict(r) for r in rows)
+        return len(log)
+
+    def load_events(
+        self, tenant: TenantContext, run_id: str
+    ) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._events.get((tenant.tenant_id, run_id), [])]
 
 
 class InProcessJobRunner(JobRunnerPort):

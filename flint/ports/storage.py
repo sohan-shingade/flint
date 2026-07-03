@@ -19,6 +19,8 @@ user data have opposite tenancy:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import pyarrow as pa
 
@@ -77,4 +79,32 @@ class UserDataPort(ABC):
     @abstractmethod
     def list_runs(self, tenant: TenantContext) -> list[RunRecord]:
         """Return every run owned by ``tenant`` (never another tenant's)."""
+        ...
+
+    # --- event log (§2.10) -------------------------------------------------
+    # Events are stored as primitive rows (plain dicts), never engine types,
+    # so this port stays infra-only. The engine's EventLog (emit seam) owns
+    # the typed Event <-> row conversion and upcast-on-read. Append-only:
+    # stored rows are never rewritten.
+
+    @abstractmethod
+    def append_events(
+        self, tenant: TenantContext, run_id: str, rows: Sequence[Mapping[str, Any]]
+    ) -> int:
+        """Append event rows to ``tenant``'s run ``run_id``; return the new total.
+
+        Rows are opaque, serialisable dicts. Ordering is preserved; nothing is
+        overwritten (append-only). Scoped to the tenant like every other call.
+        """
+        ...
+
+    @abstractmethod
+    def load_events(
+        self, tenant: TenantContext, run_id: str
+    ) -> list[dict[str, Any]]:
+        """Return ``tenant``'s events for ``run_id`` in append order.
+
+        Empty if the run has no events or belongs to another tenant — the
+        caller cannot distinguish the two (no cross-tenant existence leak).
+        """
         ...
