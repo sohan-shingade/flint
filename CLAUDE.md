@@ -1,86 +1,100 @@
-# Flint -- AI Development Guide
+# Flint — AI Development Guide (greenfield rewrite)
 
-Flint is a local-first algorithmic trading, backtesting, and MEV research platform for Solana.
+Flint is a local-first backtesting, paper, and live lab for perp/DEX strategies.
+Hyperliquid-native, venue-agnostic core. This branch (`redesign/greenfield`) is a
+ground-up rewrite on a **ports-and-adapters** architecture.
 
-## Quick Reference
+**Canonical spec:** `docs/redesign/DESIGN.md`. Read only the sections you need
+(it is ~1600 lines) — every subsystem cites its section (§5 models, §6 engine,
+§8 strategy, §9 data, §2.7/§4/§17 architecture). The build is decomposed into
+phases in §18; each phase is a board task.
+
+## Quick reference
 
 ```bash
-pip install -e .              # install
-flint init                    # download data + sample backtest
-flint serve                   # API + UI at localhost:8000
-flint serve --dev             # dev mode: API only, run UI separately
-pytest tests/ -v              # all tests (~7min, all mocked)
-cd ui && npm run dev          # dev UI at localhost:5173 (proxies API)
-
-# Rust engine (optional -- 10-50x faster backtests)
-pip install maturin           # install build tool
-cd rust && maturin develop    # build + install flint_core
-pytest tests/test_rust_parity_benchmark.py -v -s  # verify + benchmark
+python3.12 -m venv .venv && source .venv/bin/activate   # Python >=3.11 required
+pip install -e ".[dev]"        # editable install + pytest/ruff
+pytest tests/ -v               # all tests — fully mocked, no network, no keys
+python scripts/codemap.py      # regenerate docs/codemap/ shards after structural changes
+python scripts/codemap.py --check   # CI: fail if codemap is stale
 ```
 
-## Documentation (single source of truth: docs/)
+The repo uses the project `.venv` (Python 3.12). Bare `python3` on this host is
+3.9 and will **not** satisfy `requires-python >=3.11` — always use `.venv/bin/python`.
 
-Read the relevant guide when working on that area. These same files power the web UI docs page, MCP `flint://guide` resource, and this file.
+## Architecture in one screen (§4, §17)
 
-| Area | Guide | When to read |
-|------|-------|--------------|
-| Getting started | [docs/guides/quickstart.md](docs/guides/quickstart.md) | Install, first backtest, optimization, paper deploy workflow |
-| Architecture | [docs/concepts/architecture.md](docs/concepts/architecture.md) | Module layout, execution hierarchy, Rust engine, regimes |
-| Strategies | [docs/guides/strategy-authoring.md](docs/guides/strategy-authoring.md) | v1/v2 APIs, 20 built-in templates, optimization params, security |
-| Data | [docs/reference/data-providers.md](docs/reference/data-providers.md) | 15 providers, 7 funding venues, downloading, custom providers |
-| Live/Paper | [docs/tutorials/04-paper-to-live.md](docs/tutorials/04-paper-to-live.md) | Paper trading, Hyperliquid/CEX setup, risk guards, parity testing |
-| Web UI | [docs/guides/web-ui.md](docs/guides/web-ui.md) | All 10 UI pages, features, keyboard shortcuts |
-| MCP | [docs/reference/mcp-tools.md](docs/reference/mcp-tools.md) | 17 MCP tools, setup, AI workflow |
-| Fills | [docs/concepts/fill-pipeline.md](docs/concepts/fill-pipeline.md) | 4-tier fill pipeline, vAMM, calibration |
+Dependency flow is strictly one-directional. Nothing lower reaches up.
 
-To update docs: edit `docs/guides/*.md`, then run `python scripts/build_docs.py` to regenerate the UI docs page.
+```
+Surfaces      api/   sdk/   mcp_srv/   agent/        (talk ONLY to services/)
+                     │
+Application   services/     ← every function takes a TenantContext
+                     │
+Domain core   engine/  research/  strategy/  core/   (pure logic, no I/O)
+                     │
+Venues        venues/  (hyperliquid = only executable v1 venue; jupiter v1.x)
+                     │
+Ports         ports/   MarketDataPort · UserDataPort · JobRunnerPort ·
+                       SecretsPort · EventBusPort · Identity
+                     │
+Adapters      adapters/  (v1: all local — DuckDB, in-memory bus, .env, in-proc jobs)
+```
 
-## Architecture cheat sheet
+Package map (`flint/`, see §17 for the full annotated tree):
 
-`BacktestContext` (`flint/execution/`) and `PaperContext` (`flint/paper/context.py`)
-both compose the same seven managers in `flint/execution/`. Paper trading post-D-2.1.d
-unifies the old `PaperBroker` + `LiveContext` split into one class — same shape as
-backtest. Positions keyed by `(venue, market)` tuples in both contexts:
-
-| Manager | Owns |
+| Package | Owns |
 |---|---|
-| `PositionManager` | Open + closed-trade dicts |
-| `CashManager` | Cash + allocator + running counters (fees / tx cost / funding) |
-| `FillRecorder` | Recorded fill list + diagnostic log |
-| `OrderQueue` | Pending limit/stop/TP queue + this-bar market queue |
-| `FundingLedger` | Per-market + per-venue funding history |
-| `BorrowLedger` | Jupiter borrow rates + paid-borrow ledger |
-| `MarketDataFeed` | Cross-market candles + orderbook + OI snapshots |
+| `core/` | Pure models (`models/`) + time/no-lookahead rules (`time/`). No I/O; depends on nothing. |
+| `engine/` | Simulator/executor shared by backtest+paper: `context/` (7 managers), `fills/`, `funding/`, `liquidation/`, `portfolio/` (event log + replay). |
+| `venues/` | One adapter per exchange, keyed by market structure. `hyperliquid/`, `jupiter/`. |
+| `data/` | On-demand data layer: DataManager source chain, `livefeed/`, `ingest/`, `store/`. |
+| `strategy/` | User surface: base class, Signal, read-only ctx, `sandbox/` (OS isolation), `templates/`. |
+| `research/` | Walk-forward, Deflated Sharpe, look-ahead linter, optimize, tearsheet, Run Library. |
+| `live/` | Minimal v1 live executor (HL only, caps, kill switch); same code path as paper. |
+| `ports/` | The interfaces + `TenantContext`. |
+| `adapters/` | Concrete local port implementations. |
+| `services/` | The front door; every function takes `TenantContext`. |
+| `api/` `sdk/` `mcp_srv/` `agent/` | Surfaces. `mcp_srv` (not `mcp`) avoids shadowing the pip `mcp` package. |
 
-Pre-trade checks flow through `flint/risk/portfolio_orchestrator.py:PortfolioMarginEngine` (composes `MarginEngine` + `VenueAllocator` + `PortfolioRiskEngine`).
+## Rules (these override defaults — follow exactly)
 
-Event sourcing lives in `flint/portfolio/`: `event_log.py` (append-only writer), `replay.py` (`fold(events) → BookState`), `snapshots.py` (compaction). `BacktestContext` emits via `_emit(kind, payload)` when constructed with `event_log_writer + event_session_id`. Replay surface: `/api/v1/replay/{id}/{events,state,summary}` + MCP tools (`replay_summary`, `replay_state`, `list_replay_events`) + UI page at `/replay`.
+- **The engine never touches storage directly.** All I/O goes through `ports/`.
+  Surfaces (`api/`, `sdk/`, `mcp_srv/`, `agent/`, `ui/`) talk **only** to `services/` —
+  never reach into the engine or a store from a surface.
+- **Every `services/` function takes a `TenantContext`.** Every `UserDataPort` call
+  is tenant-scoped — the scoping predicate is on every query, enforced by the
+  two-tenant cross-leak contract test. There is no "default tenant" shortcut.
+- **No synthetic data, anywhere, ever (D26).** Tests use hand-authored unit inputs
+  or real recorded fragments — never generated "market-like" data. No random price
+  series, no fabricated fills.
+- **Funding is a hard gate (§6.4).** A backtest over a window without real funding
+  data is *rejected* with available ranges and the fix — it is never silently
+  filled, interpolated, or zero-defaulted. Data scarcity surfaces as structured
+  `rejected`/`degraded` payloads, not errors and not stack traces (§19.1).
+- **DRIFT IS DROPPED.** Drift Protocol is not a supported venue. Do not add Drift
+  code, deps, docs, or UI/MCP narrative. Hyperliquid is the live venue today; Jupiter
+  and Phoenix are planned expansion.
+- **Numeric policy (§5):** `Decimal`/scaled-int for monetary accumulators, integer
+  unix-ms UTC timestamps (bar START), floats for prices. Never float-accumulate money.
+- **Sandbox is the security boundary (§8.3, D25):** user strategy code runs in an
+  OS-isolated subprocess (env-scrub + RLIMIT floor on macOS; nsjail/seccomp on Linux).
+  The AST import-allowlist is lint-grade UX, **not** the boundary.
+- **Regenerate the codemap after any structural change:** `python scripts/codemap.py`.
+  CI runs `--check`.
 
-Service layer in `flint/services/`: `strategies.py` (single builder source), `backtest.py:run_backtest_sync`, `journal.py`, `data.py`, `paper.py`. MCP and routes both go through these — don't reach into route internals from MCP.
+## Git / workflow
 
-## Common Tasks
+- Work on branch `redesign/greenfield`. Never touch `main`. Never `git push --force`.
+- Explicit pathspecs only on mixed working trees; never `git add -A` blindly.
+- Never commit `.env` (API keys) or user strategies under `strategies/user/`.
+- The greenfield deletes old *code*, never old *data* — the legacy DuckDB is imported,
+  not discarded (§19.6).
+- Commit messages end with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 
-**Add a data provider**: Create `flint/providers/my_provider.py`, inherit `DataProvider`, add to `__init__.py`, add config in `flint.yaml`.
+## Working with the code (token discipline)
 
-**Add an API endpoint**: Add to `flint/api/routes/`. Register router in `flint/api/main.py` if new file.
-
-**Add a strategy template**: Create in `flint/strategy/`, add to the `_BUILTIN_BUILDERS` dict in `flint/services/strategies.py` (single source of truth — both backtest and paper routes plus MCP read from it).
-
-**Modify the UI**: Edit `ui/src/`. Run `cd ui && npm run dev` for hot reload. Build: `npm run build` -> served from `ui/dist/`.
-
-**Update docs**: Edit markdown in `docs/guides/`. Run `python scripts/build_docs.py` to regenerate UI docs. MCP guide resource reads from `docs/guides/quickstart.md` automatically.
-
-**Run tests**: All tests use mocks, no network/keys needed. `pytest tests/ -v` for all, `-k "keyword"` to filter.
-
-## Rules
-
-- **DRIFT IS DROPPED — DO NOT USE.** Drift Protocol is offline post-hack and is no longer a supported venue. Flint is **DEX & perp native / venue-agnostic** — Hyperliquid is the live execution + data venue today (with Pyth oracle prices); **Phoenix, Jupiter spot, and batch/bulk order routing are the planned expansion** (land as new connectors). Treat every Drift surface as unavailable: `dlob.drift.trade` (DLOB), `data.api.drift.trade` (Data API), the Drift WebSocket feed, and any `flint/connectors/drift/` paths. Legacy Drift code stays dormant — do not extend it, do not surface it in docs/UI/MCP narrative, and never introduce new Drift dependencies.
-- Always use the shared `FlintStore` from `app.state.store` -- never create a new DuckDB connection
-- Every store method must wrap `self._conn.execute()` in `with self._lock:` -- DuckDB is not thread-safe
-- Never access `store._conn` or `store._lock` from API routes -- add a method to `FlintStore` instead
-- Don't `git push --force` on main
-- Don't commit `.env` files -- they contain API keys
-- Don't put personal strategies in `strategies/user/` in git -- they're gitignored
-- User strategies can only import: flint, numpy, math, statistics, collections, dataclasses, typing, enum, abc, functools, itertools, operator
-- New BacktestContext mutations should go through the seven managers (`self._pm`, `self._cm`, `self._fr`, `self._oq`, `self._fl`, `self._bl`, `self._mdf`) — legacy `self._cash` / `self._positions` etc. are read-only property aliases kept for back-compat with tests
-- New strategy templates: edit `flint/services/strategies.py` only — the route layer reads from there
+- Serena MCP is available: use `get_symbols_overview` / `find_symbol` before any
+  full-file Read once code exists.
+- Consult `docs/codemap/` shards before grepping.
+- Tests are fully mocked. The engine injects fake ports; no network or keys are needed.

@@ -3,21 +3,20 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "flint-trading"
-version = "1.5.4"
-description = "Local backtesting + paper-trading lab for Solana DEX & perp strategies. Hyperliquid live; Phoenix, Jupiter & batch trade on the roadmap. Free data from 100+ CEXs via CCXT."
-requires-python = ">=3.10"
+name = "flint"
+version = "2.0.0.dev0"
+description = "Local-first backtesting, paper, and live lab for perp/DEX strategies. Hyperliquid-native; ports-and-adapters core, honest fills, event-sourced runs."
+requires-python = ">=3.11"
 license = {text = "MIT"}
 readme = "README.md"
 authors = [{name = "Sohan Shingade"}]
-keywords = ["trading", "backtesting", "solana", "dex", "hyperliquid", "defi", "perps", "quantitative-finance"]
+keywords = ["trading", "backtesting", "perpetuals", "hyperliquid", "solana", "dex", "defi", "quantitative-finance"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Financial and Insurance Industry",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Office/Business :: Financial :: Investment",
@@ -26,19 +25,15 @@ classifiers = [
 ]
 dependencies = [
     "duckdb>=0.9",
-    "httpx>=0.25",
+    "pyarrow>=14.0",
     "numpy>=1.24",
+    "httpx>=0.25",
     "fastapi>=0.100",
     "uvicorn[standard]>=0.20",
-    "pydantic>=2.0",
-    "pydantic-settings>=2.0",
     "pyyaml>=6.0",
-    "optuna>=3.0",
-    "pyarrow>=14.0",
-    "websockets>=12.0",
-    "typer[all]>=0.9",
+    "typer>=0.9",
     "rich>=13.0",
-    "ccxt>=4.0",
+    "websockets>=12.0",
 ]
 
 [project.urls]
@@ -48,18 +43,17 @@ Documentation = "https://github.com/sohan-shingade/flint/tree/main/docs"
 "Issue Tracker" = "https://github.com/sohan-shingade/flint/issues"
 
 [project.scripts]
-flint = "flint.cli:main"
+flint = "flint.sdk.cli:main"
 
 [project.optional-dependencies]
+research = ["optuna>=3.0"]
+venues = ["ccxt>=4.0"]
 mcp = ["mcp>=1.0"]
 hyperliquid = ["eth-account>=0.10", "msgpack>=1.0"]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
-]
-all = [
-    "mcp>=1.0",
-    "ccxt>=4.0",
+    "ruff>=0.4",
 ]
 
 [tool.setuptools.packages.find]
@@ -70,24 +64,19 @@ exclude = ["tests*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
-
-# ─── Ruff — D-5.1 hard-fail focused subset ──────────────────────────────────
-# Phase 5 (Wave 1) flips CI to hard-fail on real-bug rules. Style-only nits
-# (line length, multi-statement lines, ambiguous single-letter variables,
-# import-not-at-top because of PIT_METADATA blocks) stay allowed for now —
-# they can tighten when an editorial sweep happens (D-5.1-extra sibling).
+# ─── Ruff — real-bug subset (hard-fail); style nits stay advisory ────────────
 [tool.ruff.lint]
 select = [
     "F401",  # unused-import
     "F811",  # redefined-while-unused
-    "F821",  # undefined-name (genuine bugs)
+    "F821",  # undefined-name
     "F841",  # unused-variable
 ]
 ignore = [
-    "E402",  # module-level imports not at top of file (PIT_METADATA pattern)
+    "E402",  # module-level imports not at top of file
     "E501",  # line too long
-    "E702",  # multiple-statements-on-one-line-semicolon
     "E701",  # multiple-statements-on-one-line-colon
+    "E702",  # multiple-statements-on-one-line-semicolon
     "E741",  # ambiguous-variable-name
 ]
 

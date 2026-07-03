@@ -1,0 +1,1 @@
+"""adapters — concrete port implementations (v1: all local). marketdata_duckdb, userdata_duckdb (tenant-scoped), eventbus_memory, jobs_inprocess, scheduler, secrets_env, identity_local (§2.7, §17)."""
