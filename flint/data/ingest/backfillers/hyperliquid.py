@@ -40,6 +40,7 @@ import pyarrow as pa
 from ..quality import BackfillResult, check_prewrite
 from ..transport import HttpTransport, ObjectStore
 from ...normalize import (
+    FUNDING_SCHEMA,
     books_to_arrow,
     contexts_to_arrow,
     normalize_asset_ctx_record,
@@ -112,17 +113,9 @@ _CANDLE_SCHEMA = pa.schema(
     ]
 )
 
-_FUNDING_SCHEMA = pa.schema(
-    [
-        ("ts", pa.int64()),
-        ("rate_hourly", pa.float64()),
-        ("interval_s", pa.int64()),
-        ("price_basis", pa.string()),
-        ("rate_type", pa.string()),
-        ("venue", pa.string()),
-        ("market", pa.string()),
-    ]
-)
+# Funding schema is the canonical one in ``data.normalize`` (shared with the CEX
+# funding ingestion, 2.6) so HL + CEX funding rows are store-compatible.
+_FUNDING_SCHEMA = FUNDING_SCHEMA
 
 # Depth + OI Arrow schemas are owned by ``data.normalize`` (shared with the WS
 # recorders + LiveFeed) so archive rows and live frames are store-compatible.

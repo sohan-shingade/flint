@@ -104,6 +104,24 @@ OI_SCHEMA = pa.schema(
     ]
 )
 
+# Funding is normalized to a comparable **hourly** rate regardless of the venue's
+# native settlement cadence (HL hourly, CEX 8h/4h/1h), keeping the native cadence
+# in ``interval_s`` and how the rate was priced/settled in ``price_basis`` /
+# ``rate_type`` (§10). This schema is the single source shared by the HL REST
+# provider (2.4) and the CEX/CCXT funding ingestion (2.6) so cross-venue funding
+# rows merge in the store without a schema clash.
+FUNDING_SCHEMA = pa.schema(
+    [
+        ("ts", pa.int64()),
+        ("rate_hourly", pa.float64()),
+        ("interval_s", pa.int64()),
+        ("price_basis", pa.string()),
+        ("rate_type", pa.string()),
+        ("venue", pa.string()),
+        ("market", pa.string()),
+    ]
+)
+
 TRADES_SCHEMA = pa.schema(
     [
         ("ts", pa.int64()),
