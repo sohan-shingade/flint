@@ -114,6 +114,7 @@ class BacktestJobs:
         overrides: Mapping[str, Any] | None = None,
         signal_venues: Sequence[str] = (),
         granularity: str = "auto",
+        engine: str = "auto",
         idempotency_key: str | None = None,
         now_ms: int = 0,
     ) -> str:
@@ -142,6 +143,7 @@ class BacktestJobs:
                 overrides=dict(overrides or {}),
                 signal_venues=tuple(signal_venues),
                 granularity=granularity,
+                engine=engine,
                 user_data=self._user_data,
                 data=self._data,
                 now_ms=now_ms,

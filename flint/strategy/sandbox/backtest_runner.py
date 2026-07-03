@@ -20,7 +20,7 @@ no-in-process-fallback contract test asserts over that public surface.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from flint.core.models.market import Candle, FundingRate, MarkSnapshot
@@ -44,6 +44,12 @@ class SandboxBacktestResult:
     events: list[dict[str, Any]]
     rejections: list[dict[str, Any]]
     notes: list[str]
+    #: The substrate that actually ran (resolved by the child through the same
+    #: ``engine/select.py`` seam as the in-process path), plus the exact dependency
+    #: pins behind it — ``{"nautilus_trader": "<pin>"}`` when it is Nautilus. The
+    #: caller stamps both into the run record/manifest (§19.4/§19.6).
+    engine: str = "legacy-bar"
+    engine_versions: dict[str, str] = field(default_factory=dict)
 
 
 def run_backtest_in_sandbox(
@@ -59,6 +65,7 @@ def run_backtest_in_sandbox(
     run_id: str = "sandbox",
     overrides: dict[str, Any] | None = None,
     quota: ResourceQuota | None = None,
+    engine: str = "legacy-bar",
 ) -> SandboxBacktestResult:
     """Run ``source``'s ``class_name`` backtest over the given inert inputs, isolated.
 
@@ -68,11 +75,25 @@ def run_backtest_in_sandbox(
     taxonomy as ``run_strategy_sandboxed``. Never falls back to in-process
     execution. The inputs are serialized to plain JSON scalars (the codec refuses
     live references by design), so only copies cross the boundary.
+
+    ``engine`` selects the simulation substrate (§6.0, already resolved by the
+    caller — ``"legacy-bar"`` or ``"nautilus"``, never ``"auto"``); the child
+    dispatches through ``engine/select.py`` and, for Nautilus, imports the wheel
+    before the user source is exec'd with the CPU budget armed after that import
+    (warm-up excluded, plan §A9). The default quota is engine-aware: Nautilus
+    runs get the measured-and-documented higher memory/wall ceiling
+    (``ResourceQuota.default_nautilus``); an explicit ``quota`` always wins.
     """
-    quota = quota or ResourceQuota.default()
+    if quota is None:
+        quota = (
+            ResourceQuota.default_nautilus()
+            if engine == "nautilus"
+            else ResourceQuota.default()
+        )
     job = {
         "source": source,
         "class_name": class_name,
+        "engine": engine,
         "seed": seed,
         "initial_capital": initial_capital,
         "fund_venue": fund_venue,
@@ -97,4 +118,6 @@ def run_backtest_in_sandbox(
         events=value["events"],
         rejections=value["rejections"],
         notes=value["notes"],
+        engine=value.get("engine", "legacy-bar"),
+        engine_versions=dict(value.get("engine_versions", {})),
     )

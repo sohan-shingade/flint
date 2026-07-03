@@ -181,6 +181,7 @@ def _install_routes(app: FastAPI) -> None:
             overrides=body.overrides,
             signal_venues=tuple(body.signal_venues),
             granularity=body.granularity,
+            engine=body.engine,
         )
         run_id = deps.jobs.submit(
             deps.tenant, req, idempotency_key=body.idempotency_key, now_ms=_now_ms()
@@ -206,6 +207,7 @@ def _install_routes(app: FastAPI) -> None:
             overrides=body.overrides,
             signal_venues=tuple(body.signal_venues),
             granularity=body.granularity,
+            engine=body.engine,
             idempotency_key=body.idempotency_key,
             now_ms=_now_ms(),
         )

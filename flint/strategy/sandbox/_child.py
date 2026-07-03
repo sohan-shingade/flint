@@ -21,16 +21,27 @@ from typing import Any
 def _apply_rlimits(quota: dict[str, Any]) -> None:
     """Clamp CPU and address space for the strategy phase (best-effort on macOS).
 
-    Set AFTER the heavy infra imports (pyarrow) so a low ``RLIMIT_AS`` can't crash
-    interpreter startup; it then bounds the strategy's own allocations. RLIMIT_CPU
-    counts whole-process CPU time (kills busy-loop threads too, unlike wall-clock).
+    Set AFTER the heavy infra imports (pyarrow; the Nautilus wheel when that
+    engine is selected) so a low ``RLIMIT_AS`` can't crash interpreter/import
+    startup; it then bounds the strategy's own allocations. RLIMIT_CPU counts
+    whole-process CPU time (kills busy-loop threads too, unlike wall-clock) —
+    and it counts from *process start*, so the budget is armed as
+    ``quota + CPU already consumed``: the warm-up (interpreter boot + infra
+    imports, ~5s of CPU for the Nautilus wheel) is excluded and the strategy
+    phase gets the full quota it was promised (§8.3, plan §A9). The parent's
+    wall-clock deadline still spans the whole child lifetime and is sized to
+    carry the warm-up (``ResourceQuota.default_nautilus``).
     """
     try:
         import resource
     except ImportError:
         return  # non-POSIX (Windows) — not a supported sandbox platform
 
-    cpu = max(1, int(quota["cpu_seconds"]))
+    import math
+
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    consumed = usage.ru_utime + usage.ru_stime  # warm-up CPU, excluded from budget
+    cpu = max(1, math.ceil(quota["cpu_seconds"] + consumed))
     try:
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
     except (ValueError, OSError):

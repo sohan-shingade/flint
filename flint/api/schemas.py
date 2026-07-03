@@ -17,6 +17,12 @@ from pydantic import BaseModel, Field
 # services; "auto" resolves to the highest fully-covered tier (candles floor).
 Granularity = Literal["auto", "candles", "ticks", "book"]
 
+# The wire vocabulary for the simulation substrate (§6.0, D29) — mirrors
+# ``flint.engine.select.KNOWN_ENGINES``. Enum-validated here so an unknown engine
+# is the uniform ``validation`` error at the surface; "auto" resolves to the
+# legacy bar loop until the N9 parity flip.
+Engine = Literal["auto", "legacy-bar", "nautilus"]
+
 
 class RangeModel(BaseModel):
     start_ms: int = Field(ge=0)
@@ -31,6 +37,7 @@ class BacktestBody(BaseModel):
     fill_mode: str = "auto"
     resolution_s: int = Field(default=3600, gt=0)
     granularity: Granularity = "auto"
+    engine: Engine = "auto"
     seed: int = 0
     initial_capital: str = "100000"
     overrides: dict[str, Any] = Field(default_factory=dict)
@@ -48,6 +55,7 @@ class SourceBacktestBody(BaseModel):
     fill_mode: str = "auto"
     resolution_s: int = Field(default=3600, gt=0)
     granularity: Granularity = "auto"
+    engine: Engine = "auto"
     seed: int = 0
     initial_capital: str = "100000"
     overrides: dict[str, Any] = Field(default_factory=dict)
