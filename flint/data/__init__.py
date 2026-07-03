@@ -10,6 +10,7 @@ from .manager import (
     Leg,
     PreparedData,
 )
+from .migrate import MigrationReport, MigrationSink, migrate_legacy_duckdb
 from .normalize import AssetContext, TradePrint
 from .ranges import Kind, RangeSet, TimeRange
 from .sources import (
@@ -38,6 +39,9 @@ __all__ = [
     "FundingCoverageError",
     "Leg",
     "PreparedData",
+    "MigrationReport",
+    "MigrationSink",
+    "migrate_legacy_duckdb",
     "AssetContext",
     "TradePrint",
     "Kind",
