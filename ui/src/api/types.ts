@@ -22,6 +22,43 @@ export interface Metrics {
   evaluated_end_ts: number
 }
 
+// ---- user-source validation (verdict === "invalid") — services.strategy_source ----
+// A validation failure is a *completed* run whose verdict is "invalid": the sandbox
+// or the static screen rejected the source. It is data an author revises against
+// (line-precise), never a stack trace (§13.2, D25).
+export interface ScreenViolation {
+  line: number
+  col: number
+  code: string
+  message: string
+}
+
+export interface LookaheadFinding {
+  category: string
+  message: string
+  line: number | null
+}
+
+export interface SandboxError {
+  type: string
+  message: string
+}
+
+export interface ValidationReport {
+  valid: boolean
+  stage: string // "ok" | "screen" | "sandbox"
+  screen_violations: ScreenViolation[]
+  sandbox_error: SandboxError | null
+  leak_detected: boolean
+  lookahead: {
+    summary: string
+    findings: LookaheadFinding[]
+    checks_run: string[]
+    blind_spots: string[]
+    dynamic_probe_ran: boolean
+  }
+}
+
 export interface Cost {
   funding: number
   trading_pnl: number
@@ -49,7 +86,9 @@ export interface RejectedPayload {
 }
 
 export interface BacktestResult {
-  verdict: 'ok' | 'rejected'
+  verdict: 'ok' | 'rejected' | 'invalid'
+  run_id?: string
+  validation?: ValidationReport // present only when verdict === "invalid"
   strategy?: string
   universe?: string[]
   venues?: string[]
@@ -156,4 +195,40 @@ export interface PaperSnapshot {
   drift: Record<string, unknown>
   alerts: unknown[]
   final_equity?: number | null
+}
+
+// ---- template registry (GET /templates) — app.templates (§8.4) --------------
+
+export interface Template {
+  name: string
+  category: string // "funding" | "basis" | "flow" | "technical" | "ml"
+  summary: string
+  is_ml: boolean
+  params: Record<string, unknown> // declared knobs (name → default)
+}
+
+export interface TemplatesResponse {
+  templates: Template[]
+  executable_venues: string[]
+}
+
+// ---- system health (GET /system/health) — footer version + connection banner --
+
+export interface SystemHealth {
+  ok: boolean
+  version: string
+}
+
+// ---- backtest submit + status (POST /backtests[/source], GET .../status) ------
+
+export interface SubmitResponse {
+  run_id: string
+}
+
+export interface BacktestStatus {
+  run_id: string
+  state: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+  progress_pct: number
+  queue_position: number
+  error?: { code?: string; message?: string; detail?: string; hint?: string }
 }

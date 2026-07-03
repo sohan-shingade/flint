@@ -7,6 +7,7 @@
 // rather than letting the numbers imply otherwise (§6.3).
 
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { apiGet, ApiError, encodeMulti } from '../api/client'
 import type { RunComparison, RunRow } from '../api/types'
 import { ErrorState, Empty, Loading } from '../components/states'
@@ -126,7 +127,11 @@ export default function RunLibrary() {
                   />
                 </td>
                 <td>{r.strategy}</td>
-                <td className="text-ghost">{r.run_id.slice(0, 8)}</td>
+                <td>
+                  <Link to={`/results?run=${encodeURIComponent(r.run_id)}`} className="text-ghost hover:text-amber">
+                    {r.run_id.slice(0, 8)}
+                  </Link>
+                </td>
                 <td className="text-ghost">{r.kind}</td>
                 <td className="text-ghost">{fmtDate(r.created_ts)}</td>
                 <td className="text-ghost">
