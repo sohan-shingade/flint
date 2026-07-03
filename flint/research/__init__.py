@@ -2,6 +2,29 @@
 
 from __future__ import annotations
 
+from .deflated import (
+    DeflatedSharpe,
+    deflated_sharpe,
+    expected_max_sharpe,
+    kurtosis,
+    probabilistic_sharpe,
+    skewness,
+    trial_sharpes,
+)
+from .tearsheet import (
+    MetricSummary,
+    PerformanceReport,
+    annualization_factor,
+    bar_returns,
+    bars_per_year,
+    build_report,
+    downside_deviation,
+    max_drawdown,
+    sharpe,
+    sortino,
+    summarize_equity,
+    win_rate_from_events,
+)
 from .walkforward import (
     BacktestRunner,
     ParamSpace,
@@ -15,6 +38,7 @@ from .walkforward import (
 )
 
 __all__ = [
+    # walk-forward + optimizer (6.1)
     "BacktestRunner",
     "ParamSpace",
     "WalkForwardConfig",
@@ -24,4 +48,25 @@ __all__ = [
     "WindowResult",
     "plan_windows",
     "run_walk_forward",
+    # metrics + performance report (6.2, §11.1)
+    "MetricSummary",
+    "PerformanceReport",
+    "annualization_factor",
+    "bar_returns",
+    "bars_per_year",
+    "build_report",
+    "downside_deviation",
+    "max_drawdown",
+    "sharpe",
+    "sortino",
+    "summarize_equity",
+    "win_rate_from_events",
+    # deflated sharpe (6.2, D22)
+    "DeflatedSharpe",
+    "deflated_sharpe",
+    "expected_max_sharpe",
+    "kurtosis",
+    "probabilistic_sharpe",
+    "skewness",
+    "trial_sharpes",
 ]
