@@ -35,7 +35,6 @@ sequence above is the contract.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from random import Random
 from typing import Callable, Protocol
@@ -85,35 +84,31 @@ from .funding.settlement import (
     settlement_payment,
     settlement_price_for,
 )
-from .liquidation.check import (
-    bankruptcy_price,
-    liquidation_price,
-    tiered_maintenance,
+from .liquidation.cascade import (
+    LiquidationDecision,
+    adverse_mark,
+    plan_liquidations,
 )
 from .money import ZERO, money
+from .signals import (
+    SignalValidationError,
+    _UsdIntent,
+    materialize_usd_intent,
+    route_signals,
+)
 from .state import PortfolioState
 
-
-class SignalValidationError(ValueError):
-    """A strategy emitted an invalid Signal batch (§8.1 conversion rules)."""
-
-
-@dataclass(frozen=True)
-class _UsdIntent:
-    """A deferred size_usd order awaiting its execution bar's open (§8.1 rule 1).
-
-    Held between the decision bar (where the strategy emitted it) and the next
-    matching bar, where ``_materialize_usd_intents`` sizes it to base units at that
-    bar's open — closing the look-ahead that sizing on the decision close would open.
-    """
-
-    market: str
-    venue: str
-    side: Side
-    size_usd: float
-    limit_price: float
-    tif: TimeInForce | None
-    margin_mode: str
+# ``SignalValidationError`` and ``_UsdIntent`` moved to ``signals.py`` (§6.0, D29);
+# re-exported here so ``from flint.engine.loop import SignalValidationError`` and the
+# ``flint.engine`` re-export keep working unchanged.
+__all__ = [
+    "BacktestEngine",
+    "EngineConfig",
+    "EngineContext",
+    "NoopStrategy",
+    "SignalValidationError",
+    "Strategy",
+]
 
 
 @dataclass(frozen=True)
@@ -589,13 +584,12 @@ class BacktestEngine:
     ) -> None:
         """Mark-based liquidation on this venue, after funding (§6.5).
 
-        Isolated positions stand alone against their own ``isolated_margin``;
-        cross positions share the venue's cash pool, so one breaching position
-        endangers all of them — the cross pool is evaluated across *every* cross
-        position on the venue each bar (not per-position) and the largest-loss one
-        closes first, repeating until the pool clears maintenance. The current
-        market's position is stressed at its adverse in-bar extreme; positions on
-        other markets are valued at their last recorded close mark.
+        Builds this venue's ``key -> (mark, path-ambiguous)`` map — the current
+        market at its adverse in-bar extreme, every other position at its carried
+        close mark — then delegates the isolated close-whole + cross-pool cascade to
+        the pure :func:`plan_liquidations` (§6.5) and applies each decision in order.
+        The engine stays the thin applier; the §6.5 economics live in
+        ``liquidation/cascade.py``, shared verbatim with the Nautilus engine (§6.0).
         """
         venue = candle.venue
         curkey = (venue, candle.market)
@@ -603,157 +597,41 @@ class BacktestEngine:
         marks: dict[tuple[str, str], tuple[float, bool]] = {}
         curpos = self.state.positions.get(curkey)
         if curpos is not None:
-            marks[curkey] = self._adverse_mark(curpos.side, candle, bar_marks)
+            marks[curkey] = adverse_mark(curpos.side, candle, bar_marks)
         for key in self.state.positions:
             if key[0] == venue and key != curkey and key in self._last_mark:
                 marks[key] = (self._last_mark[key], True)  # carried → path assumed
 
-        # Isolated: each closes whole against its own dedicated margin.
-        isolated = [
-            k
-            for k, p in self.state.positions.items()
-            if k in marks and p.margin_mode == "isolated"
-        ]
-        for key in isolated:
-            pos = self.state.positions[key]
-            mark, ambiguous = marks[key]
-            maintenance = tiered_maintenance(pos, mark, self._spec.liquidation)
-            equity = pos.isolated_margin + pos.unrealized_pnl(mark)
-            if equity < maintenance:
-                self._liquidate(
-                    key, mark, equity, maintenance,
-                    backing=pos.isolated_margin, ambiguous=ambiguous, ts=candle.ts,
-                )
-
-        # Cross: shared-pool cascade.
-        self._resolve_cross_pool(venue, marks, ts=candle.ts)
+        decisions = plan_liquidations(
+            self.state.positions,
+            self.state.account(venue).cash,
+            marks,
+            self._spec,
+            venue,
+            candle.ts,
+        )
+        for decision in decisions:
+            self._apply_liquidation(decision)
 
         # Carry a representative (bar-closing) mark forward for next bar.
         self._last_mark[curkey] = (
             bar_marks[-1].mark_price if bar_marks else candle.close
         )
 
-    def _resolve_cross_pool(
-        self,
-        venue: str,
-        marks: dict[tuple[str, str], tuple[float, bool]],
-        ts: int,
-    ) -> None:
-        """Deplete the shared cross pool, closing the largest-loss position first.
+    def _apply_liquidation(self, decision: LiquidationDecision) -> None:
+        """Apply one planned liquidation: credit the loss, drop the position, emit.
 
-        Cross pool = venue cash + unrealized PnL across all cross positions; it
-        must cover the sum of their maintenance. While it doesn't, the most
-        underwater cross position is liquidated and the pool re-evaluated — its
-        loss can drag the rest under, exactly the shared-collateral risk a naive
-        per-position check hides (§6.5).
+        The realized amount and the full LIQUIDATION payload were computed purely by
+        :func:`plan_liquidations`; this only mutates the account + position book and
+        writes the event — the same three effects the legacy inline ``_liquidate``
+        had, in the same order (§6.5, §19.2).
         """
+        venue = decision.key[0]
         acct = self.state.account(venue)
-
-        def cross_items() -> list[tuple[tuple[str, str], Position, float, bool]]:
-            return [
-                (key, self.state.positions[key], marks[key][0], marks[key][1])
-                for key in list(self.state.positions)
-                if key[0] == venue
-                and key in marks
-                and self.state.positions[key].margin_mode == "cross"
-            ]
-
-        while True:
-            items = cross_items()
-            if not items:
-                return
-            pool_equity = float(acct.cash) + sum(
-                p.unrealized_pnl(m) for _, p, m, _ in items
-            )
-            pool_maint = sum(
-                tiered_maintenance(p, m, self._spec.liquidation)
-                for _, p, m, _ in items
-            )
-            if pool_equity >= pool_maint:
-                return  # pool clears maintenance
-            key, _pos, mark, ambiguous = min(
-                items, key=lambda it: it[1].unrealized_pnl(it[2])
-            )
-            self._liquidate(
-                key, mark, pool_equity, pool_maint,
-                backing=float(acct.cash), ambiguous=ambiguous, ts=ts,
-            )
-
-    def _liquidate(
-        self,
-        key: tuple[str, str],
-        mark: float,
-        equity: float,
-        maintenance: float,
-        *,
-        backing: float,
-        ambiguous: bool,
-        ts: int,
-    ) -> None:
-        """Realize a liquidated position, apply the post-trigger loss, emit (§6.5).
-
-        HL charges no clearance fee, so the position realizes at the mark; the
-        extra loss comes from the *backstop*: below ``backstop_maint_frac`` ×
-        maintenance the HLP vault takes over and the user forfeits remaining
-        margin. Under the v1 solvent-fund assumption the vault absorbs any
-        sub-bankruptcy gap, so the backing cannot go negative — the covered
-        ``insurance_shortfall`` is recorded so the tearsheet can surface it.
-        """
-        venue, market = key
-        pos = self.state.positions[key]
-        liq = self._spec.liquidation
-        acct = self.state.account(venue)
-        m_frac = liq.maint_frac(pos.notional(mark))
-        realized = (mark - pos.entry_price) * pos.side.sign * pos.size
-        backstop = equity < liq.backstop_maint_frac * maintenance
-        shortfall = 0.0
-        if backstop and liq.insurance_fund_solvent:
-            max_loss = -backing  # realizing this leaves the backing at exactly zero
-            if realized < max_loss:
-                shortfall = max_loss - realized  # the vault covers this gap
-                realized = max_loss
-        acct.credit(money(realized))
-        acct.realized_pnl += money(realized)
-        del self.state.positions[key]
-        self._log.emit(
-            LIQUIDATION,
-            {
-                "market": market,
-                "venue": venue,
-                "side": pos.side,
-                "size": pos.size,
-                "margin_mode": pos.margin_mode,
-                "mark_price": mark,
-                "equity": equity,
-                "maintenance": maintenance,
-                "liq_price": liquidation_price(pos, backing, m_frac),
-                "bankruptcy_price": bankruptcy_price(pos, backing),
-                "realized_pnl": str(money(realized)),
-                "backstop": backstop,
-                "insurance_fund_solvent": liq.insurance_fund_solvent,
-                "insurance_shortfall": str(money(shortfall)),
-                "adl_rank": liq.adl_rank,
-                "intrabar_ambiguous": ambiguous,
-            },
-            ts=ts,
-        )
-
-    @staticmethod
-    def _adverse_mark(
-        side: Side, candle: Candle, bar_marks: list[MarkSnapshot]
-    ) -> tuple[float, bool]:
-        """The bar's adverse mark for ``side`` + whether the path was assumed.
-
-        With recorded mark snapshots (Tier A/B) the adverse extreme is the worst
-        mark in the bar and the timing is known-enough. On OHLCV-only segments
-        (Tier C) it falls back to the candle's adverse extreme — low for a long,
-        high for a short — and the caller flags the event ``intrabar_ambiguous``
-        (§6.1 D11 pessimistic policy).
-        """
-        if bar_marks:
-            prices = [m.mark_price for m in bar_marks]
-            return (min(prices) if side is Side.LONG else max(prices)), False
-        return (candle.low if side is Side.LONG else candle.high), True
+        acct.credit(money(decision.realized))
+        acct.realized_pnl += money(decision.realized)
+        del self.state.positions[decision.key]
+        self._log.emit(LIQUIDATION, decision.payload, ts=decision.ts)
 
     # -- (5) resting orders ----------------------------------------------------
 
@@ -805,87 +683,32 @@ class BacktestEngine:
     # -- (6) routing signals ---------------------------------------------------
 
     def _route(self, signals: list[Signal], default_venue: str) -> None:
-        """Convert a bar's signals to orders under the §8.1 conversion rules.
+        """Route a bar's signals through the pure §8.1 conversion rules.
 
-        Validation is loud, not a merge (§8.1 rule 4/5): a duplicate
-        ``(market, venue, action)`` in one bar, or an open with no sizing / both
-        sizings, raises ``SignalValidationError``. A ``close`` maps to a reduce-only
-        full-size market order (rule 3). A ``size`` (base) order routes immediately;
-        a ``size_usd`` order defers to the execution bar, where it sizes at that
-        bar's open (rule 1) — never bar t's close.
+        :func:`route_signals` owns the loud validation and the signal→order/intent
+        mapping (§8.1); this applies its ordered decisions — submitting resolved
+        orders (assigning coids exactly as before) and queuing deferred ``size_usd``
+        intents. The routing logic is shared verbatim with the Nautilus bar-lane
+        shim (§6.0); only the submission side stays engine-owned.
         """
-        seen: set[tuple[str, str, str]] = set()
-        for sig in signals:
-            venue = sig.venue or default_venue
-            key = (venue, sig.market, sig.action)
-            if key in seen:
-                raise SignalValidationError(
-                    f"duplicate signal {key} in one bar — a validation error, "
-                    "not a merge (§8.1)"
-                )
-            seen.add(key)
-
-            if sig.is_close:
-                pos = self.state.positions.get((venue, sig.market))
-                if pos is None:
-                    continue  # nothing to close — a no-op, not an order
-                self._submit(
-                    self._new_order(
-                        market=sig.market,
-                        venue=venue,
-                        side=pos.side.opposite,
-                        type=OrderType.MARKET,
-                        size=pos.size,
-                        tif=TimeInForce.IOC,
-                        reduce_only=True,
-                        margin_mode=pos.margin_mode,
-                    )
-                )
-                continue
-
-            if (sig.size > 0) == (sig.size_usd > 0):
-                raise SignalValidationError(
-                    f"{sig.action} {sig.market} needs exactly one of size / "
-                    f"size_usd (got size={sig.size}, size_usd={sig.size_usd}) (§8.1)"
-                )
-            side = Side.LONG if sig.action == "long" else Side.SHORT
-            if sig.size_usd > 0:
-                # Defer: the base size is unknowable without the execution bar's
-                # open, and sizing on this bar's close would be a look-ahead (§8.1).
-                self._pending_usd.append(
-                    _UsdIntent(
-                        market=sig.market,
-                        venue=venue,
-                        side=side,
-                        size_usd=sig.size_usd,
-                        limit_price=sig.limit_price,
-                        tif=sig.tif,
-                        margin_mode=sig.margin_mode,
-                    )
-                )
-                continue
-            self._submit(
-                self._new_order(
-                    market=sig.market,
-                    venue=venue,
-                    side=side,
-                    type=OrderType.LIMIT if sig.limit_price > 0 else OrderType.MARKET,
-                    size=sig.size,
-                    price=sig.limit_price,
-                    tif=sig.tif
-                    or (TimeInForce.GTC if sig.limit_price > 0 else TimeInForce.IOC),
-                    margin_mode=sig.margin_mode,
-                )
-            )
+        for decision in route_signals(
+            signals,
+            default_venue,
+            lambda venue, market: self.state.positions.get((venue, market)),
+        ):
+            if isinstance(decision, _UsdIntent):
+                self._pending_usd.append(decision)
+            else:
+                self._submit(self._new_order(**decision.as_order_kwargs()))
 
     def _materialize_usd_intents(self, candle: Candle) -> None:
         """Size + place any size_usd intents for this bar's market at its OPEN (§8.1).
 
-        Base size = ``size_usd / open``, floored to the venue lot (never grown past
-        the USD budget); the sub-lot residual is recorded on the ORDER_PLACED event,
-        never silently absorbed. An intent that rounds to zero base is placed then
-        rejected (no size). Market intents join this bar's fill queue; limit intents
-        rest.
+        :func:`materialize_usd_intent` does the pure sizing (floor to the venue lot,
+        never grown past the USD budget, sub-lot residual returned); this places the
+        resolved order and records the residual on ORDER_PLACED, rejecting a
+        zero-size intent (no size). Market intents join this bar's fill queue; limit
+        intents rest.
         """
         if not self._pending_usd:
             return
@@ -894,32 +717,18 @@ class BacktestEngine:
             if intent.market != candle.market or intent.venue != candle.venue:
                 remaining.append(intent)
                 continue
-            base, residual = self._round_lot(intent.size_usd / candle.open)
-            order = self._new_order(
-                market=intent.market,
-                venue=intent.venue,
-                side=intent.side,
-                type=OrderType.LIMIT if intent.limit_price > 0 else OrderType.MARKET,
-                size=base,
-                price=intent.limit_price,
-                tif=intent.tif
-                or (TimeInForce.GTC if intent.limit_price > 0 else TimeInForce.IOC),
-                margin_mode=intent.margin_mode,
+            request, residual = materialize_usd_intent(
+                intent, candle.open, self._spec.size_decimals
             )
+            order = self._new_order(**request.as_order_kwargs())
             self._place(order, size_usd=intent.size_usd, size_residual=residual)
-            if base <= 0:
+            if request.size <= 0:
                 self._reject(order, reason="size_rounds_to_zero")
             elif intent.limit_price > 0:
                 self._resting.append(order)
             else:
                 self._pending_market.append(order)
         self._pending_usd = remaining
-
-    def _round_lot(self, size_base: float) -> tuple[float, float]:
-        """Floor ``size_base`` to the venue lot; return (lot_size, sub-lot residual)."""
-        factor = 10 ** self._spec.size_decimals
-        lot_size = math.floor(size_base * factor) / factor
-        return lot_size, size_base - lot_size
 
     # -- the persisted order state machine (§6.2) ------------------------------
 

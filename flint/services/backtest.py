@@ -32,7 +32,7 @@ from typing import Any
 from flint.adapters import InMemoryUserData
 from flint.data import CoverageMode, DataManager, FundingCoverageError
 from flint.data.ranges import Kind, TimeRange
-from flint.engine import BacktestEngine, EngineConfig, PortfolioState, money
+from flint.engine import EngineConfig
 from flint.engine.portfolio import EventLog
 from flint.live import build_adapter
 from flint.ports import RunRecord, TenantContext, UserDataPort
@@ -74,6 +74,9 @@ class BacktestRequest:
     initial_capital: str = "100000"
     overrides: Mapping[str, Any] = field(default_factory=dict)
     signal_venues: tuple[str, ...] = ()
+    # Which simulation substrate to run on (§6.0, D29). "auto" resolves to the
+    # legacy bar loop today; N9 flips "auto" to Nautilus once parity is green.
+    engine: str = "auto"
 
     @property
     def range(self) -> TimeRange:
@@ -223,7 +226,10 @@ def _execute(
     liquidation), which is one opaque call into the engine — a finer fill/funding
     split awaits engine-internal counters and is not fabricated here (D26).
     """
-    from ._engine_inputs import build_engine_inputs
+    from flint.engine.api import EngineRunSpec
+    from flint.engine.select import engine_for
+
+    from ._engine_inputs import build_engine_feed
 
     timing: dict[str, float] = {}
     executable = set(request.venues)
@@ -237,7 +243,11 @@ def _execute(
             signal_venues=request.signal_venues,
         )
     with _timed(timing, "input_build_ms"):
-        inputs = build_engine_inputs(prepared.tables, executable)
+        # Bar lane: close-derived mark synthesis is the OHLCV-only path today, so the
+        # feed carries it explicitly (§6.0 mark_policy) — same marks as before.
+        feed = build_engine_feed(
+            prepared.tables, executable, mark_policy="close_derived"
+        )
 
     # A prebuilt spec (a compiled *user* strategy, §13.2) resolves directly;
     # otherwise ``request.strategy`` is a trusted template registry name. Either
@@ -251,14 +261,17 @@ def _execute(
         overrides=dict(request.overrides),
     )
 
-    state = PortfolioState()
-    state.fund(request.venues[0], money(request.initial_capital))
     log = EventLog(event_store, tenant, request.run_id)
-    engine = BacktestEngine(
-        log, config=EngineConfig(), state=state, venue_spec=HYPERLIQUID
+    spec = EngineRunSpec(
+        config=EngineConfig(),
+        venue_spec=HYPERLIQUID,
+        initial_capital=request.initial_capital,
+        fund_venue=request.venues[0],
+        mark_policy="close_derived",
     )
+    engine = engine_for(request.engine)()
     with _timed(timing, "engine_run_ms"):
-        engine.run(inputs.candles, strategy=adapter, **inputs.run_kwargs())
+        engine.run(feed, adapter, event_log=log, spec=spec)
 
     rejections = adapter.drain_rejections()
     notes = adapter.tearsheet_notes()

@@ -8,6 +8,7 @@ fill, funding, and liquidation primitives it composes.
 
 from __future__ import annotations
 
+from .api import EngineFeed, EngineRunSpec, SimulationEngine
 from .context import AccountView, OpenInterestSnapshot
 from .loop import (
     BacktestEngine,
@@ -20,6 +21,7 @@ from .loop import (
 from .money import ZERO, Money, money
 from .orders import OrderRecord, OrderStatus
 from .portfolio import BookState, fold
+from .select import LegacyBarEngine, UnknownEngineError, engine_for
 from .state import Account, PortfolioState
 from .tearsheet import InvariantError, Tearsheet, build_tearsheet, check_invariants
 
@@ -45,4 +47,11 @@ __all__ = [
     "Money",
     "money",
     "ZERO",
+    # The engine seam (§6.0, D29) — substrate-agnostic run contract + dispatch.
+    "EngineFeed",
+    "EngineRunSpec",
+    "SimulationEngine",
+    "engine_for",
+    "LegacyBarEngine",
+    "UnknownEngineError",
 ]

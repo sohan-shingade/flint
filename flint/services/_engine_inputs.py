@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from flint.core.models.market import Candle, FundingRate, MarkSnapshot
 from flint.data.ranges import Kind
+from flint.engine.api import EngineFeed
 
 
 @dataclass(frozen=True)
@@ -40,16 +41,16 @@ def _rows(table) -> list[dict]:
     return table.to_pylist() if table.num_rows else []
 
 
-def build_engine_inputs(
+def _assemble(
     tables: dict[tuple[str, str, Kind], object], executable_venues: set[str]
-) -> EngineInputs:
-    """Assemble ``EngineInputs`` from ``prepared.tables``, executable legs only.
+) -> tuple[list[Candle], dict[str, list[FundingRate]], dict[str, list[MarkSnapshot]]]:
+    """Read executable legs into (ascending candles, funding, OI-derived marks).
 
     Candles from every executable leg are merged into one ascending stream (the
-    engine walks a single time-ordered candle list across markets). Funding and
-    marks are keyed by market. When a market has candles but no recorded marks,
-    a close-derived ``MarkSnapshot`` is synthesized per bar so funding still
-    settles against a real price (Tier-C).
+    engine walks a single time-ordered candle list across markets); funding and
+    marks are keyed by market. ``marks`` here carries only *recorded* mark/index
+    rows (from the OI kind) — close-derived synthesis is a separate, policy-gated
+    step (§6.0 ``mark_policy``), never folded into assembly.
     """
     candles: list[Candle] = []
     funding: dict[str, list[FundingRate]] = {}
@@ -99,6 +100,19 @@ def build_engine_inputs(
             )
 
     candles.sort(key=lambda c: (c.ts, c.market))
+    return candles, funding, marks
+
+
+def _synthesize_close_marks(
+    candles: list[Candle], marks: dict[str, list[MarkSnapshot]]
+) -> None:
+    """Add a close-derived ``MarkSnapshot`` for any market with no recorded mark.
+
+    The OHLCV-only path (§6.0 ``mark_policy="close_derived"``): a market whose lake
+    carried no mark/index rows gets one synthesized mark at its first candle so
+    funding still settles against a real price — a recorded close is a real price,
+    never fabricated (D26). Mutates ``marks`` in place.
+    """
     for c in candles:
         if not marks.get(c.market):
             marks.setdefault(c.market, []).append(
@@ -110,8 +124,49 @@ def build_engine_inputs(
                     venue=c.venue,
                 )
             )
+
+
+def _sort_series(
+    funding: dict[str, list[FundingRate]], marks: dict[str, list[MarkSnapshot]]
+) -> None:
     for series in marks.values():
         series.sort(key=lambda m: m.ts)
     for series in funding.values():
         series.sort(key=lambda f: f.ts)
+
+
+def build_engine_inputs(
+    tables: dict[tuple[str, str, Kind], object], executable_venues: set[str]
+) -> EngineInputs:
+    """Assemble ``EngineInputs`` from ``prepared.tables``, executable legs only.
+
+    The legacy accessor (still used by the sandboxed source path): assembles the
+    feed and always applies close-derived mark synthesis, preserving today's
+    behavior. New bar-lane callers should prefer :func:`build_engine_feed`, which
+    gates synthesis on ``mark_policy`` (§6.0).
+    """
+    candles, funding, marks = _assemble(tables, executable_venues)
+    _synthesize_close_marks(candles, marks)
+    _sort_series(funding, marks)
     return EngineInputs(candles=candles, funding=funding, marks=marks)
+
+
+def build_engine_feed(
+    tables: dict[tuple[str, str, Kind], object],
+    executable_venues: set[str],
+    *,
+    mark_policy: str = "recorded",
+) -> EngineFeed:
+    """Assemble an :class:`EngineFeed` from ``prepared.tables``, executable legs only.
+
+    Close-derived per-bar mark synthesis is fenced behind ``mark_policy`` (§6.0):
+    ``"close_derived"`` reproduces the bar-lane's OHLCV-only synthesis exactly (the
+    legacy behavior); ``"recorded"`` leaves marks to the recorded OI rows and never
+    synthesizes one from a close (the tick lane's requirement). ``books``/``trades``/
+    ``oi`` stay empty here — the bar lane feeds only candles + funding + marks.
+    """
+    candles, funding, marks = _assemble(tables, executable_venues)
+    if mark_policy == "close_derived":
+        _synthesize_close_marks(candles, marks)
+    _sort_series(funding, marks)
+    return EngineFeed(candles=candles, funding=funding, marks=marks)
