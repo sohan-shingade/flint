@@ -5,21 +5,24 @@
 
 ### `flint.data.ingest.recorders.__init__`
 _data.ingest.recorders — now-or-never WS recorders + the Pyth oracle poller (§9.1)._
-- imports: `.hyperliquid`, `.monitor`, `.pyth`
+- imports: `.hyperliquid`, `.monitor`, `.pyth`, `.ws`
 
 ### `flint.data.ingest.recorders.hyperliquid`
 _Hyperliquid WS recorders — the now-or-never capture, stand up FIRST (§9.1)._
-- imports: `...normalize`, `...ranges`, `..backfillers.hyperliquid`, `.monitor`
+- imports: `...normalize`, `...ranges`, `...store.coverage`, `..backfillers.hyperliquid`, `.monitor`, `flint.core.models`, `flint.core.time`
+- `def next_hour_boundary(ts_ms: int) -> int` — The first hour boundary strictly after ``ts_ms`` (unix ms, UTC).
 - `class WsMessageSource(ABC)` — A stream of ``(channel, data)`` frames — the injectable WS seam.
     - `def messages(self) -> Iterator[tuple[str, Any]]` — Yield ``(channel, data)`` frames until the stream ends.
 - `class ReplayWsSource(WsMessageSource)` — A deterministic ``WsMessageSource`` over a fixed list of frames.
     - `def __init__(self, frames: list[tuple[str, Any]]) -> None`
     - `def messages(self) -> Iterator[tuple[str, Any]]`
 - `class RecorderStats` — What a recorder run captured — rows persisted per kind + anomaly counts.
-- `class HyperliquidRecorder` — Capture HL trades + l2Book + activeAssetCtx into the store (§9.1).
-    - `def __init__(self, sink: UpsertSink, *, clock: Callable[[], int], venue: str=VENUE_HYPERLIQUID) -> None`
+- `class HyperliquidRecorder` — Capture HL trades + bbo + l2Book + activeAssetCtx into the store (§9.1).
+    - `def __init__(self, sink: UpsertSink, *, clock: Callable[[], int], venue: str=VENUE_HYPERLIQUID, ledger_of: LedgerFactory | None=None, session_start_ts: int | None=None) -> None`
     - `def process(self, channel: str, data: Any) -> None` — Normalize + track one WS frame and buffer it (no write yet).
+    - `def mark_disconnect(self) -> None` — Close every open coverage window at its last good event (reconnect).
     - `def flush(self) -> dict[Kind, int]` — Upsert every buffered stream to the sink; return rows written per kind.
+    - `def close_session(self) -> dict[Kind, int]` — Graceful shutdown: final flush + close every coverage window.
     - `def run(self, source: WsMessageSource, *, flush_every: int=100) -> RecorderStats` — Consume ``source`` to exhaustion, flushing every ``flush_every`` frames.
 
 ### `flint.data.ingest.recorders.monitor`
@@ -46,3 +49,12 @@ _Pyth Hermes oracle poller — the shared index/oracle feed (§9.1 class 5)._
     - `def enabled(self) -> bool` — True once the Pyth key exists (required from 2026-07-31).
     - `def poll(self) -> list[OraclePrice]` — Fetch the latest price for every configured feed; inert without a key.
     - `def to_arrow(prices: list[OraclePrice]) -> pa.Table`
+
+### `flint.data.ingest.recorders.ws`
+_The live Hyperliquid WebSocket ``WsMessageSource`` (§9.1, §12)._
+- imports: `.hyperliquid`
+- `def coin_of_market(market: str) -> str` — Flint market symbol -> HL coin id: ``SOL-PERP`` -> ``SOL``.
+- `def subscribe_messages(markets: list[str], channels: list[str]) -> list[dict]` — The HL subscribe payloads for a capture session (pure, testable).
+- `class HyperliquidWsSource(WsMessageSource)` — A blocking live WS source: subscribe once, yield data frames forever.
+    - `def __init__(self, markets: list[str], channels: list[str], *, url: str=HYPERLIQUID_WS_URL) -> None`
+    - `def messages(self) -> Iterator[tuple[str, Any]]`

@@ -306,3 +306,104 @@ def test_overlapping_gap_data_is_deduplicated():
     gap_starts = [b.candle.ts for b in bars2 if b.origin == "gap-replay"]
     assert gap_starts == [bar_start_ms(2), bar_start_ms(3), bar_start_ms(4)]
     assert bar_start_ms(1) not in gap_starts  # the overlap was dropped
+
+
+# --- D3: recorder tee — paper sessions passively build tick history (§9.2) ---
+
+
+def bbo_frame(ts: int, bid: float, ask: float):
+    return (
+        "bbo",
+        {"coin": COIN, "time": ts, "bbo": [
+            {"px": str(bid), "sz": "5.0", "n": 2},
+            {"px": str(ask), "sz": "4.0", "n": 1},
+        ]},
+    )
+
+
+def _tee_recorder(ledger_root=None):
+    from flint.data import InMemoryCacheSource
+    from flint.data.ingest.recorders import HyperliquidRecorder
+    from flint.data.store.coverage import CoverageLedger
+
+    sink = InMemoryCacheSource()
+    ledger_of = None
+    if ledger_root is not None:
+        ledger_of = lambda venue, market, kind: CoverageLedger(  # noqa: E731
+            ledger_root / kind.value / venue / market
+        )
+    rec = HyperliquidRecorder(
+        sink, clock=lambda: bar_start_ms(1), ledger_of=ledger_of
+    )
+    return sink, rec
+
+
+def test_feed_tee_frames_reach_both_consumer_and_recorder():
+    from flint.data import Kind, TimeRange
+
+    sink, rec = _tee_recorder()
+    feed = LiveFeed(MARKET, resolution_s=HOUR_S, recorder_sink=rec)
+    t0 = bar_start_ms(0)
+    bars = feed.connect(ReplayWsSource([
+        trades_frame(t0 + 10, 100.0, 1.0, tid=1),
+        bbo_frame(t0 + 20, 99.9, 100.1),
+        trades_frame(bar_start_ms(1) + 10, 101.0, 1.0, tid=2),  # closes bar 0
+    ]))
+    # Consumer side: the feed still closes and emits bar 0.
+    assert [b.candle.ts for b in bars] == [t0]
+    # Recorder side: the same frames landed in the durable sink (tee flushed
+    # at end of connect) — trades AND the bbo frame the feed itself ignores.
+    span = TimeRange(0, bar_start_ms(2))
+    assert sink.fetch(VENUE, MARKET, Kind.TRADES, span).num_rows == 2
+    assert sink.fetch(VENUE, MARKET, Kind.QUOTES, span).num_rows == 1
+
+
+def test_feed_tee_skips_l2book_by_default_but_records_it_on_opt_in():
+    from flint.data import Kind, TimeRange
+
+    span = TimeRange(0, bar_start_ms(2))
+    t0 = bar_start_ms(0)
+    frames = [
+        trades_frame(t0 + 10, 100.0, 1.0, tid=1),
+        book_frame(t0 + 20, 99.9, 100.1),
+    ]
+
+    sink, rec = _tee_recorder()
+    LiveFeed(MARKET, resolution_s=HOUR_S, recorder_sink=rec).connect(
+        ReplayWsSource(frames)
+    )
+    assert sink.fetch(VENUE, MARKET, Kind.DEPTH, span).num_rows == 0  # off by default
+
+    sink2, rec2 = _tee_recorder()
+    LiveFeed(
+        MARKET,
+        resolution_s=HOUR_S,
+        recorder_sink=rec2,
+        record_channels=frozenset({"trades", "l2Book"}),
+    ).connect(ReplayWsSource(frames))
+    assert sink2.fetch(VENUE, MARKET, Kind.DEPTH, span).num_rows == 1  # opt-in
+
+
+def test_feed_reconnect_splits_recorded_coverage(tmp_path):
+    from flint.data import TimeRange
+    from flint.data.store.coverage import CoverageLedger
+
+    _, rec = _tee_recorder(ledger_root=tmp_path)
+    feed = LiveFeed(MARKET, resolution_s=HOUR_S, recorder_sink=rec)
+    t0 = bar_start_ms(0)
+    feed.connect(ReplayWsSource([
+        trades_frame(t0 + 10, 100.0, 1.0, tid=1),
+        trades_frame(t0 + 20, 100.5, 1.0, tid=2),
+    ]))
+    # Connection drops; the next connect is a reconnect — the recorder's
+    # coverage window must close at the last good event, not span the outage.
+    t5 = bar_start_ms(5)
+    feed.connect(ReplayWsSource([
+        trades_frame(t5 + 10, 102.0, 1.0, tid=9),
+        trades_frame(t5 + 20, 102.5, 1.0, tid=10),
+    ]))
+    ledger = CoverageLedger(tmp_path / "trades" / "hyperliquid" / MARKET)
+    assert ledger.covered().ranges == (
+        TimeRange(t0 + 10, t0 + 20),
+        TimeRange(t5 + 10, t5 + 20),
+    )

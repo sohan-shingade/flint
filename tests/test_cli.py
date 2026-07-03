@@ -543,3 +543,90 @@ def test_main_surfaces_a_clean_error_not_a_traceback(monkeypatch):
     # Export an unknown run → NotFoundError → main() maps it to exit 1, no traceback.
     rc = cli.main(["export", "--run-id", "nope"])
     assert rc == 1
+
+
+# -- data record (D3: always-on live tick capture, §9.2) ----------------------
+
+
+def _bbo_frame(ts: int):
+    return (
+        "bbo",
+        {"coin": "SOL", "time": ts, "bbo": [
+            {"px": "100.3", "sz": "5", "n": 2},
+            {"px": "100.5", "sz": "4", "n": 1},
+        ]},
+    )
+
+
+def test_cli_data_record_captures_and_closes_the_ledger(tmp_path):
+    # Constructed, never networked (D26): the WS source is a deterministic
+    # replay and the cache is a DurableCacheSource on a temp lake.
+    from flint.data import TimeRange as TR
+    from flint.data.ingest.recorders import ReplayWsSource
+    from flint.data.store import DurableCacheSource
+
+    out, sink = _collect()
+    cache = DurableCacheSource(tmp_path)
+    args = _ns(
+        markets=MARKET,
+        venue=VENUE,
+        channels="trades,bbo,activeAssetCtx",
+        cache_root=str(tmp_path),
+        flush_every=2,
+    )
+    rc = cli.cmd_data_record(
+        args,
+        source=ReplayWsSource([_bbo_frame(1000), _bbo_frame(2000), _bbo_frame(3000)]),
+        cache=cache,
+        out=sink,
+    )
+    assert rc == 0
+    summary = json.loads(out[0])
+    assert summary["frames"] == 3
+    assert summary["rows_written"] == {"quotes": 3}
+    # Rows landed under the lake layout and the session close asserted the
+    # coverage ledger up to the last observed event — recorded ticks count.
+    want = TR(0, 10_000)
+    assert cache.fetch(VENUE, MARKET, Kind.QUOTES, want).num_rows == 3
+    avail = cache.available(VENUE, MARKET, Kind.QUOTES, want)
+    assert not avail.is_empty
+    assert avail.ranges[0].end_ms == 3000  # closed at the last event, not beyond
+
+
+def test_cli_data_record_stops_gracefully_on_interrupt(tmp_path):
+    # Ctrl-C mid-stream: the session still closes — final flush + ledger ends
+    # at the last good event.
+    from flint.data import TimeRange as TR
+    from flint.data.ingest.recorders import WsMessageSource
+    from flint.data.store import DurableCacheSource
+
+    class InterruptingSource(WsMessageSource):
+        def messages(self):
+            yield _bbo_frame(1000)
+            yield _bbo_frame(2000)
+            raise KeyboardInterrupt
+
+    out, sink = _collect()
+    cache = DurableCacheSource(tmp_path)
+    args = _ns(
+        markets=MARKET,
+        venue=VENUE,
+        channels="trades,bbo,activeAssetCtx",
+        cache_root=str(tmp_path),
+        flush_every=100,  # larger than the frame count: only the close flushes
+    )
+    rc = cli.cmd_data_record(args, source=InterruptingSource(), cache=cache, out=sink)
+    assert rc == 0
+    summary = json.loads(out[0])
+    assert summary["rows_written"] == {"quotes": 2}
+    want = TR(0, 10_000)
+    avail = cache.available(VENUE, MARKET, Kind.QUOTES, want)
+    assert avail.ranges[0].end_ms == 2000
+
+
+def test_cli_parser_wires_data_record():
+    parser = cli.build_parser()
+    args = parser.parse_args(["data", "record", "--markets", "SOL-PERP,BTC-PERP"])
+    assert args.func is cli.cmd_data_record
+    assert args.channels == "trades,bbo,activeAssetCtx"  # l2Book is opt-in
+    assert args.venue == "hyperliquid"

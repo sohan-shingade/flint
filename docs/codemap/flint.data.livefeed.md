@@ -35,7 +35,7 @@ _The LiveFeed — venue WS in, closed bars out, gap-replay across reconnects (§
     - `def run_kwargs(self) -> dict`
 - `def assemble_engine_inputs(bars: Iterable[LiveBar]) -> EngineInputs` — Lower an emitted :class:`LiveBar` stream into :class:`EngineInputs`.
 - `class LiveFeed` — Subscribes a venue WS and emits closed bars with reconnect gap replay (§6.7).
-    - `def __init__(self, market: str, *, venue: str=VENUE_HYPERLIQUID, resolution_s: int, gap_source: GapSource | None=None, funding_interval_s: int=3600, resume_bar_start: int | None=None) -> None`
+    - `def __init__(self, market: str, *, venue: str=VENUE_HYPERLIQUID, resolution_s: int, gap_source: GapSource | None=None, funding_interval_s: int=3600, resume_bar_start: int | None=None, recorder_sink: HyperliquidRecorder | None=None, record_channels: frozenset[str]=DEFAULT_RECORD_CHANNELS) -> None`
     - `def connect(self, source: WsMessageSource) -> list[LiveBar]` — Process one WS connection; return the bars it closed, in time order.
     - `def close_session(self) -> list[LiveBar]` — Flush the final open bar on a graceful (non-disconnect) session end.
 

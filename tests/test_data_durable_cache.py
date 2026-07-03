@@ -342,3 +342,68 @@ def test_lake_v1_non_funding_file_passes_through_unchanged(tmp_path):
     )
     assert got.column_names == ["ts", "open", "high", "low", "close"]
     assert got.column("close").to_pylist() == [211.0]
+
+
+def test_coverage_ledger_accessor_is_the_recorder_write_hook(tmp_path):
+    # D3 (§9.2): the recorder asserts through cache.coverage_ledger and the
+    # very same available()/gate machinery reports it — recorded ticks count.
+    from flint.data import InMemoryCacheSource  # noqa: F401 - documents the seam
+    from flint.data.ingest.recorders import HyperliquidRecorder, ReplayWsSource
+
+    cache = DurableCacheSource(tmp_path)
+    ts = _ms(2025, 1, 1, 13)
+    rec = HyperliquidRecorder(
+        cache,
+        clock=lambda: ts,
+        ledger_of=cache.coverage_ledger,
+        session_start_ts=ts,
+    )
+    rec.run(
+        ReplayWsSource(
+            [
+                (
+                    "bbo",
+                    {
+                        "coin": "SOL",
+                        "time": ts + 60_000,
+                        "bbo": [
+                            {"px": "211.5", "sz": "5", "n": 2},
+                            {"px": "211.6", "sz": "4", "n": 1},
+                        ],
+                    },
+                )
+            ]
+        ),
+        flush_every=1,
+    )
+    rec.close_session()
+    want = TimeRange(_ms(2025, 1, 1), _ms(2025, 1, 2))
+    avail = cache.available("hyperliquid", "SOL-PERP", Kind.QUOTES, want)
+    # Covered from session start to the newest event, asserted not inferred.
+    assert avail.ranges == (TimeRange(ts, ts + 60_000),)
+    assert cache.fetch("hyperliquid", "SOL-PERP", Kind.QUOTES, want).num_rows == 1
+
+
+def test_coverage_ledger_accessor_seeds_the_envelope_for_non_tick_kinds(tmp_path):
+    # Attaching a coverage writer to a populated pre-ledger FUNDING directory
+    # must not erase the coverage its envelope honestly implied.
+    cache = DurableCacheSource(tmp_path)
+    t0 = _ms(2025, 1, 1, 12)
+    funding = pa.Table.from_pylist(
+        [
+            {
+                "ts": t0,
+                "rate_hourly": 0.0000125,
+                "interval_s": 3600,
+                "price_basis": "oracle",
+                "rate_type": "final",
+                "venue": "hyperliquid",
+                "market": "SOL-PERP",
+                "settlement_ts": t0,
+            }
+        ]
+    )
+    cache.store("hyperliquid", "SOL-PERP", Kind.FUNDING, funding)
+    ledger = cache.coverage_ledger("hyperliquid", "SOL-PERP", Kind.FUNDING)
+    assert ledger.covered().ranges == (TimeRange(t0, t0 + 1),)  # seeded envelope
+    assert {e.source for e in ledger.entries} == {"hl_rest"}

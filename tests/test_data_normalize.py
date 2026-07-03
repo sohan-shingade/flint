@@ -144,3 +144,73 @@ def test_funding_schema_carries_nullable_settlement_ts_last():
     field = FUNDING_SCHEMA.field("settlement_ts")
     assert field.type == pa.int64()
     assert field.nullable
+
+
+# --- D3: bbo -> QuoteTick (§9.2) ---------------------------------------------
+
+
+def test_normalize_bbo_maps_both_sides():
+    from flint.data.normalize import QuoteTick, normalize_bbo
+
+    frame = {
+        "coin": "SOL",
+        "time": 1700,
+        "bbo": [
+            {"px": "100.3", "sz": "5", "n": 2},
+            {"px": "100.5", "sz": "4", "n": 1},
+        ],
+    }
+    assert normalize_bbo(frame) == QuoteTick(
+        ts=1700,
+        market="SOL-PERP",
+        venue="hyperliquid",
+        bid_px=100.3,
+        bid_sz=5.0,
+        ask_px=100.5,
+        ask_sz=4.0,
+    )
+
+
+def test_normalize_bbo_null_side_is_none_never_fabricated():
+    from flint.data.normalize import normalize_bbo
+
+    quote = normalize_bbo(
+        {"coin": "SOL", "time": 1700, "bbo": [None, {"px": "100.5", "sz": "4", "n": 1}]}
+    )
+    assert quote.bid_px is None
+    assert quote.bid_sz is None
+    assert quote.ask_px == 100.5
+
+
+def test_quotes_to_arrow_matches_the_quotes_schema():
+    from flint.data.normalize import QuoteTick, quotes_to_arrow
+
+    table = quotes_to_arrow(
+        [QuoteTick(1700, "SOL-PERP", "hyperliquid", 100.3, 5.0, None, None)]
+    )
+    assert table.schema == QUOTES_SCHEMA
+    assert table.column("bid_px").to_pylist() == [100.3]
+    assert table.column("ask_px").to_pylist() == [None]
+
+
+def test_fundings_to_arrow_matches_the_funding_schema():
+    from flint.data.normalize import FundingObservation, fundings_to_arrow
+
+    table = fundings_to_arrow(
+        [
+            FundingObservation(
+                ts=7_200_500,
+                market="SOL-PERP",
+                venue="hyperliquid",
+                rate_hourly=0.0000125,
+                interval_s=3600,
+                price_basis="oracle",
+                rate_type="predicted",
+                settlement_ts=10_800_000,
+            )
+        ]
+    )
+    assert table.schema == FUNDING_SCHEMA
+    row = table.to_pylist()[0]
+    assert row["rate_type"] == "predicted"
+    assert row["settlement_ts"] == 10_800_000

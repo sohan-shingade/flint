@@ -49,6 +49,7 @@ _Durable Parquet-backed local cache tier (§9.0)._
 - `class DurableCacheSource(DataSource)` — A write-through cache tier that persists to the Parquet lake layout (§9.0).
     - `def __init__(self, root: str | Path, *, registry: MigrationRegistry | None=None) -> None`
     - `def available(self, venue: str, market: str, kind: Kind, want: TimeRange) -> RangeSet`
+    - `def coverage_ledger(self, venue: str, market: str, kind: Kind) -> CoverageLedger` — The asserted-coverage ledger of one stream directory, created if absent.
     - `def fetch(self, venue: str, market: str, kind: Kind, span: TimeRange) -> pa.Table`
     - `def store(self, venue: str, market: str, kind: Kind, table: pa.Table) -> None` — Write ``table`` through to the Parquet lake, merging by ts per partition.
 
