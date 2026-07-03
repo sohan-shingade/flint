@@ -35,9 +35,10 @@ sequence above is the contract.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from random import Random
-from typing import Protocol
+from typing import Callable, Protocol
 
 from flint.core.models import (
     Candle,
@@ -74,6 +75,7 @@ from .fills import (
     TradePrint,
     fill_model_for,
 )
+from .context import AccountView, OpenInterestSnapshot
 from .orders import OrderRecord, OrderStatus
 from .funding.settlement import (
     clamp_funding_rate,
@@ -87,6 +89,28 @@ from .liquidation.check import (
 )
 from .money import money
 from .state import PortfolioState
+
+
+class SignalValidationError(ValueError):
+    """A strategy emitted an invalid Signal batch (§8.1 conversion rules)."""
+
+
+@dataclass(frozen=True)
+class _UsdIntent:
+    """A deferred size_usd order awaiting its execution bar's open (§8.1 rule 1).
+
+    Held between the decision bar (where the strategy emitted it) and the next
+    matching bar, where ``_materialize_usd_intents`` sizes it to base units at that
+    bar's open — closing the look-ahead that sizing on the decision close would open.
+    """
+
+    market: str
+    venue: str
+    side: Side
+    size_usd: float
+    limit_price: float
+    tif: TimeInForce | None
+    margin_mode: str
 
 
 @dataclass(frozen=True)
@@ -127,38 +151,163 @@ class NoopStrategy:
 
 @dataclass
 class EngineContext:
-    """The read-only window a strategy sees (minimal in 3.1; §8.2 in 3.6).
+    """The read-only window a strategy sees, under the §8.2 visibility contract.
 
-    Slice 3.1 exposes only position lookup — enough to route ``close`` signals
-    and prove the seam. The full accessor set (funding_rate, orderbook, account
-    sizing helpers) and the strict as-of visibility contract land in slice 3.6.
+    Every accessor obeys one rule: **strictly less than bar start, closed data
+    only, ``None`` over stale, never synthetic** (D26). ``now`` is the bar start,
+    and each accessor returns the most recent datum with ``ts < now`` — what a
+    trader actually knew when deciding this bar. A missing/stale datum is ``None``
+    (a fidelity gap), never a forward-filled or invented value. The ctx is a value
+    object: it holds no path to config, secrets, or the store (§8.3); ``submit_order``
+    reaches the engine only through a narrow order-submitting callable.
     """
 
     state: PortfolioState
     default_venue: str
     now: int
     rng: Random
+    venue_spec: VenueSpec
+    submit_order_fn: Callable[[Order], object]
     funding: dict[str, list[FundingRate]] = field(default_factory=dict)
+    marks: dict[str, list[MarkSnapshot]] = field(default_factory=dict)
+    books: dict[str, list[OrderbookSnapshot]] = field(default_factory=dict)
+    oi: dict[str, list[OpenInterestSnapshot]] = field(default_factory=dict)
+    candle_history: dict[str, list[Candle]] = field(default_factory=dict)
 
     def position(self, market: str, venue: str | None = None) -> Position | None:
         """The open position on ``(venue or default, market)``, or ``None``."""
         return self.state.position(venue or self.default_venue, market)
+
+    def account(self, venue: str | None = None) -> AccountView:
+        """A per-venue equity snapshot + the §8.1 sizing helpers (§8.2, §6.5/§6.6).
+
+        Equity and the cross-margin pool are valued on marks known at bar start
+        (the visibility contract); a position whose market has no as-of mark simply
+        contributes no unrealized (it cannot be valued this bar).
+        """
+        v = venue or self.default_venue
+        as_of = self._marks_as_of(v)
+        return AccountView(
+            venue=v,
+            equity=self.state.equity(v, as_of),
+            cross_margin_available=self.state.cross_margin_available(v, as_of),
+        )
 
     def funding_rate(
         self, market: str, venue: str | None = None
     ) -> FundingRate | None:
         """Last **published predicted** funding rate knowable at bar start (§6.4).
 
-        Returns the most recent ``predicted`` row with ``ts < now`` (``now`` is the
-        bar start) — what a trader actually knew when deciding this bar. It **never**
-        returns the ``final`` rate that settles later in the bar: leaking the settled
-        rate inflates funding-arb backtests dramatically, and blocking that leak
-        here (where a look-ahead linter can't see it) is the whole point of the
-        predicted/final split. ``None`` if no predicted rate has been published yet.
+        Returns the most recent ``predicted`` row with ``ts < now`` — what a trader
+        knew when deciding. It **never** returns the ``final`` rate that settles
+        later in the bar: leaking the settled rate inflates funding-arb backtests,
+        and blocking that leak here (where a look-ahead linter can't see it) is the
+        whole point of the predicted/final split. ``None`` if none published yet.
         """
-        rows = self.funding.get(market, [])
-        predicted = [r for r in rows if r.rate_type == "predicted"]
+        predicted = [
+            r for r in self.funding.get(market, []) if r.rate_type == "predicted"
+        ]
         return last_before(predicted, self.now, key=lambda r: r.ts)
+
+    def basis_bps(self, market: str, venue: str | None = None) -> float | None:
+        """Perp premium vs index from the last MarkSnapshot before bar start (§8.2).
+
+        ``None`` when no mark is knowable yet (Tier-C / gap) — never a stale or
+        synthetic premium.
+        """
+        snap = last_before(self.marks.get(market, []), self.now, key=lambda m: m.ts)
+        return snap.basis_bps if snap is not None else None
+
+    def open_interest(self, market: str, venue: str | None = None) -> float | None:
+        """Last open-interest reading before bar start, or ``None`` (§8.2)."""
+        snap = last_before(self.oi.get(market, []), self.now, key=lambda o: o.ts)
+        return snap.open_interest if snap is not None else None
+
+    def orderbook(
+        self, market: str, venue: str | None = None
+    ) -> OrderbookSnapshot | None:
+        """Last L2 snapshot before bar start, **within** the staleness threshold (§8.2/§6.3).
+
+        A snapshot older than the venue's ``book_staleness_s`` at bar start is
+        treated as absent → ``None`` (a fidelity gap), never a stale book handed
+        out as if fresh.
+        """
+        snap = last_before(self.books.get(market, []), self.now, key=lambda b: b.ts)
+        if snap is None:
+            return None
+        if (self.now - snap.ts) > self.venue_spec.book_staleness_s * 1000:
+            return None  # stale beyond threshold → absent, not silently fresh
+        return snap
+
+    def candles(
+        self, market: str, lookback: int, venue: str | None = None
+    ) -> list[Candle]:
+        """The last ``lookback`` **closed** bars for ``market`` (bar_end ≤ now, §8.2).
+
+        Closed bars only — the current, not-yet-closed bar is excluded, and gaps
+        show up as missing bars, never forward-filled.
+        """
+        closed = [
+            c
+            for c in self.candle_history.get(market, [])
+            if bar_end(c.ts, c.resolution_s) <= self.now
+        ]
+        return closed[-lookback:] if lookback > 0 else []
+
+    def submit_order(
+        self,
+        market: str,
+        venue: str,
+        side: Side,
+        size: float,
+        *,
+        type: OrderType = OrderType.MARKET,
+        price: float = 0.0,
+        tif: TimeInForce | None = None,
+        margin_mode: str = "cross",
+        reduce_only: bool = False,
+        client_order_id: str = "",
+    ) -> object:
+        """The imperative escape hatch (§8.1, D21): submit an order directly.
+
+        Same Order model, same engine fill path, same caps as a Signal — but the
+        look-ahead linter reasons about Signals, not this, so imperative strategies
+        earn a tearsheet note. Routes through the engine's idempotent submit seam.
+        """
+        order = Order(
+            market=market,
+            venue=venue,
+            side=side,
+            type=type,
+            size=size,
+            price=price,
+            client_order_id=client_order_id,
+            tif=tif or (TimeInForce.IOC if type is OrderType.MARKET else TimeInForce.GTC),
+            margin_mode=margin_mode,
+            reduce_only=reduce_only,
+        )
+        return self.submit_order_fn(order)
+
+    def _marks_as_of(self, venue: str) -> dict[str, float]:
+        """As-of mark price per market this venue holds a position in (bar start).
+
+        Prefers the last MarkSnapshot before ``now``; falls back to the last closed
+        candle's close. Markets with neither are omitted (unvaluable this bar).
+        """
+        out: dict[str, float] = {}
+        for (pos_venue, market) in self.state.positions:
+            if pos_venue != venue or market in out:
+                continue
+            snap = last_before(self.marks.get(market, []), self.now, key=lambda m: m.ts)
+            if snap is not None:
+                out[market] = snap.mark_price
+                continue
+            candle = last_before(
+                self.candle_history.get(market, []), self.now, key=lambda c: c.ts
+            )
+            if candle is not None:
+                out[market] = candle.close
+        return out
 
 
 class BacktestEngine:
@@ -182,11 +331,19 @@ class BacktestEngine:
         self._latency = LatencyModel(self._spec.latency)
         self.state = state or PortfolioState()
         self._rng = Random(self._cfg.rng_seed)
-        # Recorded microstructure fixtures, keyed by market (set on run()).
+        # Recorded microstructure + observation fixtures, keyed by market (set on
+        # run()); ctx exposes them under the §8.2 as-of visibility contract.
         self._books: dict[str, list[OrderbookSnapshot]] = {}
         self._trades: dict[str, list[TradePrint]] = {}
+        self._marks: dict[str, list[MarkSnapshot]] = {}
+        self._oi: dict[str, list[OpenInterestSnapshot]] = {}
+        # Closed-bar history per market, grown as bars finish (ctx.candles reads it).
+        self._candle_history: dict[str, list[Candle]] = {}
         # Market orders wait one bar and fill at the next bar's open (T+1).
         self._pending_market: list[Order] = []
+        # size_usd intents wait for the execution bar, where they size at its OPEN
+        # (§8.1 rule 1 — sizing at the decision bar's close is a hidden look-ahead).
+        self._pending_usd: list[_UsdIntent] = []
         # Resting stop/limit/TP orders live until triggered, cancelled, or the
         # run ends (GTC).
         self._resting: list[Order] = []
@@ -209,35 +366,45 @@ class BacktestEngine:
         funding: dict[str, list[FundingRate]] | None = None,
         books: dict[str, list[OrderbookSnapshot]] | None = None,
         trades: dict[str, list[TradePrint]] | None = None,
+        oi: dict[str, list[OpenInterestSnapshot]] | None = None,
         strategy: Strategy | None = None,
     ) -> PortfolioState:
         """Run the loop over ``candles`` and return the final portfolio state.
 
-        ``marks``/``funding``/``books``/``trades`` are keyed by market, each
+        ``marks``/``funding``/``books``/``trades``/``oi`` are keyed by market, each
         ascending by ts. All are plain in-memory fixtures — the engine is pure
         domain and does no I/O (§6): data arrives already loaded. Supplying
         ``books`` (and ``trades``) lifts fills to Tier B (A); with only candles,
-        fills are the honest Tier-C parametric model.
+        fills are the honest Tier-C parametric model. ``marks``/``oi`` also feed the
+        strategy's §8.2 accessors under the as-of visibility contract.
         """
-        marks = marks or {}
+        self._marks = marks or {}
         funding = funding or {}
         self._books = books or {}
         self._trades = trades or {}
+        self._oi = oi or {}
         strat = strategy or NoopStrategy()
         self._log.emit(RUN_STARTED, {"engine": "backtest"})
         for candle in candles:
-            self._process_bar(candle, marks, funding, strat)
-        # GTC orders are open "until cancelled or the run ends" (§8.1): any order
-        # still resting at the end is cancelled to a terminal state, never left
-        # dangling — so the folded state machine has no orphaned live orders.
-        self._cancel_resting_at_run_end()
+            self._process_bar(candle, self._marks, funding, strat)
+        self._cancel_working_orders_at_run_end()
         self._log.emit(RUN_FINISHED, {"engine": "backtest"})
         return self.state
 
-    def _cancel_resting_at_run_end(self) -> None:
-        for order in self._resting:
+    def _cancel_working_orders_at_run_end(self) -> None:
+        """Cancel every still-working order so none is left non-terminal (§8.1/§19.2).
+
+        GTC limits rest "until cancelled or the run ends" (§8.1); an unfilled T+1
+        market order whose execution bar never arrived is likewise dangling. Both
+        are cancelled to a terminal state, and any unmaterialized size_usd intent
+        is dropped — so the state machine closes and the §19.2 conservation
+        invariant holds.
+        """
+        for order in list(self._resting) + list(self._pending_market):
             self._cancel(order, reason="run_ended")
         self._resting = []
+        self._pending_market = []
+        self._pending_usd = []
 
     # -- the locked per-bar sequence (§6.1) ------------------------------------
 
@@ -263,23 +430,39 @@ class BacktestEngine:
         self._check_liquidations(candle, bar_marks)
         # (5) Resting stop/limit/TP — adverse-extreme-first on Tier-C.
         self._process_resting(candle, bar_marks, market_marks)
-        # (6) Strategy sees a read-only ctx, returns signals; route them.
+        # (6) Strategy sees a read-only ctx, returns signals; route them. The ctx
+        # exposes every accessor as-of ``start`` (bar start) — closed data only.
         ctx = EngineContext(
             state=self.state,
             default_venue=venue,
             now=start,
             rng=self._rng,
+            venue_spec=self._spec,
+            submit_order_fn=self._submit,
             funding=funding,
+            marks=self._marks,
+            books=self._books,
+            oi=self._oi,
+            candle_history=self._candle_history,
         )
         signals = strategy.on_candle(candle, ctx)
         self._route(signals, venue)
+        # (7) This bar is now closed — add it to history so a LATER bar's ctx can
+        # see it (never the current bar, which is still open at decision time).
+        self._candle_history.setdefault(market, []).append(candle)
 
     # -- (2) T+1 market fills --------------------------------------------------
 
     def _fill_pending_market(
         self, candle: Candle, market_marks: list[MarkSnapshot]
     ) -> None:
-        """Fill queued market orders at this bar's open (their T+1 moment)."""
+        """Fill queued market orders at this bar's open (their T+1 moment).
+
+        size_usd intents are *materialized* here first — sized to base units at
+        this (execution) bar's open, then placed — so a USD-notional order fills
+        alongside base-sized T+1 orders at the same open (§8.1 rule 1).
+        """
+        self._materialize_usd_intents(candle)
         if not self._pending_market:
             return
         still_pending: list[Order] = []
@@ -580,58 +763,121 @@ class BacktestEngine:
     # -- (6) routing signals ---------------------------------------------------
 
     def _route(self, signals: list[Signal], default_venue: str) -> None:
-        """Convert signals to orders and enqueue them on the shared fill path.
+        """Convert a bar's signals to orders under the §8.1 conversion rules.
 
-        Slice 3.1 handles the market/close/limit routing needed to prove T+1 and
-        the resting path; the full Signal→Order conversion (size_usd sizing at the
-        execution bar's open, validation, per-(market,venue,action) dedup — §8.1)
-        lands in slice 3.6.
+        Validation is loud, not a merge (§8.1 rule 4/5): a duplicate
+        ``(market, venue, action)`` in one bar, or an open with no sizing / both
+        sizings, raises ``SignalValidationError``. A ``close`` maps to a reduce-only
+        full-size market order (rule 3). A ``size`` (base) order routes immediately;
+        a ``size_usd`` order defers to the execution bar, where it sizes at that
+        bar's open (rule 1) — never bar t's close.
         """
+        seen: set[tuple[str, str, str]] = set()
         for sig in signals:
             venue = sig.venue or default_venue
+            key = (venue, sig.market, sig.action)
+            if key in seen:
+                raise SignalValidationError(
+                    f"duplicate signal {key} in one bar — a validation error, "
+                    "not a merge (§8.1)"
+                )
+            seen.add(key)
+
             if sig.is_close:
                 pos = self.state.positions.get((venue, sig.market))
                 if pos is None:
-                    continue
-                order = self._new_order(
-                    market=sig.market,
-                    venue=venue,
-                    side=pos.side.opposite,
-                    type=OrderType.MARKET,
-                    size=pos.size,
-                    tif=TimeInForce.IOC,
-                    reduce_only=True,
-                    margin_mode=pos.margin_mode,
+                    continue  # nothing to close — a no-op, not an order
+                self._submit(
+                    self._new_order(
+                        market=sig.market,
+                        venue=venue,
+                        side=pos.side.opposite,
+                        type=OrderType.MARKET,
+                        size=pos.size,
+                        tif=TimeInForce.IOC,
+                        reduce_only=True,
+                        margin_mode=pos.margin_mode,
+                    )
                 )
-                self._submit(order)
                 continue
-            if sig.size <= 0:
-                # size_usd sizing needs the next bar's open mark — deferred to
-                # slice 3.6 with the sizing helpers; skip in 3.1.
-                continue
+
+            if (sig.size > 0) == (sig.size_usd > 0):
+                raise SignalValidationError(
+                    f"{sig.action} {sig.market} needs exactly one of size / "
+                    f"size_usd (got size={sig.size}, size_usd={sig.size_usd}) (§8.1)"
+                )
             side = Side.LONG if sig.action == "long" else Side.SHORT
-            if sig.limit_price > 0:
-                order = self._new_order(
+            if sig.size_usd > 0:
+                # Defer: the base size is unknowable without the execution bar's
+                # open, and sizing on this bar's close would be a look-ahead (§8.1).
+                self._pending_usd.append(
+                    _UsdIntent(
+                        market=sig.market,
+                        venue=venue,
+                        side=side,
+                        size_usd=sig.size_usd,
+                        limit_price=sig.limit_price,
+                        tif=sig.tif,
+                        margin_mode=sig.margin_mode,
+                    )
+                )
+                continue
+            self._submit(
+                self._new_order(
                     market=sig.market,
                     venue=venue,
                     side=side,
-                    type=OrderType.LIMIT,
+                    type=OrderType.LIMIT if sig.limit_price > 0 else OrderType.MARKET,
                     size=sig.size,
                     price=sig.limit_price,
-                    tif=sig.tif or TimeInForce.GTC,
+                    tif=sig.tif
+                    or (TimeInForce.GTC if sig.limit_price > 0 else TimeInForce.IOC),
                     margin_mode=sig.margin_mode,
                 )
+            )
+
+    def _materialize_usd_intents(self, candle: Candle) -> None:
+        """Size + place any size_usd intents for this bar's market at its OPEN (§8.1).
+
+        Base size = ``size_usd / open``, floored to the venue lot (never grown past
+        the USD budget); the sub-lot residual is recorded on the ORDER_PLACED event,
+        never silently absorbed. An intent that rounds to zero base is placed then
+        rejected (no size). Market intents join this bar's fill queue; limit intents
+        rest.
+        """
+        if not self._pending_usd:
+            return
+        remaining: list[_UsdIntent] = []
+        for intent in self._pending_usd:
+            if intent.market != candle.market or intent.venue != candle.venue:
+                remaining.append(intent)
+                continue
+            base, residual = self._round_lot(intent.size_usd / candle.open)
+            order = self._new_order(
+                market=intent.market,
+                venue=intent.venue,
+                side=intent.side,
+                type=OrderType.LIMIT if intent.limit_price > 0 else OrderType.MARKET,
+                size=base,
+                price=intent.limit_price,
+                tif=intent.tif
+                or (TimeInForce.GTC if intent.limit_price > 0 else TimeInForce.IOC),
+                margin_mode=intent.margin_mode,
+            )
+            self._place(order, size_usd=intent.size_usd, size_residual=residual)
+            if base <= 0:
+                self._reject(order, reason="size_rounds_to_zero")
+            elif intent.limit_price > 0:
+                self._resting.append(order)
             else:
-                order = self._new_order(
-                    market=sig.market,
-                    venue=venue,
-                    side=side,
-                    type=OrderType.MARKET,
-                    size=sig.size,
-                    tif=TimeInForce.IOC,
-                    margin_mode=sig.margin_mode,
-                )
-            self._submit(order)
+                self._pending_market.append(order)
+        self._pending_usd = remaining
+
+    def _round_lot(self, size_base: float) -> tuple[float, float]:
+        """Floor ``size_base`` to the venue lot; return (lot_size, sub-lot residual)."""
+        factor = 10 ** self._spec.size_decimals
+        lot_size = math.floor(size_base * factor) / factor
+        return lot_size, size_base - lot_size
 
     # -- the persisted order state machine (§6.2) ------------------------------
 
@@ -640,13 +886,26 @@ class BacktestEngine:
 
         A ``client_order_id`` already known is recognized and returned unchanged —
         never re-queued or double-filled (the paper-reconnect guard). A fresh order
-        enters ``pending``, is accepted to ``placed`` (ORDER_PLACED emitted), and
-        joins the shared fill path: a market order waits for the next bar's open
-        (T+1); a resting order lives until triggered, cancelled, or the run ends.
+        is placed (ORDER_PLACED) and joins the shared fill path: a market order
+        waits for the next bar's open (T+1); a resting order lives until triggered,
+        cancelled, or the run ends.
         """
         existing = self._orders.get(order.client_order_id)
         if existing is not None:
             return existing  # idempotent duplicate — already in the machine
+        rec = self._place(order)
+        if order.type is OrderType.MARKET:
+            self._pending_market.append(order)
+        else:
+            self._resting.append(order)
+        return rec
+
+    def _place(self, order: Order, **placed_extra: object) -> OrderRecord:
+        """Accept an order onto the machine: pending → placed, ORDER_PLACED emitted.
+
+        Placement only — the caller queues the order (``_submit`` for signals,
+        ``_materialize_usd_intents`` for USD orders it fills the same bar).
+        """
         rec = OrderRecord(
             client_order_id=order.client_order_id,
             market=order.market,
@@ -658,11 +917,7 @@ class BacktestEngine:
         )
         self._orders[order.client_order_id] = rec
         rec.transition(OrderStatus.PLACED)
-        self._emit_placed(order)
-        if order.type is OrderType.MARKET:
-            self._pending_market.append(order)
-        else:
-            self._resting.append(order)
+        self._emit_placed(order, **placed_extra)
         return rec
 
     def _reject(self, order: Order, *, reason: str) -> None:
@@ -826,18 +1081,19 @@ class BacktestEngine:
         self._coid += 1
         return f"coid-{self._coid}"
 
-    def _emit_placed(self, order: Order) -> None:
-        self._log.emit(
-            ORDER_PLACED,
-            {
-                "client_order_id": order.client_order_id,
-                "market": order.market,
-                "venue": order.venue,
-                "side": order.side,
-                "type": order.type,
-                "size": order.size,
-                "price": order.price,
-                "tif": order.tif,
-                "reduce_only": order.reduce_only,
-            },
-        )
+    def _emit_placed(self, order: Order, **extra: object) -> None:
+        """Emit ORDER_PLACED. ``extra`` carries USD-order provenance (size_usd +
+        sub-lot residual) so the tearsheet shows sizing was honest, never grown."""
+        payload = {
+            "client_order_id": order.client_order_id,
+            "market": order.market,
+            "venue": order.venue,
+            "side": order.side,
+            "type": order.type,
+            "size": order.size,
+            "price": order.price,
+            "tif": order.tif,
+            "reduce_only": order.reduce_only,
+        }
+        payload.update(extra)
+        self._log.emit(ORDER_PLACED, payload)

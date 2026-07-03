@@ -8,17 +8,20 @@ fill, funding, and liquidation primitives it composes.
 
 from __future__ import annotations
 
+from .context import AccountView, OpenInterestSnapshot
 from .loop import (
     BacktestEngine,
     EngineConfig,
     EngineContext,
     NoopStrategy,
+    SignalValidationError,
     Strategy,
 )
 from .money import ZERO, Money, money
 from .orders import OrderRecord, OrderStatus
 from .portfolio import BookState, fold
 from .state import Account, PortfolioState
+from .tearsheet import InvariantError, Tearsheet, build_tearsheet, check_invariants
 
 __all__ = [
     "BacktestEngine",
@@ -28,10 +31,17 @@ __all__ = [
     "NoopStrategy",
     "PortfolioState",
     "Account",
+    "AccountView",
+    "OpenInterestSnapshot",
     "OrderRecord",
     "OrderStatus",
+    "SignalValidationError",
     "BookState",
     "fold",
+    "Tearsheet",
+    "build_tearsheet",
+    "check_invariants",
+    "InvariantError",
     "Money",
     "money",
     "ZERO",
