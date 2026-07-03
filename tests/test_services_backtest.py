@@ -220,6 +220,27 @@ def test_unknown_template_is_a_validation_error():
     assert exc.value.code == "validation"
 
 
+def test_a_tick_strategy_on_the_legacy_bar_engine_is_a_validation_error():
+    # §19.1/§8.6: a tick-native strategy runs only on Nautilus's native L2 lane, so
+    # the front door rejects it with a structured error (naming the fix) before any
+    # engine dispatch, rather than letting the legacy bar loop mishandle it.
+    from flint.services.backtest import _require_nautilus_for_tick
+
+    class _TickAdapter:
+        lane = "tick"
+
+    class _BarAdapter:
+        lane = "bar"
+
+    with pytest.raises(ValidationError) as exc:
+        _require_nautilus_for_tick(_TickAdapter(), "legacy-bar")
+    assert exc.value.code == "validation"
+    assert "nautilus" in str(exc.value)
+    # A tick strategy on Nautilus, and any bar strategy anywhere, pass the guard.
+    _require_nautilus_for_tick(_TickAdapter(), "nautilus")
+    _require_nautilus_for_tick(_BarAdapter(), "legacy-bar")
+
+
 def test_tenant_isolation_holds():
     ud = InMemoryUserData()
     run_backtest(ALICE, _request(), user_data=ud, data=_data())

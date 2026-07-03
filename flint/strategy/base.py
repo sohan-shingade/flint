@@ -177,6 +177,31 @@ class _CtxProxy:
 _ALL_CLOSED = 1 << 62
 
 
+def _gate_executable(
+    signals: list[Signal],
+    default_venue: str,
+    now: int,
+    rejections: list[StrategyRejection],
+) -> list[Signal]:
+    """Return only signals whose venue is executable; append the rest to ``rejections``.
+
+    The single D28 executable-venue gate shared by the bar adapter
+    (:class:`EngineStrategy`), the ML adapter, and the tick adapter
+    (:class:`~flint.strategy.tick.TickEngineStrategy`). A signal with no explicit
+    venue defaults to ``default_venue`` (the bar's venue, or the tick event's venue);
+    a non-executable venue becomes a structured ``venue_not_executable`` rejection at
+    ``now`` rather than an order on the fill path (§19.1).
+    """
+    executable: list[Signal] = []
+    for sig in signals:
+        venue = sig.venue or default_venue
+        if venue not in EXECUTABLE_VENUES:
+            rejections.append(StrategyRejection.venue_not_executable(sig, now))
+            continue
+        executable.append(sig)
+    return executable
+
+
 class EngineStrategy:
     """Adapts a public :class:`Strategy` to the engine's ``on_candle(candle, ctx)`` seam.
 
@@ -211,18 +236,11 @@ class EngineStrategy:
         """Return only signals whose venue routes; record the rest (D28, §19.1).
 
         Shared by the plain adapter and :class:`~flint.strategy.ml.MLEngineStrategy`
-        so the one-venue-away executable gate has a single implementation.
+        so the one-venue-away executable gate has a single implementation. Delegates
+        to :func:`_gate_executable` (also the tick lane's gate) with the bar's venue
+        as the per-signal default.
         """
-        executable: list[Signal] = []
-        for sig in signals:
-            venue = sig.venue or candle.venue
-            if venue not in EXECUTABLE_VENUES:
-                self.rejections.append(
-                    StrategyRejection.venue_not_executable(sig, now)
-                )
-                continue
-            executable.append(sig)
-        return executable
+        return _gate_executable(signals, candle.venue, now, self.rejections)
 
     def drain_rejections(self) -> list[StrategyRejection]:
         """Return and clear the structured rejections recorded so far (§19.1)."""

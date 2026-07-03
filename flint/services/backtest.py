@@ -233,6 +233,26 @@ def validate_engine(name: str) -> str:
         ) from exc
 
 
+def _require_nautilus_for_tick(adapter: object, engine_name: str) -> None:
+    """Reject a tick-native strategy routed onto anything but Nautilus (§8.6/§19.1).
+
+    A :class:`~flint.strategy.tick.TickStrategy` runs *only* on the Nautilus core's
+    native L2 matching lane — the legacy bar loop has no tick tape, no L2 book, and
+    no ``process``-driven perp economics to give it. Rather than let it reach an
+    engine that would mishandle it (or raise a raw error deep in dispatch), the front
+    door rejects it with a structured :class:`ValidationError` naming the fix: select
+    ``engine="nautilus"`` (or ``"auto"`` once N9 flips the default). The guard reads
+    the adapter's ``lane`` marker, so it fires for both the raw and the wrapped forms.
+    """
+    if getattr(adapter, "lane", "bar") == "tick" and engine_name != "nautilus":
+        raise ValidationError(
+            f"a tick-native strategy requires engine='nautilus', not {engine_name!r}",
+            detail="tick strategies use native L2 matching, which only the Nautilus "
+            "core provides — the legacy bar loop cannot run them",
+            hint="pass engine='nautilus' (tick strategies never run on 'legacy-bar')",
+        )
+
+
 def _stamp_engine(
     summary: dict[str, Any], resolved: str, versions: Mapping[str, str] | None = None
 ) -> None:
@@ -324,6 +344,7 @@ def _execute(
         mark_policy="close_derived",
     )
     engine = engine_for(request.engine)()
+    _require_nautilus_for_tick(adapter, engine.name)
     with _timed(timing, "engine_run_ms"):
         engine.run(feed, adapter, event_log=log, spec=spec)
 

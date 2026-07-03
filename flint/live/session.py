@@ -49,6 +49,7 @@ from flint.strategy.base import EngineStrategy, StrategyRejection
 from flint.strategy.ml import MLEngineStrategy, MLStrategy
 from flint.strategy.model_store import ModelStore
 from flint.strategy.templates.registry import TemplateSpec, get_template
+from flint.strategy.tick import TickEngineStrategy, TickStrategy
 from flint.venues import HYPERLIQUID, VenueSpec
 
 from .alerts import (
@@ -75,8 +76,11 @@ def build_adapter(
     """Resolve a template to the engine adapter, per the runner contract (§8.4).
 
     A classic template → ``EngineStrategy``; an ML template (``spec.is_ml``) →
-    ``MLEngineStrategy`` with a tenant-scoped ``ModelStore`` and the run seed. The
-    optional ``model_backend`` lets a restart share one model store across runs.
+    ``MLEngineStrategy`` with a tenant-scoped ``ModelStore`` and the run seed; a
+    tick-native template (a :class:`TickStrategy` subclass) → ``TickEngineStrategy``,
+    whose ``lane == "tick"`` routes it onto the Nautilus core's native-matching lane
+    (§8.6) — services reject a tick strategy on any other engine (§19.1). The optional
+    ``model_backend`` lets a restart share one model store across runs.
     """
     spec = get_template(template) if isinstance(template, str) else template
     strat = spec.strategy_cls(**(overrides or {}))
@@ -84,6 +88,8 @@ def build_adapter(
         assert isinstance(strat, MLStrategy)
         store = ModelStore(tenant, strategy_id or spec.name, backend=model_backend)
         return MLEngineStrategy(strat, store, seed=seed)
+    if isinstance(strat, TickStrategy):
+        return TickEngineStrategy(strat)
     return EngineStrategy(strat)
 
 

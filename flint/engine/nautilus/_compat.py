@@ -42,7 +42,11 @@ from nautilus_trader.backtest.engine import (  # noqa: E402
     BacktestEngine,
     BacktestEngineConfig,
 )
-from nautilus_trader.backtest.models import FeeModel, FillModel  # noqa: E402
+from nautilus_trader.backtest.models import (  # noqa: E402
+    FeeModel,
+    FillModel,
+    MakerTakerFeeModel,
+)
 from nautilus_trader.backtest.modules import (  # noqa: E402
     SimulationModule,
     SimulationModuleConfig,
@@ -75,9 +79,13 @@ from nautilus_trader.model.data import (  # noqa: E402
     BarSpecification,
     BarType,
     BookOrder,
+    CustomData,
     DataType,
     IndexPriceUpdate,
     MarkPriceUpdate,
+    OrderBookDelta,
+    OrderBookDeltas,
+    QuoteTick,
     TradeTick,
 )
 
@@ -85,7 +93,11 @@ from nautilus_trader.model.data import (  # noqa: E402
 from nautilus_trader.model.book import OrderBook  # noqa: E402
 
 # --- model: events (order lifecycle the recorder translates) -----------------
-from nautilus_trader.model.events import OrderFilled  # noqa: E402
+from nautilus_trader.model.events import (  # noqa: E402
+    OrderCanceled,
+    OrderFilled,
+    OrderRejected,
+)
 
 # --- model: enums ------------------------------------------------------------
 from nautilus_trader.model.enums import (  # noqa: E402
@@ -93,6 +105,7 @@ from nautilus_trader.model.enums import (  # noqa: E402
     AggregationSource,
     AggressorSide,
     BarAggregation,
+    BookAction,
     BookType,
     LiquiditySide,
     OmsType,
@@ -119,6 +132,7 @@ __all__ = [
     "BacktestEngineConfig",
     "FeeModel",
     "FillModel",
+    "MakerTakerFeeModel",
     "SimulationModule",
     "SimulationModuleConfig",
     "DataEngineConfig",
@@ -136,16 +150,23 @@ __all__ = [
     "BarSpecification",
     "BarType",
     "BookOrder",
+    "CustomData",
     "DataType",
     "IndexPriceUpdate",
     "MarkPriceUpdate",
+    "OrderBookDelta",
+    "OrderBookDeltas",
+    "QuoteTick",
     "TradeTick",
     "OrderBook",
+    "OrderCanceled",
     "OrderFilled",
+    "OrderRejected",
     "AccountType",
     "AggregationSource",
     "AggressorSide",
     "BarAggregation",
+    "BookAction",
     "BookType",
     "LiquiditySide",
     "OmsType",

@@ -14,9 +14,11 @@ from flint.core.models import Candle, FundingRate, MarkSnapshot, OrderbookSnapsh
 from flint.engine.fills import TradePrint  # noqa: E402
 from flint.engine.nautilus import dataconv, timeconv  # noqa: E402
 from flint.engine.nautilus._compat import (  # noqa: E402
+    BookAction,
     IndexPriceUpdate,
     InstrumentId,
     MarkPriceUpdate,
+    OrderSide,
     Symbol,
     Venue,
 )
@@ -130,13 +132,35 @@ def test_final_funding_never_reaches_the_stream():
     assert dataconv.predicted_funding_to_data(fr, _iid()) is None
 
 
-# --- books (deferred) --------------------------------------------------------
+# --- books --------------------------------------------------------------------
 
 
-def test_orderbook_conversion_is_deferred_to_n8():
-    book = OrderbookSnapshot(market=MARKET, ts=T0, bids=(), asks=(), venue=VENUE)
-    with pytest.raises(NotImplementedError, match="N8"):
-        dataconv.orderbook_to_deltas(book, _iid())
+def test_orderbook_snapshot_becomes_clear_then_one_add_per_level():
+    # A recorded snapshot rebuilds the whole L2 book (N8): a CLEAR wipes prior state,
+    # then one best-first ADD per bid/ask level reconstructs it at the snapshot ts.
+    book = OrderbookSnapshot(
+        market=MARKET,
+        ts=T0,
+        bids=((99.9, 5.0), (99.8, 7.0)),
+        asks=((100.0, 3.0),),
+        venue=VENUE,
+    )
+    deltas = dataconv.orderbook_to_deltas(
+        book, _iid(), price_precision=2, size_precision=3
+    )
+    rows = deltas.deltas
+    assert rows[0].action == BookAction.CLEAR
+    assert [r.action for r in rows[1:]] == [BookAction.ADD] * 3
+    reconstructed = [
+        (r.order.side, float(r.order.price), float(r.order.size)) for r in rows[1:]
+    ]
+    assert reconstructed == [
+        (OrderSide.BUY, 99.9, 5.0),
+        (OrderSide.BUY, 99.8, 7.0),
+        (OrderSide.SELL, 100.0, 3.0),
+    ]
+    # Every row is stamped at the snapshot ts (unix-ms → ns) and shares the book's ts.
+    assert {r.ts_event for r in rows} == {T0 * 1_000_000}
 
 
 # --- instruments -------------------------------------------------------------

@@ -30,7 +30,14 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from flint.core.models import Candle, FundingRate, MarkSnapshot, OrderbookSnapshot
+from flint.core.models import (
+    BookDelta,
+    Candle,
+    FundingRate,
+    MarkSnapshot,
+    OrderbookSnapshot,
+    QuoteTick,
+)
 from flint.core.time import bar_start
 from flint.engine.fills import TradePrint
 from flint.venues import VenueSpec
@@ -44,12 +51,19 @@ from ._compat import (
     BarAggregation,
     BarSpecification,
     BarType,
+    BookAction,
+    BookOrder,
     CryptoPerpetual,
     Currency,
+    CustomData,
     Data,
+    DataType,
     IndexPriceUpdate,
     InstrumentId,
     MarkPriceUpdate,
+    OrderBookDelta,
+    OrderBookDeltas,
+    OrderSide,
     Price,
     PriceType,
     Quantity,
@@ -58,6 +72,7 @@ from ._compat import (
     TradeTick,
     Venue,
 )
+from ._compat import QuoteTick as NautilusQuoteTick
 
 # The synthetic client id under which Flint's custom (non-market-data) streams are
 # routed through the backtest data engine. Subscribers pass the same id.
@@ -144,6 +159,27 @@ def predicted_funding_to_data(
     )
 
 
+def predicted_funding_custom_data(
+    fr: FundingRate, instrument_id: InstrumentId
+) -> CustomData | None:
+    """Wrap a predicted :class:`FlintFundingRate` as Nautilus ``CustomData`` (§6.4).
+
+    A bare :class:`FlintFundingRate` cannot be added to the engine directly: because
+    it carries an ``instrument_id``, ``BacktestEngine.add_data`` treats it as
+    instrument-scoped market data and streams it *unwrapped*, so the data engine —
+    which routes generic data only when it arrives as ``CustomData`` — never
+    publishes it and no ``subscribe_data`` subscriber ever sees it. Wrapping it in
+    ``CustomData(DataType(FlintFundingRate), rate)`` restores the generic-data path:
+    the engine publishes it on ``data.FlintFundingRate.<venue>.<symbol>``, which the
+    host's ``subscribe_data(DataType(FlintFundingRate))`` matches. Returns ``None``
+    for non-predicted rows (they settle through the module, never the stream).
+    """
+    rate = predicted_funding_to_data(fr, instrument_id)
+    if rate is None:
+        return None
+    return CustomData(DataType(FlintFundingRate), rate)
+
+
 # --- bars --------------------------------------------------------------------
 
 
@@ -166,12 +202,23 @@ def resolution_to_bar_spec(resolution_s: int) -> BarSpecification:
     return BarSpecification(step, agg, PriceType.LAST)
 
 
-def bar_type_for(instrument_id: InstrumentId, resolution_s: int) -> BarType:
-    """The ``BarType`` for pre-aggregated (EXTERNAL) recorded candles at ``resolution_s``."""
+def bar_type_for(
+    instrument_id: InstrumentId,
+    resolution_s: int,
+    *,
+    aggregation_source: AggregationSource = AggregationSource.EXTERNAL,
+) -> BarType:
+    """The ``BarType`` at ``resolution_s`` for ``instrument_id``.
+
+    ``EXTERNAL`` (the default) names pre-aggregated recorded candles the bar lane
+    feeds directly. The tick lane's ``on_candle`` instead passes ``INTERNAL``, so
+    Nautilus aggregates the fed trade tape into bars itself — the aggregation the
+    ``test_nautilus_aggregator_parity`` gate pins equal to Flint's ``CandleAggregator``.
+    """
     return BarType(
         instrument_id,
         resolution_to_bar_spec(resolution_s),
-        AggregationSource.EXTERNAL,
+        aggregation_source,
     )
 
 
@@ -270,20 +317,119 @@ def trade_to_tick(
     )
 
 
-# --- books (deferred to N8) --------------------------------------------------
+# --- quotes (tick lane, N8) ---------------------------------------------------
 
 
-def orderbook_to_deltas(book: OrderbookSnapshot, instrument_id: InstrumentId):
-    """L2 book replay — deferred to N8 (the tick lane), stubbed to fail loudly.
-
-    Wiring ``OrderBookDeltas``/``Depth10`` and native L2 matching belongs with the
-    tick lane's book goldens (§A7/N8); adding it under the N2 skeleton would import
-    matching-fidelity risk the skeleton gate does not cover.
-    """
-    raise NotImplementedError(
-        "orderbook conversion (OrderBookDeltas/Depth10) arrives in N8, the tick "
-        "lane — the N2 skeleton runs the bar lane, which does not consume books"
+def quote_to_tick(
+    q: QuoteTick,
+    instrument_id: InstrumentId,
+    *,
+    price_precision: int,
+    size_precision: int,
+) -> NautilusQuoteTick:
+    """Convert a Flint :class:`~flint.core.models.QuoteTick` to a Nautilus quote."""
+    ns = timeconv.ms_to_ns(q.ts)
+    return NautilusQuoteTick(
+        instrument_id=instrument_id,
+        bid_price=_price(q.bid_price, price_precision),
+        ask_price=_price(q.ask_price, price_precision),
+        bid_size=_qty(q.bid_size, size_precision),
+        ask_size=_qty(q.ask_size, size_precision),
+        ts_event=ns,
+        ts_init=ns,
     )
+
+
+def tick_to_trade_print(tick: TradeTick) -> TradePrint:
+    """Recover a Flint :class:`TradePrint` from a Nautilus ``TradeTick`` (tick lane).
+
+    The reverse of :func:`trade_to_tick` for the ``on_trade`` handler: a strategy
+    reacts to Flint's own model (price/size/ms-ts), never a Nautilus object.
+    """
+    return TradePrint(
+        price=float(tick.price),
+        size=float(tick.size),
+        ts=timeconv.ns_to_ms(tick.ts_event),
+    )
+
+
+# --- books (L2 replay, tick lane, N8) ----------------------------------------
+
+_BOOK_SIDE = {"bid": OrderSide.BUY, "ask": OrderSide.SELL}
+
+
+def orderbook_to_deltas(
+    book: OrderbookSnapshot,
+    instrument_id: InstrumentId,
+    *,
+    price_precision: int,
+    size_precision: int,
+    seq_start: int = 0,
+) -> OrderBookDeltas:
+    """An ``OrderbookSnapshot`` → an initial-book ``OrderBookDeltas`` (CLEAR + levels).
+
+    A recorded snapshot rebuilds the whole book: a ``CLEAR`` wipes any prior state,
+    then one ``ADD`` per bid/ask level (best-first) reconstructs it. This seeds the
+    Nautilus matching book so a marketable order fills against real depth (§A7/N8).
+    """
+    ns = timeconv.ms_to_ns(book.ts)
+    deltas = [
+        OrderBookDelta(instrument_id, BookAction.CLEAR, None, 0, seq_start, ns, ns)
+    ]
+    seq = seq_start
+    for side, levels in (("bid", book.bids), ("ask", book.asks)):
+        for price, size in levels:
+            seq += 1
+            deltas.append(
+                OrderBookDelta(
+                    instrument_id,
+                    BookAction.ADD,
+                    BookOrder(
+                        _BOOK_SIDE[side],
+                        _price(price, price_precision),
+                        _qty(size, size_precision),
+                        seq,
+                    ),
+                    0,
+                    seq,
+                    ns,
+                    ns,
+                )
+            )
+    return OrderBookDeltas(instrument_id, deltas)
+
+
+def book_delta_to_delta(
+    bd: BookDelta,
+    instrument_id: InstrumentId,
+    *,
+    price_precision: int,
+    size_precision: int,
+) -> OrderBookDelta:
+    """Convert one Flint :class:`BookDelta` row to a Nautilus ``OrderBookDelta``.
+
+    A positive size ``UPDATE`` upserts the price level (works for a fresh level on
+    an L2_MBP book); ``size == 0`` is a Tardis delete → ``DELETE`` at that price
+    with a zero-size order. Snapshot rows are also ``UPDATE`` (the caller emits a
+    ``CLEAR`` at a resync boundary via :func:`book_delta_clear`).
+    """
+    ns = timeconv.ms_to_ns(bd.ts)
+    action = BookAction.DELETE if bd.is_delete else BookAction.UPDATE
+    order = BookOrder(
+        _BOOK_SIDE[bd.side],
+        _price(bd.price, price_precision),
+        _qty(bd.size, size_precision),
+        bd.seq,
+    )
+    return OrderBookDelta(instrument_id, action, order, 0, bd.seq, ns, ns)
+
+
+def book_delta_clear(
+    instrument_id: InstrumentId, ts_ms: int, seq: int
+) -> OrderBookDelta:
+    """A standalone ``CLEAR`` delta — emitted before a snapshot-resync group."""
+    ns = timeconv.ms_to_ns(ts_ms)
+    return OrderBookDelta(instrument_id, BookAction.CLEAR, None, 0, seq, ns, ns)
 
 
 # --- instruments -------------------------------------------------------------

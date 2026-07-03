@@ -26,6 +26,11 @@ from .ml import (
     MLStrategy,
     build_training_set,
 )
+from .tick import (
+    TickEngineStrategy,
+    TickStrategy,
+    overridden_handlers,
+)
 from .model_store import (
     ModelStore,
     ModelStoreError,
@@ -55,6 +60,10 @@ __all__ = [
     "MLContext",
     "FutureWindow",
     "build_training_set",
+    # tick-native surface (§8.6)
+    "TickStrategy",
+    "TickEngineStrategy",
+    "overridden_handlers",
     "ModelStore",
     "ModelStoreQuota",
     "ModelStoreError",

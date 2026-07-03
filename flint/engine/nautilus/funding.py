@@ -44,6 +44,7 @@ from flint.engine.funding.settlement import (
 )
 from flint.venues import VenueSpec
 
+from . import timeconv
 from ._compat import USDC, Money, SimulationModule, SimulationModuleConfig
 
 
@@ -58,6 +59,7 @@ class FlintFundingModule(SimulationModule):
         shadow,
         feed,
         venue_spec: VenueSpec,
+        lane: str = "bar",
     ) -> None:
         super().__init__(config)
         # SimulationModule derives from the Cython ``Actor``/``Component`` base, which
@@ -65,6 +67,9 @@ class FlintFundingModule(SimulationModule):
         self._flint_recorder = recorder
         self._flint_shadow = shadow
         self._flint_spec = venue_spec
+        # The lane decides who drives settlement: ``"bar"`` = shim-driven (settle_bar,
+        # a per-bar no-op process); ``"tick"`` = process-driven (settle_bar unused).
+        self._flint_lane = lane
         # Final-rate series per market (predicted rows are strategy data, never
         # settled here — §6.4). Sorted by ts so a wide bar settles in ts order.
         self._flint_final: dict[str, list[FundingRate]] = {
@@ -76,6 +81,10 @@ class FlintFundingModule(SimulationModule):
         # Mark/oracle series per market — the settlement price basis (§6.4). Read
         # only; the shim owns the bar-close mark carried to the recorder for equity.
         self._flint_marks: dict[str, list[MarkSnapshot]] = feed.marks
+        # Tick-lane settlement cursor: how many of each market's ts-sorted final rows
+        # ``process`` has already settled, so a later ``process(ts_now)`` settles only
+        # the newly-due rows exactly once, in ts order (bar lane leaves this unused).
+        self._flint_cursor: dict[str, int] = {m: 0 for m in self._flint_final}
 
     # -- bar-lane driver (shim-called, step (3) of the per-bar sequence) --------
 
@@ -101,14 +110,30 @@ class FlintFundingModule(SimulationModule):
     # -- tick-lane driver (deferred to N8) -------------------------------------
 
     def process(self, ts_now: int) -> None:
-        """No-op in the bar lane — the shim drives settlement (see module docstring).
+        """Tick-lane driver — settle every final row now due (``ts <= ts_now``), in ts order.
 
-        The tick lane (N8) will settle unsettled final rows with ``ts <= ts_now``
-        here, in the exchange step, before the liquidation module's ``process`` in the
-        same timestep (registration order). The bar lane cannot use this hook: it runs
-        after the shim's per-bar EQUITY snapshot for the same timestep, which would lag
-        ``accrued_funding`` by one bar.
+        A **no-op in the bar lane** (the shim drives settlement via :meth:`settle_bar`
+        so it lands before the bar's EQUITY snapshot; running here would settle *after*
+        that snapshot and lag ``accrued_funding`` by a bar). In the **tick lane** this
+        runs in the exchange step, **before** the liquidation module's ``process`` in
+        the same timestep (registration order: funding registered first), preserving
+        §6.1's funding-saves-position ordering. ``ts_now`` is Nautilus's exchange clock
+        in **nanoseconds**; it is converted to unix-ms to compare against the rows'
+        ms timestamps. Nautilus calls ``process`` several times per step, so the
+        per-market cursor is what makes each settlement land exactly once, at its own
+        rate/price/interval (never one lumped payment, §6.4).
         """
+        if self._flint_lane != "tick":
+            return
+        ts_now_ms = timeconv.ns_to_ms(ts_now)
+        for market, rows in self._flint_final.items():
+            marks = self._flint_marks.get(market, [])
+            cursor = self._flint_cursor[market]
+            while cursor < len(rows) and rows[cursor].ts <= ts_now_ms:
+                rate = rows[cursor]
+                self._settle_one(rate, rate.venue, market, marks)
+                cursor += 1
+            self._flint_cursor[market] = cursor
 
     def log_diagnostics(self, logger) -> None:  # pragma: no cover - diagnostics only
         """Abstract on ``SimulationModule``; Flint routes settlement to the EventLog."""
@@ -151,12 +176,14 @@ class FlintFundingModule(SimulationModule):
 
 
 def build_funding_module(
-    *, recorder, shadow, feed, venue_spec: VenueSpec
+    *, recorder, shadow, feed, venue_spec: VenueSpec, lane: str = "bar"
 ) -> FlintFundingModule | None:
     """Construct the module iff the feed carries at least one final funding row.
 
     A candle-only feed with no final rows needs no settlement module — returning
     ``None`` keeps the module list empty and the assembly unchanged for that case.
+    ``lane`` decides the driver: ``"bar"`` (shim-driven) or ``"tick"``
+    (``process``-driven, §6.4).
     """
     has_final = any(
         r.rate_type == "final" for rows in feed.funding.values() for r in rows
@@ -169,6 +196,7 @@ def build_funding_module(
         shadow=shadow,
         feed=feed,
         venue_spec=venue_spec,
+        lane=lane,
     )
 
 

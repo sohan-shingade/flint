@@ -429,6 +429,14 @@ def _run_source_in_sandbox(
     from flint.engine.select import resolve_engine_name
 
     resolved_engine = resolve_engine_name(request.engine)
+    if resolved_engine != "nautilus" and _declares_tick_strategy(source):
+        raise ValidationError(
+            f"a tick-native strategy requires engine='nautilus', not "
+            f"{resolved_engine!r}",
+            detail="tick strategies use native L2 matching, which only the Nautilus "
+            "core provides — the legacy bar loop cannot run them",
+            hint="pass engine='nautilus' (tick strategies never run on 'legacy-bar')",
+        )
     with _timed(timing, "engine_run_ms"):
         sandboxed = run_backtest_in_sandbox(
             source,
@@ -508,6 +516,31 @@ def _base_names_strategy(base: ast.expr) -> bool:
     if isinstance(base, ast.Attribute):
         return base.attr.endswith("Strategy")
     return False
+
+
+def _base_names_tick_strategy(base: ast.expr) -> bool:
+    if isinstance(base, ast.Name):
+        return base.id == "TickStrategy"
+    if isinstance(base, ast.Attribute):
+        return base.attr == "TickStrategy"
+    return False
+
+
+def _declares_tick_strategy(source: str) -> bool:
+    """Whether ``source`` declares a ``TickStrategy`` subclass (§8.6 tick-native).
+
+    A tick-native user strategy runs only on the Nautilus core's native L2 lane, so
+    the front door must reject it on any other engine (§19.1) before spawning the
+    sandbox child. Detection is by base name (``class X(TickStrategy)``), matching how
+    :func:`_strategy_class_name` recognizes a bar ``Strategy`` — the sandbox screen
+    already parses the same tree, so this adds no import of user code.
+    """
+    tree = ast.parse(source)
+    return any(
+        isinstance(node, ast.ClassDef)
+        and any(_base_names_tick_strategy(base) for base in node.bases)
+        for node in tree.body
+    )
 
 
 def _violation(v: Any) -> dict[str, Any]:

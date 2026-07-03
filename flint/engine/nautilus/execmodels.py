@@ -36,6 +36,7 @@ from ._compat import (
     BookType,
     FeeModel,
     FillModel,
+    MakerTakerFeeModel,
     Money,
     OrderBook,
     OrderSide,
@@ -111,10 +112,36 @@ class FlintTagFeeModel(FeeModel):
         return Money(fee, USDC)
 
 
+class TickFeeModel(FeeModel):
+    """The tick lane's fee model: native maker/taker, zero for liquidation closes (§A7/N8).
+
+    Native tick fills (untagged) are charged Nautilus's own maker/taker commission
+    from the instrument's fee rates (delegated to :class:`MakerTakerFeeModel`), which
+    the recorder then reads off the ``OrderFilled`` event so both books charge the
+    same fee to the cent. The only *tagged* order the tick lane submits is the §6.5
+    liquidation flatten, pinned to entry with ``fee=0`` so ``adjust_account`` stays
+    the sole money mover — that tag's fee (``0``) is honored verbatim, and the
+    instrument's maker/taker is left unused for it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._flint_maker_taker = MakerTakerFeeModel()
+
+    def get_commission(self, order, fill_qty, fill_px, instrument):
+        payload = decode_fill_tag(order)
+        if payload is not None:  # a Flint-tagged order (the liquidation flatten)
+            return Money(float(payload["fee"]), USDC)
+        return self._flint_maker_taker.get_commission(
+            order, fill_qty, fill_px, instrument
+        )
+
+
 __all__ = [
     "FLINT_FILL_TAG",
     "encode_fill_tag",
     "decode_fill_tag",
     "FlintPriceFillModel",
     "FlintTagFeeModel",
+    "TickFeeModel",
 ]

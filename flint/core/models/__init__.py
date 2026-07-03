@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from .enums import OrderType, Side, TimeInForce
 from .market import (
+    BookDelta,
     BorrowSnapshot,
     Candle,
     FundingRate,
     MarkSnapshot,
     OrderbookSnapshot,
+    QuoteTick,
 )
 from .signal import Signal
 from .trading import Fill, Order, Position
@@ -21,6 +23,8 @@ __all__ = [
     "MarkSnapshot",
     "FundingRate",
     "OrderbookSnapshot",
+    "QuoteTick",
+    "BookDelta",
     "BorrowSnapshot",
     "Order",
     "Fill",

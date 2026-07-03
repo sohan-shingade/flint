@@ -61,6 +61,7 @@ from flint.engine.money import money
 from flint.engine.state import PortfolioState
 from flint.venues import VenueSpec
 
+from . import timeconv
 from ._compat import USDC, Money, SimulationModule, SimulationModuleConfig
 
 
@@ -91,6 +92,7 @@ class FlintLiquidationModule(SimulationModule):
         recorder,
         shadow: PortfolioState,
         venue_spec: VenueSpec,
+        lane: str = "bar",
     ) -> None:
         super().__init__(config)
         # SimulationModule derives from the Cython ``Actor``/``Component`` base, which
@@ -98,6 +100,25 @@ class FlintLiquidationModule(SimulationModule):
         self._flint_recorder = recorder
         self._flint_shadow = shadow
         self._flint_spec = venue_spec
+        # The lane decides who drives the check: ``"bar"`` = shim-driven (check_bar, a
+        # no-op process); ``"tick"`` = process-driven, flattening through the host's
+        # close callback (the tick lane has no shim to submit the Nautilus close).
+        self._flint_lane = lane
+        # The tick-lane forced-close callback: the host's ``flatten(close)``, which
+        # submits the entry-priced reduce-only Nautilus order (set after the host is
+        # built — see the engine's tick-lane assembly). Unused in the bar lane.
+        self._flint_close_fn = None
+
+    def set_close_fn(self, close_fn) -> None:
+        """Wire the tick-lane forced-close callback (the host's ``flatten``).
+
+        Called by the engine once the host strategy exists, since the module is built
+        before it (the venue needs the module in its ``modules`` list at ``add_venue``
+        time). A no-op forced close (no callback) would leave the Nautilus position
+        open after a shadow-book liquidation and break run-end reconciliation, so the
+        tick-lane assembly always sets this.
+        """
+        self._flint_close_fn = close_fn
 
     # -- bar-lane driver (shim-called, step (4) of the per-bar sequence) --------
 
@@ -158,14 +179,59 @@ class FlintLiquidationModule(SimulationModule):
     # -- tick-lane driver (deferred to N8) -------------------------------------
 
     def process(self, ts_now: int) -> None:
-        """No-op in the bar lane — the shim drives the check (see module docstring).
+        """Tick-lane driver — check + apply §6.5 liquidation on the recorded marks.
 
-        The tick lane (N8) will drive the same §6.5 check here, in the exchange step,
-        after the funding module's ``process`` in the same timestep (registration
-        order: funding registered before liquidation). It will need its own Nautilus
-        forced-close path, since the bar-lane flatten is submitted by the shim, which
-        the tick lane does not have — the trap N8 must close.
+        A **no-op in the bar lane** (the shim drives the check via :meth:`check_bar`).
+        In the **tick lane** this runs in the exchange step, **after** the funding
+        module's ``process`` in the same timestep (registration order preserves §6.1's
+        funding-saves-position ordering). Each open position is valued at its latest
+        recorded mark (the recorder keeps ``_flint_last_mark`` fresh off the
+        ``MarkPriceUpdate`` stream) with ``ambiguous=False`` — a tick mark is an exact
+        observation, not a bar's adverse-extreme guess. The pure planner
+        (:func:`plan_liquidations`) then decides; each decision credits the shadow book
+        + emits LIQUIDATION (recorder), mirrors the Decimal onto the Nautilus account
+        (``adjust_account``), and flattens the Nautilus position through the host's
+        forced-close callback (the bar lane's shim-submit has no analogue here).
+        ``ts_now`` is Nautilus's ns exchange clock; it is converted to unix-ms for the
+        event ts. Nautilus calls ``process`` several times per step, but each applied
+        liquidation drops its position, so a re-entry finds nothing to do.
         """
+        if self._flint_lane != "tick":
+            return
+        positions = self._flint_shadow.positions
+        if not positions:
+            return
+        ts_ms = timeconv.ns_to_ms(ts_now)
+        carried = self._flint_recorder.carried_marks()
+        # One planner pass per venue holding an open position (v1 is single-venue, but
+        # the pool math is venue-scoped, so this stays correct for a future second one).
+        for venue in {key[0] for key in positions}:
+            marks: dict[tuple[str, str], tuple[float, bool]] = {
+                key: (carried[key], False)
+                for key in positions
+                if key[0] == venue and key in carried
+            }
+            decisions = plan_liquidations(
+                positions,
+                self._flint_shadow.account(venue).cash,
+                marks,
+                self._flint_spec,
+                venue,
+                ts_ms,
+            )
+            for decision in decisions:
+                pos = positions[decision.key]  # capture before the recorder drops it
+                close = LiquidationClose(
+                    market=pos.market,
+                    venue=pos.venue,
+                    side=pos.side,
+                    size=pos.size,
+                    price=pos.entry_price,
+                )
+                self._flint_recorder.record_liquidation(decision)
+                self.exchange.adjust_account(Money(money(decision.realized), USDC))
+                if self._flint_close_fn is not None:
+                    self._flint_close_fn(close)
 
     def log_diagnostics(self, logger) -> None:  # pragma: no cover - diagnostics only
         """Abstract on ``SimulationModule``; Flint routes liquidations to the EventLog."""
@@ -175,19 +241,22 @@ class FlintLiquidationModule(SimulationModule):
 
 
 def build_liquidation_module(
-    *, recorder, shadow: PortfolioState, venue_spec: VenueSpec
+    *, recorder, shadow: PortfolioState, venue_spec: VenueSpec, lane: str = "bar"
 ) -> FlintLiquidationModule:
     """Construct the liquidation module (always — any open position can liquidate).
 
     Unlike funding (which needs a final row to have anything to settle), liquidation
     is unconditional: a candle-only feed with an open position can still breach
-    maintenance, so the module is always registered — after funding.
+    maintenance, so the module is always registered — after funding. ``lane`` decides
+    the driver: ``"bar"`` (shim-driven ``check_bar``) or ``"tick"`` (``process``-driven,
+    flattening through the host callback wired by :meth:`set_close_fn`).
     """
     return FlintLiquidationModule(
         SimulationModuleConfig(),
         recorder=recorder,
         shadow=shadow,
         venue_spec=venue_spec,
+        lane=lane,
     )
 
 

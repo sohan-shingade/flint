@@ -88,6 +88,64 @@ class OrderbookSnapshot:
 
 
 @dataclass(frozen=True)
+class QuoteTick:
+    """One top-of-book quote — the tick lane's ``on_quote`` datum (§8.6, §9).
+
+    ``ts`` is when the quote was observed (unix ms). Prices/sizes are floats (§5);
+    accumulating quantities never live here. Mirrors ``QUOTES_SCHEMA`` (D1) as an
+    in-memory model the engine consumes — no aggressor, just the best bid/ask.
+    """
+
+    market: str
+    ts: int
+    bid_price: float
+    ask_price: float
+    bid_size: float
+    ask_size: float
+    venue: str
+
+    @property
+    def mid(self) -> float:
+        """The bid/ask midpoint (0.0 if a side is missing — never invented)."""
+        if self.bid_price <= 0 or self.ask_price <= 0:
+            return 0.0
+        return (self.bid_price + self.ask_price) / 2.0
+
+    @property
+    def spread_bps(self) -> float:
+        """The bid/ask spread in basis points of the mid (0.0 if unquotable)."""
+        mid = self.mid
+        if mid <= 0:
+            return 0.0
+        return (self.ask_price - self.bid_price) / mid * 10_000
+
+
+@dataclass(frozen=True)
+class BookDelta:
+    """One L2 incremental book update — the tick lane's ``on_book`` datum (§8.6, §9).
+
+    A flat row matching ``BOOK_DELTA_SCHEMA`` (D1): ``side`` is ``"bid"`` or
+    ``"ask"``, ``price``/``size`` are floats, and ``size == 0`` means *delete the
+    level* (Tardis incremental_book_L2 convention). ``is_snapshot`` marks the rows
+    that (re)build the whole book after a (re)connect; ``seq`` is the capture-order
+    tie-break (§19.4 total ordering). ``ts`` is the exchange event time (unix ms).
+    """
+
+    market: str
+    ts: int
+    seq: int
+    side: str  # "bid" | "ask"
+    price: float
+    size: float  # 0 = delete the level
+    is_snapshot: bool
+    venue: str
+
+    @property
+    def is_delete(self) -> bool:
+        return self.size == 0
+
+
+@dataclass(frozen=True)
 class BorrowSnapshot:
     """Jupiter/GMX carrying cost — NOT a funding analog (§5, §6.3).
 

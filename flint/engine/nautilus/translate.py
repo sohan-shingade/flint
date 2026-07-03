@@ -28,6 +28,7 @@ have drifted.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 from flint.core.models import Side
@@ -48,7 +49,15 @@ from flint.engine.portfolio.events import (
 from flint.engine.state import PortfolioState
 from flint.engine.tearsheet import InvariantError
 
-from ._compat import Actor, OrderFilled
+from . import timeconv
+from ._compat import (
+    Actor,
+    LiquiditySide,
+    OrderCanceled,
+    OrderFilled,
+    OrderRejected,
+    OrderSide,
+)
 from .execmodels import decode_fill_tag
 
 # §19.4 run-end reconciliation tolerances. Cash is Decimal and matches to the cent;
@@ -58,6 +67,22 @@ from .execmodels import decode_fill_tag
 CASH_TOLERANCE = Decimal("0.01")
 ENTRY_TOLERANCE = 1e-6
 SIZE_TOLERANCE = 1e-9
+
+# The Nautilus buy side, resolved once (a native BUY fill is a Flint LONG, §A6).
+_BUY = OrderSide.BUY
+
+
+def _native_slippage_bps(side: Side, price: float, submit_mid: float) -> float:
+    """Adverse slippage of a native fill vs the submit-time mid, in bps (0 if unknown).
+
+    Positive = worse than the mid a trader saw when the order was sent: a LONG paying
+    above the mid, a SHORT selling below it. ``0.0`` when the mid is unknown (no book
+    or quote at submit time) — never an invented number (D26).
+    """
+    if submit_mid <= 0:
+        return 0.0
+    signed = (price - submit_mid) if side is Side.LONG else (submit_mid - price)
+    return signed / submit_mid * 10_000
 
 
 class FlintRecorder(Actor):
@@ -69,6 +94,8 @@ class FlintRecorder(Actor):
         event_log,
         shadow: PortfolioState,
         engine_name: str,
+        equity_interval_s: int | None = None,
+        mark_keys: dict | None = None,
     ) -> None:
         super().__init__()
         # Attributes are ``_flint_``-prefixed: the Nautilus ``Component`` base
@@ -83,14 +110,43 @@ class FlintRecorder(Actor):
         # the shim carries it forward each bar (the legacy loop does so in the
         # liquidation step, which is a SimulationModule here — N5).
         self._flint_last_mark: dict[tuple[str, str], float] = {}
+        # Tick-lane EQUITY cadence: a fixed interval (default 60 s) sampled off a
+        # Nautilus clock timer, since Nautilus's AccountState is not per-bar (§6.0,
+        # §A6). ``None`` in the bar lane, where the shim drives per-bar equity.
+        self._flint_equity_interval_s = equity_interval_s
+        # Tick-lane native-fill metadata, keyed by the Nautilus client-order-id the
+        # host submitted. A native L2 fill carries no Flint tag, so the host notes the
+        # Flint coid + venue/market/margin_mode + submit-mid here at submit time, and
+        # the recorder reads it back when the ``OrderFilled`` arrives (§A6/N8).
+        self._flint_native_meta: dict[str, dict] = {}
+        # Tick-lane mark subscriptions: Nautilus ``InstrumentId`` → Flint (venue,
+        # market) key. In the bar lane the shim writes ``_flint_last_mark`` per bar via
+        # ``set_mark``; the tick lane instead keeps it fresh off the ``MarkPriceUpdate``
+        # stream (``on_mark_price``), so equity valuation and the liquidation module's
+        # ``process`` read the latest recorded mark. Empty in the bar lane.
+        self._flint_mark_keys: dict = mark_keys or {}
 
     # -- run lifecycle ---------------------------------------------------------
 
     def on_start(self) -> None:
         self._flint_log.emit(RUN_STARTED, {"engine": self._flint_engine_name})
-        # Listen for Nautilus order events; only OrderFilled is translated (bar-lane
-        # rejects/cancels are Flint-level and arrive via the shim's direct calls).
+        # Listen for Nautilus order events: OrderFilled is translated (bar-lane fills
+        # are tagged, tick-lane fills fall through to the native path); tick-lane IOC
+        # remainder cancels and native rejects also arrive here. Bar-lane rejects/
+        # cancels are Flint-level and come via the shim's direct calls, not the bus.
         self.msgbus.subscribe(topic="events.order.*", handler=self._on_order_event)
+        # Tick lane: sample EQUITY on a fixed-interval clock timer (§6.0).
+        if self._flint_equity_interval_s is not None:
+            self.clock.set_timer(
+                name="flint_equity",
+                interval=timedelta(seconds=self._flint_equity_interval_s),
+                callback=self._on_equity_timer,
+            )
+        # Tick lane: keep the carried marks fresh off the mark-price stream, so the
+        # liquidation module's ``process`` and equity valuation read the latest mark
+        # (the bar lane writes these via the shim's per-bar ``set_mark`` instead).
+        for iid in self._flint_mark_keys:
+            self.subscribe_mark_prices(iid)
 
     def emit_run_finished(self) -> None:
         """Emit RUN_FINISHED — called by the engine after run-end order cancels."""
@@ -140,7 +196,13 @@ class FlintRecorder(Actor):
         if rec is None or rec.is_terminal:
             return
         rec.transition(OrderStatus.REJECTED, reason=reason)
-        self._emit_order_terminal(ORDER_REJECTED, order, reason)
+        self._emit_order_terminal(
+            ORDER_REJECTED,
+            client_order_id=order.client_order_id,
+            market=order.market,
+            venue=order.venue,
+            reason=reason,
+        )
 
     def record_cancelled(self, order, *, reason: str) -> None:
         """Carry ``order`` to the terminal ``cancelled`` state and emit (§6.2)."""
@@ -148,15 +210,23 @@ class FlintRecorder(Actor):
         if rec is None or rec.is_terminal:
             return
         rec.transition(OrderStatus.CANCELLED, reason=reason)
-        self._emit_order_terminal(ORDER_CANCELLED, order, reason)
+        self._emit_order_terminal(
+            ORDER_CANCELLED,
+            client_order_id=order.client_order_id,
+            market=order.market,
+            venue=order.venue,
+            reason=reason,
+        )
 
-    def _emit_order_terminal(self, kind: str, order, reason: str) -> None:
+    def _emit_order_terminal(
+        self, kind: str, *, client_order_id: str, market: str, venue: str, reason: str
+    ) -> None:
         self._flint_log.emit(
             kind,
             {
-                "client_order_id": order.client_order_id,
-                "market": order.market,
-                "venue": order.venue,
+                "client_order_id": client_order_id,
+                "market": market,
+                "venue": venue,
                 "reason": reason,
             },
         )
@@ -172,16 +242,25 @@ class FlintRecorder(Actor):
         and the FILL payload carries Flint's exact numbers (from the order tag) plus
         the computed realized PnL. Non-fill order events (submitted/accepted) are
         ignored — the shim already emitted ORDER_PLACED at route time.
+
+        Tick lane (N8): an ``OrderFilled`` with no Flint tag is a native L2 fill —
+        the recorder reads the fill facts off the event itself (:meth:`_on_native_fill`);
+        an ``OrderCanceled`` is the IOC remainder cancel, and an ``OrderRejected`` a
+        native pre-trade rejection, both routed to the state machine here.
         """
+        if isinstance(event, OrderCanceled):
+            self._on_native_cancel(event)
+            return
+        if isinstance(event, OrderRejected):
+            self._on_native_reject(event)
+            return
         if not isinstance(event, OrderFilled):
             return
         order = self.cache.order(event.client_order_id)
         p = decode_fill_tag(order)
-        if p is None:  # tick-lane native fill (no Flint tag) — N8
-            raise InvariantError(
-                "OrderFilled without a Flint fill tag — native tick-lane fills "
-                "arrive in N8; the bar lane always tags its fills"
-            )
+        if p is None:  # tick-lane native L2 fill (no Flint tag) — N8
+            self._on_native_fill(event)
+            return
         if p.get("liquidation_close"):
             # A §6.5 forced-close flatten (liquidation.py): Nautilus closes its own
             # position off this entry-priced fill, but the shadow book and the
@@ -230,6 +309,178 @@ class FlintRecorder(Actor):
             ts=p["ts"],
             event_version=2,
         )
+
+    # -- tick-lane native fills / cancels / rejects (N8) -----------------------
+
+    def note_native_order(
+        self,
+        naut_coid: str,
+        *,
+        flint_coid: str,
+        venue: str,
+        market: str,
+        margin_mode: str,
+        submit_mid: float,
+    ) -> None:
+        """Record the metadata a native L2 fill needs but the event doesn't carry (N8).
+
+        A tick-lane order is matched by Nautilus's own book, so its ``OrderFilled``
+        carries no Flint tag. The host notes the Flint coid, the position's margin
+        mode, and the submit-time mid (for slippage) here at submit time, keyed by
+        the Nautilus client-order-id, so :meth:`_on_native_fill` can fold and
+        attribute the fill. The recorder stays the single writer — this only stashes
+        lookup data, it emits nothing.
+        """
+        self._flint_native_meta[naut_coid] = {
+            "flint_coid": flint_coid,
+            "venue": venue,
+            "market": market,
+            "margin_mode": margin_mode,
+            "submit_mid": submit_mid,
+        }
+
+    def _on_native_fill(self, event) -> None:
+        """Fold a native L2 fill and emit FILL v2 from the event's own numbers (§A6/N8).
+
+        The tick lane's fills come from Nautilus's book, not Flint's fill models, so
+        the price/size/side/fee are read off the ``OrderFilled`` event (the fee is
+        exactly the ``TickFeeModel`` commission, so both books charge the same to the
+        cent). Fidelity is ``native-l2``; slippage is the fill vs the submit-time mid
+        when that is known; there are no Tier-C path flags. The shadow book folds
+        through the same ``apply_fill_delta`` reducer the bar lane and ``replay.fold``
+        use, so the single-writer guarantee and the run-end reconciliation hold.
+        """
+        meta = self._flint_native_meta.get(str(event.client_order_id))
+        if meta is None:  # a fill with neither a Flint tag nor native metadata
+            raise InvariantError(
+                f"native OrderFilled {event.client_order_id} has no Flint metadata — "
+                "every tick-lane order is noted at submit time (note_native_order)"
+            )
+        venue = meta["venue"]
+        market = meta["market"]
+        margin_mode = meta["margin_mode"]
+        side = Side.LONG if event.order_side == _BUY else Side.SHORT
+        price = float(event.last_px)
+        size = float(event.last_qty)
+        fee = float(event.commission.as_double())
+        acct = self._flint_shadow.account(venue)
+        acct.cash -= money(fee)
+        acct.fees_paid += money(fee)
+        realized = apply_fill_delta(
+            self._flint_shadow.positions,
+            (venue, market),
+            side=side,
+            size=size,
+            price=price,
+            margin_mode=margin_mode,
+        )
+        if realized:
+            acct.credit(money(realized))
+            acct.realized_pnl += money(realized)
+        rec = self._flint_orders.get(meta["flint_coid"])
+        is_partial = False
+        if rec is not None and not rec.is_terminal:
+            rec.apply_fill(size)
+            is_partial = rec.status is OrderStatus.PARTIAL
+        liquidity = "maker" if event.liquidity_side == LiquiditySide.MAKER else "taker"
+        self._flint_log.emit(
+            FILL,
+            {
+                "client_order_id": meta["flint_coid"],
+                "market": market,
+                "venue": venue,
+                "side": side,
+                "price": price,
+                "size": size,
+                "fee": fee,
+                "liquidity": liquidity,
+                "fidelity_tier": "native-l2",
+                "slippage_bps": _native_slippage_bps(side, price, meta["submit_mid"]),
+                "is_partial": is_partial,
+                "margin_mode": margin_mode,
+                "realized_pnl": str(money(realized)),
+                "intrabar_ambiguous": False,
+                "flags": [],
+            },
+            ts=timeconv.ns_to_ms(event.ts_event),
+            event_version=2,
+        )
+
+    def _on_native_cancel(self, event) -> None:
+        """A tick-lane IOC remainder cancel → ORDER_CANCELLED (§6.2/N8).
+
+        Only a tick-lane strategy order (present in the native metadata) is handled;
+        a bar-lane fill or a liquidation-close flatten — which Nautilus may also
+        cancel/complete — has no metadata and is ignored, so the bar lane is unaffected.
+        """
+        meta = self._flint_native_meta.get(str(event.client_order_id))
+        if meta is None:
+            return
+        rec = self._flint_orders.get(meta["flint_coid"])
+        if rec is None or rec.is_terminal:
+            return
+        rec.transition(OrderStatus.CANCELLED, reason="ioc_remainder")
+        self._emit_order_terminal(
+            ORDER_CANCELLED,
+            client_order_id=meta["flint_coid"],
+            market=meta["market"],
+            venue=meta["venue"],
+            reason="ioc_remainder",
+        )
+
+    def _on_native_reject(self, event) -> None:
+        """A tick-lane native pre-trade rejection → ORDER_REJECTED (§6.2/N8)."""
+        meta = self._flint_native_meta.get(str(event.client_order_id))
+        if meta is None:
+            return
+        rec = self._flint_orders.get(meta["flint_coid"])
+        if rec is None or rec.is_terminal:
+            return
+        reason = getattr(event, "reason", "") or "rejected"
+        rec.transition(OrderStatus.REJECTED, reason=reason)
+        self._emit_order_terminal(
+            ORDER_REJECTED,
+            client_order_id=meta["flint_coid"],
+            market=meta["market"],
+            venue=meta["venue"],
+            reason=reason,
+        )
+
+    def _on_equity_timer(self, event) -> None:
+        """Fixed-interval EQUITY sample (tick lane) — valued on the latest marks."""
+        self.emit_equity(timeconv.ns_to_ms(event.ts_event))
+
+    def on_mark_price(self, update) -> None:
+        """Carry the latest tick-lane mark for its (venue, market) key (§6.0/§6.5).
+
+        The tick-lane analogue of the bar shim's ``set_mark``: a ``MarkPriceUpdate``
+        refreshes ``_flint_last_mark`` so the liquidation module's ``process`` (same
+        timestep) and the interval EQUITY sample value positions on the most recent
+        real mark — never a synthesized one (D26). Only subscribed instruments arrive.
+        """
+        key = self._flint_mark_keys.get(update.instrument_id)
+        if key is not None:
+            self._flint_last_mark[key] = float(update.value)
+
+    def finalize_native(self) -> None:
+        """Cancel every still-working tick-lane order at run end (mirrors §6.2).
+
+        Driven by the engine after ``engine.run()`` so no order is left working when
+        ``check_invariants`` folds the log — the tick-lane analogue of the bar-lane
+        shim's ``finalize_run``. A native order Nautilus already cancelled/filled is
+        terminal and skipped.
+        """
+        for coid, rec in list(self._flint_orders.items()):
+            if rec.is_terminal:
+                continue
+            rec.transition(OrderStatus.CANCELLED, reason="run_ended")
+            self._emit_order_terminal(
+                ORDER_CANCELLED,
+                client_order_id=coid,
+                market=rec.market,
+                venue=rec.venue,
+                reason="run_ended",
+            )
 
     # -- funding settlement (FlintFundingModule-driven, §6.4) ------------------
 
