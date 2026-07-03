@@ -74,13 +74,14 @@ def engine_for(name: str) -> type:
     if name in ("auto", "legacy-bar"):
         return LegacyBarEngine
     if name == "nautilus":
-        # N2 fills this in with a lazy ``from .nautilus import NautilusEngine``;
-        # until then, selecting it is a clear, structured failure — never a silent
-        # fallback to the legacy engine.
-        raise UnknownEngineError(
-            "engine 'nautilus' is not built yet — it arrives in N2 of the D29 "
-            "tick-driven migration; use 'legacy-bar' (or 'auto') for now"
-        )
+        # Lazy import: the 156 MB wheel / ~5 s cold start is paid only when the
+        # Nautilus engine is actually selected. Importing here (never at module
+        # load) is what keeps ``flint/engine`` Nautilus-free for candle-only users.
+        # A missing/mispinned extra surfaces as an actionable ImportError from
+        # ``_compat`` rather than a silent fallback to the legacy engine.
+        from .nautilus import NautilusEngine
+
+        return NautilusEngine
     raise UnknownEngineError(
         f"unknown engine {name!r} — expected one of 'auto', 'legacy-bar', 'nautilus'"
     )
