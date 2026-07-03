@@ -15,6 +15,7 @@ from .sources import (
     FlintDataAPIClient,
     FreeVenueProvider,
     InMemoryCacheSource,
+    VenueProvider,
 )
 from .universe import (
     UNIVERSE_SNAPSHOT,
@@ -42,6 +43,7 @@ __all__ = [
     "FlintDataAPIClient",
     "FreeVenueProvider",
     "InMemoryCacheSource",
+    "VenueProvider",
     "UNIVERSE_SNAPSHOT",
     "DynamicUniverse",
     "ExitBehavior",

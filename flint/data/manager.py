@@ -31,7 +31,12 @@ from enum import Enum
 import pyarrow as pa
 
 from .ranges import Kind, RangeSet, TimeRange
-from .sources import DataSource, FlintDataAPIClient, InMemoryCacheSource
+from .sources import (
+    DataSource,
+    FlintDataAPIClient,
+    FreeVenueProvider,
+    InMemoryCacheSource,
+)
 
 
 class CoverageMode(Enum):
@@ -139,10 +144,17 @@ class DataManager:
     """Resolves a backtest's data needs through the source chain (§9)."""
 
     def __init__(self, sources: Sequence[DataSource] | None = None) -> None:
-        # Default chain: local cache -> Flint Data API (stub) -> providers (2.4).
+        # Default chain: local cache -> Flint Data API (stub) -> free providers.
+        # The free-venue tier is inert with no providers registered (no transport
+        # configured on a bare manager); a caller wanting the HL fallback passes an
+        # explicit chain with FreeVenueProvider([HyperliquidRestProvider(...)]).
         if sources is None:
             self._cache = InMemoryCacheSource()
-            self._sources: tuple[DataSource, ...] = (self._cache, FlintDataAPIClient())
+            self._sources: tuple[DataSource, ...] = (
+                self._cache,
+                FlintDataAPIClient(),
+                FreeVenueProvider(),
+            )
         else:
             self._sources = tuple(sources)
             # Write-through targets the first source if it is a writable cache.

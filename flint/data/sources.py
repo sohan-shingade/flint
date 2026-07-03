@@ -7,15 +7,19 @@ Each source answers two questions for a ``(venue, market, kind)``:
 * ``available(want)`` — which sub-ranges of ``want`` can I serve? (a ``RangeSet``)
 * ``fetch(span)`` — give me the rows in ``span`` (an Arrow ``Table``).
 
-Only the local cache is real in this slice. ``FlintDataAPIClient`` and
-``FreeVenueProvider`` are honest **stubs** — they declare no coverage until the
-lake client (2.7) and the HL providers (2.4) land — so the chain logic is
-exercised now against injected in-memory sources without any live network (D26).
+``FlintDataAPIClient`` is still an honest **stub** — it declares no coverage until
+the lake client lands (2.7). ``FreeVenueProvider`` is now **real** (2.4): it
+composes per-venue ``VenueProvider``s (the HL REST provider) and serves the
+sub-ranges each declares. With no providers registered it stays inert (declares
+nothing), so a bare chain still never fabricates data (D26) and the funding hard
+gate still rejects an uncovered request.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from typing import Protocol, runtime_checkable
 
 import pyarrow as pa
 
@@ -109,24 +113,68 @@ class FlintDataAPIClient(DataSource):
         return pa.table({})
 
 
-class FreeVenueProvider(DataSource):
-    """The offline/self-hosted fallback tier — a stub base (real HL in 2.4, §9.1).
+@runtime_checkable
+class VenueProvider(Protocol):
+    """One venue's free-API fetcher, composed by ``FreeVenueProvider`` (§9.1).
 
-    Subclasses fetch directly from a free venue API. The base declares no
-    coverage so a bare chain never fabricates data (D26).
+    A provider declares which ``(market, kind)`` it serves, a **coverage floor**
+    (the earliest ts it can serve — the venue's history start), and fetches a
+    span. The floor keeps the funding hard gate honest without a network probe:
+    a request before the venue existed is a gap, not a silent pass. The Flint
+    Data API coverage matrix (2.7) is the authority on real coverage; a free
+    provider is a best-effort fallback for offline/self-hosted use.
+    """
+
+    venue: str
+
+    def supports(self, market: str, kind: Kind) -> bool: ...
+
+    def coverage_floor(self, market: str, kind: Kind) -> int | None: ...
+
+    def fetch_range(self, market: str, kind: Kind, span: TimeRange) -> pa.Table: ...
+
+
+class FreeVenueProvider(DataSource):
+    """The offline/self-hosted fallback tier — composes ``VenueProvider``s (§9.1).
+
+    Real as of 2.4: it delegates ``available``/``fetch`` to the provider
+    registered for a venue (the HL REST provider today). With no providers it is
+    inert — declares nothing, fetches nothing — so a bare chain still never
+    fabricates data (D26) and the funding hard gate still rejects.
     """
 
     name = "free_venue_provider"
 
+    def __init__(self, providers: Sequence[VenueProvider] = ()) -> None:
+        self._providers: dict[str, VenueProvider] = {p.venue: p for p in providers}
+
+    def _for(self, venue: str, market: str, kind: Kind) -> VenueProvider | None:
+        provider = self._providers.get(venue)
+        if provider is None or not provider.supports(market, kind):
+            return None
+        return provider
+
     def available(
         self, venue: str, market: str, kind: Kind, want: TimeRange
     ) -> RangeSet:
-        return RangeSet()
+        provider = self._for(venue, market, kind)
+        if provider is None:
+            return RangeSet()
+        floor = provider.coverage_floor(market, kind)
+        if floor is None:
+            return RangeSet()
+        start = max(want.start_ms, floor)
+        if start >= want.end_ms:
+            return RangeSet()
+        return RangeSet((TimeRange(start, want.end_ms),))
 
     def fetch(
         self, venue: str, market: str, kind: Kind, span: TimeRange
     ) -> pa.Table:
-        return pa.table({})
+        provider = self._for(venue, market, kind)
+        if provider is None:
+            return pa.table({})
+        return provider.fetch_range(market, kind, span)
 
 
 # --- Arrow helpers (ts-keyed, half-open) ------------------------------------
