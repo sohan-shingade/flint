@@ -9,13 +9,11 @@ client the factory builds.
 
 from __future__ import annotations
 
-from dataclasses import replace
 
 import pytest
 
 from flint.adapters import InMemoryUserData
 from flint.core.models import Order, OrderType, Side, TimeInForce
-from flint.engine.money import money
 from flint.engine.portfolio import (
     FILL,
     ORDER_CANCELLED,
@@ -25,7 +23,6 @@ from flint.engine.portfolio import (
     fold,
 )
 from flint.live import (
-    DriftAlert,
     LiveCaps,
     LiveExecutor,
     LiveReject,
