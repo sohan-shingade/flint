@@ -51,6 +51,54 @@ NONDETERMINISTIC_MODULES: dict[str, str] = {
     "datetime": "ctx.now",
 }
 
+# Aggregations that collapse a whole series into one number. Inside ``features()``
+# these leak the future unless the receiver is *bounded* (rolling/expanding/ewm or an
+# explicit slice) — a full-window ``mean()``/``std()`` normalization leaks every
+# future bar into every row, exactly the subtle leak the truncation re-run can miss
+# (§8.5). ``_AGG_METHODS`` are ``x.mean()``-style; ``_FREE_AGGS`` are ``np.mean(x)``.
+_AGG_METHODS: frozenset[str] = frozenset(
+    {"mean", "std", "max", "min", "sum", "var", "median", "quantile",
+     "prod", "skew", "kurt", "corr", "cov", "fit"}
+)
+_FREE_AGGS: frozenset[str] = frozenset(
+    {"mean", "std", "max", "min", "sum", "var", "median", "average",
+     "polyfit", "corrcoef", "cov", "percentile", "quantile"}
+)
+# Receiver qualifiers that BOUND an aggregation to a trailing window (causal).
+_BOUNDERS: frozenset[str] = frozenset({"rolling", "expanding", "ewm", "tail", "head"})
+
+# Names that read as a numeric *module* (``np.mean(x)``) rather than a data object
+# (``x.mean()``) — for these the data is the argument, so we window-check the arg.
+_MODULE_ALIASES: frozenset[str] = frozenset(
+    {"np", "numpy", "pd", "pandas", "scipy", "sp", "stats", "statistics"}
+)
+
+
+def _is_bounded(node: ast.AST) -> bool:
+    """True if ``node``'s receiver chain windows the data (rolling/expanding/slice).
+
+    Walks the attribute/call/subscript chain of the value an aggregation is applied
+    to. A ``rolling(...)``/``expanding(...)``/``ewm(...)``/``tail(...)``/``head(...)``
+    call or a slice subscript (``x[-20:]``) bounds it; a column-label subscript
+    (``x["close"]``) does not, so the walk continues past it to the base series.
+    """
+    cur = node
+    while True:
+        if isinstance(cur, ast.Subscript):
+            if isinstance(cur.slice, ast.Slice):
+                return True  # x[-20:] — an explicit trailing window
+            cur = cur.value  # x["close"] — column select, keep walking the receiver
+        elif isinstance(cur, ast.Call):
+            func = cur.func
+            if isinstance(func, ast.Attribute) and func.attr in _BOUNDERS:
+                return True
+            cur = func.value if isinstance(func, ast.Attribute) else func
+        elif isinstance(cur, ast.Attribute):
+            cur = cur.value
+        else:
+            return False
+
+
 # The #1 ML-supply-chain RCE vector — loading a model from arbitrary bytes. Models
 # persist only through the managed ``ctx.model_store`` (§8.5). These modules are
 # not importable anyway; the rule gives a precise message instead of a generic
@@ -160,6 +208,44 @@ class _Screener(ast.NodeVisitor):
                 node, "reflection-escape",
                 f"attribute {node.attr!r} is a sandbox-escape reflection path (§8.3)",
             )
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        # The feature-causality rule is scoped to ``features()`` (§8.5): unbounded
+        # full-window aggregations there leak the future into every training row.
+        # Elsewhere (e.g. ``on_candle``) a full-window aggregate is legitimate.
+        if node.name == "features":
+            causal = _CausalityVisitor(self)
+            for stmt in node.body:
+                causal.visit(stmt)
+        self.generic_visit(node)
+
+
+class _CausalityVisitor(ast.NodeVisitor):
+    """Flags unbounded full-window aggregations inside ``features()`` (§8.5)."""
+
+    def __init__(self, screener: "_Screener") -> None:
+        self._screener = screener
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            recv = func.value
+            if isinstance(recv, ast.Name) and recv.id in _MODULE_ALIASES:
+                # Free function ``np.mean(x)`` — the data is the first argument.
+                if func.attr in _FREE_AGGS and node.args and not _is_bounded(node.args[0]):
+                    self._screener._add(
+                        node, "feature-lookahead",
+                        f"{recv.id}.{func.attr}(...) over an unbounded window leaks the "
+                        "future — window the input in features() (§8.5)",
+                    )
+            elif func.attr in _AGG_METHODS and not _is_bounded(recv):
+                # Method ``x.mean()`` — the data is the receiver.
+                self._screener._add(
+                    node, "feature-lookahead",
+                    f".{func.attr}() over an unbounded window leaks the future — "
+                    "use rolling/expanding or a trailing slice in features() (§8.5)",
+                )
         self.generic_visit(node)
 
 

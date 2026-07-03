@@ -203,12 +203,22 @@ class EngineStrategy:
         history.append(candle)
         proxy = _CtxProxy(ctx, self)
         signals = normalize_signals(self.strategy.on_candle(candle, history, proxy))
+        return self._gate(signals, candle, ctx.now)
+
+    def _gate(
+        self, signals: list[Signal], candle: "Candle", now: int
+    ) -> list[Signal]:
+        """Return only signals whose venue routes; record the rest (D28, §19.1).
+
+        Shared by the plain adapter and :class:`~flint.strategy.ml.MLEngineStrategy`
+        so the one-venue-away executable gate has a single implementation.
+        """
         executable: list[Signal] = []
         for sig in signals:
             venue = sig.venue or candle.venue
             if venue not in EXECUTABLE_VENUES:
                 self.rejections.append(
-                    StrategyRejection.venue_not_executable(sig, ctx.now)
+                    StrategyRejection.venue_not_executable(sig, now)
                 )
                 continue
             executable.append(sig)

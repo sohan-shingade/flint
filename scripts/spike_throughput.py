@@ -41,7 +41,10 @@ import pyarrow as pa
 
 # Reuse the real normalization + Arrow schema the ingestion path writes, so the
 # rows we iterate are byte-shaped exactly like recorded depth.
+from flint.core.models import Side
 from flint.data.normalize import books_to_arrow, normalize_l2book
+from flint.engine.fills.arrow import depth_level_arrays, taker_walk_batch
+from flint.engine.money import money
 
 # --- budget constants (§19.4) -----------------------------------------------
 
@@ -181,6 +184,28 @@ def tier_a_fill_loop(table: pa.Table) -> tuple[int, Decimal]:
     return fills, cash
 
 
+def tier_a_fill_loop_arrow(table: pa.Table) -> tuple[int, Decimal]:
+    """Tier-A via the Arrow-native book-walk (§19.4 fix) — the same fill, batched.
+
+    The columnar equivalent of ``tier_a_fill_loop``: depth stays Arrow (zero-copy
+    strided level views, no ``to_pylist``), the book is walked with the vectorized
+    ``taker_walk_batch`` cumsum kernel instead of a per-level Python loop, and
+    money is reduced to ``Decimal`` once at the batch boundary — never
+    float-accumulated across snapshots (§5). Same order size, same result: on the
+    fixed-depth benchmark frame it fills an identical count for identical cash as
+    the naive loop (asserted in tests/test_engine_fills_arrow.py).
+    """
+    px, sz, offsets = depth_level_arrays(table, Side.LONG)
+    walk = taker_walk_batch(px, sz, offsets, buy=True, order_size=3.0)
+    notional = walk.filled * walk.vwap  # (n,) float, 0 where no fill
+    # Batch-boundary money reduction: one Decimal per actual fill, not per level.
+    fee = Decimal("0")
+    for nt, ok in zip(notional.tolist(), walk.ok.tolist()):
+        if ok:
+            fee += money(nt) * _FEE_RATE
+    return int(walk.ok.sum()), Decimal("100000") - fee
+
+
 # --- measurement ------------------------------------------------------------
 
 
@@ -197,10 +222,17 @@ class Result:
     seconds: float
     budget_s: float
     projected_rows: int | None = None
+    baseline_seconds: float | None = None  # prior (naive) time, for the speed-up line
 
     @property
     def rows_per_s(self) -> float:
         return self.rows / self.seconds if self.seconds else float("inf")
+
+    @property
+    def speedup(self) -> float | None:
+        if self.baseline_seconds is None or not self.seconds:
+            return None
+        return self.baseline_seconds / self.seconds
 
     @property
     def projected_seconds(self) -> float:
@@ -229,13 +261,15 @@ def run_spike(*, smoke: bool = False) -> list[Result]:
     tier_c = Result("Tier-C 6mo/3mkt/1m", c_rows, c_secs, TIER_C_BUDGET_S)
 
     at = build_depth_table(a_rows)
-    a_secs = _time(tier_a_fill_loop, at)
+    a_naive = _time(tier_a_fill_loop, at)  # the naive path the §19.4 spike failed on
+    a_secs = _time(tier_a_fill_loop_arrow, at)  # the Arrow-native fix
     tier_a = Result(
-        "Tier-A 1 day/1mkt (projected 6mo/3mkt)",
+        "Tier-A 1 day/1mkt Arrow-native (projected 6mo/3mkt)",
         a_rows,
         a_secs,
         TIER_A_BUDGET_S,
         projected_rows=a_proj,
+        baseline_seconds=a_naive,
     )
     return [tier_c, tier_a]
 
@@ -256,6 +290,11 @@ def format_report(results: list[Result], rss: int) -> str:
             )
         else:
             lines.append(f"         budget {r.budget_s:.0f}s")
+        if r.speedup is not None:
+            lines.append(
+                f"         naive baseline {r.baseline_seconds:.3f}s "
+                f"-> {r.speedup:.1f}x faster (Arrow-native)"
+            )
     rss_ok = "PASS" if rss <= RSS_BUDGET_BYTES else "FAIL"
     lines.append(
         f"  [{rss_ok}] peak RSS {rss / 1024**2:,.0f} MiB (budget "

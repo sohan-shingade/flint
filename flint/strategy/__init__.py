@@ -19,6 +19,21 @@ from .base import (
     UnknownParamError,
     normalize_signals,
 )
+from .ml import (
+    FutureWindow,
+    MLContext,
+    MLEngineStrategy,
+    MLStrategy,
+    build_training_set,
+)
+from .model_store import (
+    ModelStore,
+    ModelStoreError,
+    ModelStoreQuota,
+    ModelStoreQuotaError,
+    ModelNotFound,
+    UnsafeModelError,
+)
 
 __all__ = [
     "Strategy",
@@ -28,4 +43,16 @@ __all__ = [
     "UnknownParamError",
     "EXECUTABLE_VENUES",
     "normalize_signals",
+    # ML surface (§8.5)
+    "MLStrategy",
+    "MLEngineStrategy",
+    "MLContext",
+    "FutureWindow",
+    "build_training_set",
+    "ModelStore",
+    "ModelStoreQuota",
+    "ModelStoreError",
+    "ModelStoreQuotaError",
+    "ModelNotFound",
+    "UnsafeModelError",
 ]

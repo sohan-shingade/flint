@@ -2,7 +2,43 @@
 
 Harness: `scripts/spike_throughput.py`. Run: `python scripts/spike_throughput.py`.
 
-## Verdict
+## Update — slice 7.2 re-run through the Arrow-native path: **PASS**
+
+The Tier-A leg now runs through the Arrow-native taker book-walk shipped in slice
+7.1 (`flint/engine/fills/arrow.py`, commit 7ad6f3d; design note
+`docs/redesign/ARROW-FILL-PATH.md`). The naive path below is retained as the
+baseline the harness still times side-by-side.
+
+| Workload | Budget (§19.4) | Measured (Arrow path) | Projected 6mo/3mkt | Result |
+|---|---|---|---|---|
+| Tier-A (HL depth), Arrow-native | ≤ 15 min | 86,400 snaps in **~0.34 s** (~250k snaps/s) | 47.2 M snaps → **~2.5–4 min** | **PASS** (≈4–6× headroom) |
+| naive baseline (same run, for reference) | — | 86,400 snaps in ~8–9 s | ~50–62 min | still fails |
+
+**OVERALL: PASS.** The Arrow path is **~20–29× faster** than the naive loop it
+replaces (machine-noisy; measured across repeated runs on this dev host). The
+fill is bit-identical to the scalar `ClobFillModel` (parity gate,
+`tests/test_engine_fills_arrow.py`) and produces the **same fill count and the
+same Decimal cash** as the naive loop on the benchmark frame — the speed-up
+changes only the data plane, not a single fill.
+
+**Where the time now goes** (86,400-snapshot profile, best-of-5):
+
+- The §19.4 hot loop — depth extraction + the vectorized book-walk — is **~87 ms
+  (~990k snaps/s)**. This is the part §19.4 targeted; it now crushes the budget.
+  `to_pylist` object churn and the per-level Python loop are gone (depth stays
+  Arrow, zero-copy strided level views; `np.cumsum` / `np.subtract.accumulate`
+  kernels).
+- The remaining **~177 ms is the per-fill `Decimal` money reduction** at the batch
+  boundary. It dominates *only because the benchmark stub fills every snapshot*
+  (86,400 `Decimal` ops). A real strategy fills sparsely (one per live order, not
+  one per depth snapshot), so this cost nearly vanishes in practice — the reported
+  number is therefore **pessimistic**, and Tier-A still passes with headroom even
+  fully saturated.
+
+The original naive-path verdict (below) stands as the historical record of *why*
+the Arrow path was built.
+
+## Verdict (original naive-path run — superseded by the 7.2 re-run above)
 
 | Workload | Budget (§19.4) | Measured | Projected | Result |
 |---|---|---|---|---|

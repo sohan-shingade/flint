@@ -210,6 +210,22 @@ def test_depth_level_arrays_are_zero_copy_strided_views():
     assert list(sz[:3]) == [4.0, 5.0, 8.0]
 
 
+def test_spike_arrow_loop_matches_naive_loop_on_benchmark_frame():
+    # The 7.2 re-run is apples-to-apples: the Arrow Tier-A loop must produce the
+    # same fill count and the same (Decimal) cash as the naive loop it replaces.
+    from scripts.spike_throughput import (
+        build_depth_table,
+        tier_a_fill_loop,
+        tier_a_fill_loop_arrow,
+    )
+
+    table = build_depth_table(2000)
+    fills_naive, cash_naive = tier_a_fill_loop(table)
+    fills_arrow, cash_arrow = tier_a_fill_loop_arrow(table)
+    assert fills_arrow == fills_naive == 2000
+    assert cash_arrow == cash_naive  # Decimal equality — money reduction unchanged
+
+
 def test_taker_walk_reproduces_sequential_accumulation():
     # Two snapshots, one order; VWAP computed by the vectorized cumsum path must
     # equal the hand-computed sequential VWAP exactly.
