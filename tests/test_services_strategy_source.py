@@ -292,3 +292,159 @@ def test_run_results_is_tenant_scoped():
 
     with pytest.raises(NotFoundError):
         run_results(BOB, "scoped", user_data=ud)
+
+
+# --- 7.6: the run itself is contained by the OS sandbox (D25 closure) ---------
+
+# Benign on the validation probe (which runs the features() seam), malicious once
+# the engine walks on_candle. The getattr chain is assembled from string fragments
+# so the static screen — which flags the literal __subclasses__/__globals__ — never
+# sees it; only the OS boundary contains it, and only at run time.
+MALICIOUS_AFTER_VALIDATION = """
+from flint.strategy import Strategy
+
+
+def features(rows):
+    return [r.close for r in rows]
+
+
+class Sneaky(Strategy):
+    def on_candle(self, candle, history, ctx):
+        subs = getattr(object, "__sub" + "classes__")()
+        leaked = {}
+        for kls in subs:
+            g = getattr(getattr(kls, "__ini" + "t__", None), "__glob" + "als__", None)
+            if g and "os" in g:
+                env = dict(g["os"].environ)
+                leaked = {k: v for k, v in env.items()
+                          if "SECRET" in k or k.startswith("FLINT")}
+                break
+        raise RuntimeError("leak=" + repr(sorted(leaked)))
+"""
+
+# Passes validation (benign features()), then raises a normal error in on_candle.
+RAISES_DURING_RUN = """
+from flint.strategy import Strategy
+
+
+def features(rows):
+    return [r.close for r in rows]
+
+
+class Boom(Strategy):
+    def on_candle(self, candle, history, ctx):
+        raise ValueError("boom during the run")
+"""
+
+
+def test_run_backtest_source_malice_during_run_is_contained(monkeypatch):
+    # A secret exists in the PARENT environment — it must never leak.
+    monkeypatch.setenv("FLINT_SECRET__local__HL_KEY", "topsecret-must-not-leak")
+    # It passes the pre-run gate: the probe runs the benign features(), never the
+    # malicious on_candle, and the string-built getattr chain evades the screen.
+    assert validate_strategy(MALICIOUS_AFTER_VALIDATION).valid is True
+
+    ud = InMemoryUserData()
+    out = run_backtest_source(
+        ALICE,
+        source=MALICIOUS_AFTER_VALIDATION,
+        run_id="evil",
+        universe=(MARKET,),
+        venues=(VENUE,),
+        start_ms=T0,
+        end_ms=_covered_end(),
+        user_data=ud,
+        data=_data(),
+    )
+    # Contained: the run surfaces a structured sandbox error (verdict invalid),
+    # never a stack trace. Crown jewel — the escape ran inside the sandbox but the
+    # child env is empty by construction, so NO secret leaked.
+    assert out.verdict == "invalid"
+    err = out.summary["validation"]["sandbox_error"]
+    assert err is not None
+    assert err["type"] == "StrategyError"
+    assert "topsecret" not in err["message"]
+    assert "leak=[]" in err["message"]
+    # Nothing persisted under that id (like any invalid strategy).
+    with pytest.raises(KeyError):
+        ud.load_run(ALICE, "evil")
+
+
+def test_run_backtest_source_runtime_error_after_validation_is_structured_not_raised():
+    # A strategy that validates but raises during the real run is surfaced as the
+    # same structured invalid/sandbox_error data (§19.1) — never an exception here.
+    ud = InMemoryUserData()
+    out = run_backtest_source(
+        ALICE,
+        source=RAISES_DURING_RUN,
+        run_id="rt",
+        universe=(MARKET,),
+        venues=(VENUE,),
+        start_ms=T0,
+        end_ms=_covered_end(),
+        user_data=ud,
+        data=_data(),
+    )
+    assert out.verdict == "invalid"
+    assert out.summary["validation"]["stage"] == "sandbox"
+    err = out.summary["validation"]["sandbox_error"]
+    assert err["type"] == "StrategyError"
+    assert "boom during the run" in err["message"]
+    with pytest.raises(KeyError):
+        ud.load_run(ALICE, "rt")
+
+
+def test_run_backtest_source_in_sandbox_matches_in_process_bit_for_bit():
+    # PARITY: the same fixture run through the in-process engine (the trusted
+    # template wiring, services.backtest._execute) and through the sandboxed
+    # user-source path must produce byte-identical event streams, including the
+    # Decimal-as-str cash in every payload.
+    from flint.services.backtest import BacktestRequest, _execute
+    from flint.strategy.ml import MLStrategy
+    from flint.strategy.templates.registry import TemplateSpec
+
+    cls = compile_strategy(CLEAN, name="MomoStrat")
+    spec = TemplateSpec(
+        name=cls.__name__,
+        strategy_cls=cls,
+        summary="parity-ref",
+        category="user",
+        is_ml=issubclass(cls, MLStrategy),
+    )
+    ref_store = InMemoryUserData()
+    req = BacktestRequest(
+        run_id="p",
+        strategy=cls.__name__,
+        universe=(MARKET,),
+        venues=(VENUE,),
+        start_ms=T0,
+        end_ms=_covered_end(),
+        resolution_s=3600,
+    )
+    _execute(ALICE, req, data=_data(), event_store=ref_store, adapter_spec=spec)
+    ref_events = ref_store.load_events(ALICE, "p")
+
+    sb_store = InMemoryUserData()
+    out = run_backtest_source(
+        ALICE,
+        source=CLEAN,
+        run_id="p",
+        universe=(MARKET,),
+        venues=(VENUE,),
+        start_ms=T0,
+        end_ms=_covered_end(),
+        resolution_s=3600,
+        user_data=sb_store,
+        data=_data(),
+    )
+    assert out.verdict == "ok"
+    sb_events = sb_store.load_events(ALICE, "p")
+
+    # Bit-for-bit identical event rows (kind, seq, ts, payload).
+    assert len(sb_events) > 0
+    assert sb_events == ref_events
+    # Explicit Decimal-cash parity on the final marked-to-market equity event.
+    eq_ref = [e for e in ref_events if e["kind"] == "equity"]
+    eq_sb = [e for e in sb_events if e["kind"] == "equity"]
+    assert eq_sb and eq_ref
+    assert eq_sb[-1]["payload"]["cash"] == eq_ref[-1]["payload"]["cash"]

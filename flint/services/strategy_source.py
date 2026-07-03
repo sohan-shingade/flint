@@ -12,11 +12,17 @@ The boundary (D25, §8.3): every user-source run is gated by
 (``run_strategy_sandboxed(..., screen=True)``) plus the static leak lint
 (``research.lookahead.analyze``) and returns **structured, line-precise errors
 before a backtest ever starts**. The static AST screen is lint-grade UX; the
-subprocess is the actual containment. A validated strategy is then compiled and
-walked by the honest engine (§6) — reusing 7.1's ``_execute`` via a prebuilt
-``TemplateSpec`` so the user path and the template path share one engine wiring.
-The truncation probe's ``feature_fn`` runs **inside** the sandbox (carry-forward
-(d)), so a look-ahead re-run never executes untrusted code in-process.
+subprocess is the actual containment. But validation only probes a single entry —
+a strategy can behave there and misbehave once the engine walks it — so the OS
+boundary must contain the *whole* run, not just validation. A validated strategy
+is therefore walked by the honest engine (§6) **inside the sandbox**
+(:func:`_run_source_in_sandbox` → ``run_backtest_in_sandbox``): data resolution,
+the funding gate, persistence, and the trust-report fold stay on this trusted
+side, and only inert input copies cross to the untrusted engine walk. In-process
+execution remains solely for trusted registry templates (``services.backtest``).
+The truncation probe's ``feature_fn`` likewise runs **inside** the sandbox
+(carry-forward (d)), so a look-ahead re-run never executes untrusted code
+in-process either.
 """
 
 from __future__ import annotations
@@ -26,10 +32,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from flint.data import DataManager, FundingCoverageError
-from flint.ports import RunRecord, TenantContext, UserDataPort
-from flint.research import analyze
-from flint.strategy import MLStrategy, Strategy
+from flint.data import CoverageMode, DataManager, FundingCoverageError
+from flint.engine.portfolio import EventLog
+from flint.ports import TenantContext, UserDataPort
+from flint.research import analyze, build_report, equity_series_from_events
+from flint.strategy import Strategy
 from flint.strategy.sandbox import (
     SandboxError,
     SandboxTimeout,
@@ -39,15 +46,18 @@ from flint.strategy.sandbox import (
     run_strategy_sandboxed,
     screen_source,
 )
-from flint.strategy.templates.registry import TemplateSpec
+from flint.strategy.sandbox.backtest_runner import run_backtest_in_sandbox
 
+from ._engine_inputs import build_engine_inputs
 from .backtest import (
+    _KINDS,
     BacktestOutcome,
     BacktestRequest,
-    _execute,
     _manifest,
     _persist,
     _rejection_from_gate,
+    _summary,
+    _timed,
 )
 from .errors import ValidationError
 
@@ -296,8 +306,12 @@ def run_backtest_source(
     ``verdict="invalid"`` outcome carrying the :class:`ValidationReport` — data
     the agent revises against, never an exception. A funding hard-gate gap returns
     ``verdict="rejected"`` (data, §19.1). Otherwise the validated strategy is
-    compiled and walked by the real engine, and the run is persisted like any
-    other (its Run-Library head carries the actual source for reproduction).
+    walked by the real engine **inside the OS sandbox** (D25 closure — the boundary
+    contains the whole run, not just pre-run validation), and the run is persisted
+    like any other (its Run-Library head carries the actual source for reproduction).
+    A strategy that passed validation but misbehaves during the run is contained and
+    surfaced as ``verdict="invalid"`` with a structured ``sandbox_error`` — never a
+    stack trace, and nothing is persisted.
     """
     report = validate_strategy(source)
     if not report.valid:
@@ -308,17 +322,20 @@ def run_backtest_source(
         }
         return BacktestOutcome(run_id, "invalid", summary)
 
-    cls = compile_strategy(source, name=run_id)
-    spec = TemplateSpec(
-        name=cls.__name__,
-        strategy_cls=cls,
-        summary="user-submitted strategy",
-        category="user",
-        is_ml=issubclass(cls, MLStrategy),
-    )
+    # The engine walk of the validated (but still untrusted) source runs INSIDE the
+    # OS sandbox (D25 closure) — never in this process. The class is picked out
+    # statically (AST) so we never exec the source here just to name it.
+    class_name = _strategy_class_name(source)
+    if class_name is None:
+        raise ValidationError(
+            "strategy source defines no Strategy subclass",
+            detail="the engine runs a subclass of flint.strategy.Strategy",
+            hint="define `class MyStrategy(Strategy): ...`",
+        )
+
     request = BacktestRequest(
         run_id=run_id,
-        strategy=cls.__name__,
+        strategy=class_name,
         universe=tuple(universe),
         venues=tuple(venues),
         start_ms=start_ms,
@@ -331,13 +348,17 @@ def run_backtest_source(
         signal_venues=tuple(signal_venues),
     )
 
-    user_data.save_run(
-        tenant,
-        RunRecord(run_id=run_id, kind="backtest", status="running", created_ts=now_ms),
-    )
+    # No "running" head is written up front: an invalid verdict (validation OR a
+    # contained runtime failure) must persist nothing, matching the pre-run gate.
+    # The success and funding-rejection paths create the closed record via _persist.
     try:
-        run = _execute(
-            tenant, request, data=data, event_store=user_data, adapter_spec=spec
+        run_summary = _run_source_in_sandbox(
+            tenant,
+            request,
+            source=source,
+            class_name=class_name,
+            data=data,
+            user_data=user_data,
         )
     except FundingCoverageError as exc:
         rejection = _rejection_from_gate(exc)
@@ -352,22 +373,95 @@ def run_backtest_source(
         }
         _persist(user_data, tenant, run_id, now_ms, summary)
         return BacktestOutcome(run_id, "rejected", summary, rejection)
+    except (StrategyError, SandboxTimeout, SandboxViolation, SandboxError) as exc:
+        # Passed pre-run validation but misbehaved (or blew a limit) DURING the real
+        # run: the OS boundary contained it (D25). Surface it as the same structured,
+        # stack-trace-free data an invalid strategy yields (§19.1) — nothing persisted.
+        failed = ValidationReport(
+            valid=False, stage="sandbox", sandbox_error=_sandbox_error(exc)
+        )
+        summary = {
+            "verdict": "invalid",
+            "run_id": run_id,
+            "validation": failed.to_payload(),
+        }
+        return BacktestOutcome(run_id, "invalid", summary)
 
     manifest = _manifest(
         request,
         now_ms=now_ms,
-        effective=run.summary["effective_range"],
-        metrics=run.summary["metrics"],
-        fidelity_lines=run.summary["fidelity_lines"],
+        effective=run_summary["effective_range"],
+        metrics=run_summary["metrics"],
+        fidelity_lines=run_summary["fidelity_lines"],
         source=source,
     )
     summary = {
         **manifest.to_summary(),
-        **run.summary,
+        **run_summary,
         "validation": report.to_payload(),
     }
     _persist(user_data, tenant, run_id, now_ms, summary)
     return BacktestOutcome(run_id, "ok", summary)
+
+
+def _run_source_in_sandbox(
+    tenant: TenantContext,
+    request: BacktestRequest,
+    *,
+    source: str,
+    class_name: str,
+    data: DataManager,
+    user_data: UserDataPort,
+) -> dict[str, Any]:
+    """Resolve data (funding-gated), run the engine IN the sandbox, fold the report.
+
+    The D25-closing counterpart to ``services.backtest._execute``: data resolution,
+    the funding hard gate, event persistence, and the trust-report fold all stay on
+    the trusted side, while the untrusted engine walk happens in an OS-isolated
+    child (:func:`run_backtest_in_sandbox`). Only inert input copies cross the
+    boundary; the returned events are re-persisted and folded exactly as the
+    in-process template path does, so the two paths are bit-for-bit identical.
+    """
+    timing: dict[str, float] = {}
+    executable = set(request.venues)
+    with _timed(timing, "data_fetch_ms"):
+        prepared = data.prepare(
+            request.universe,
+            request.venues,
+            _KINDS,
+            request.range,
+            mode=CoverageMode.STRICT,  # funding hard gate (§6.4); raises on a gap
+            signal_venues=request.signal_venues,
+        )
+    with _timed(timing, "input_build_ms"):
+        inputs = build_engine_inputs(prepared.tables, executable)
+
+    with _timed(timing, "engine_run_ms"):
+        sandboxed = run_backtest_in_sandbox(
+            source,
+            class_name,
+            candles=inputs.candles,
+            funding=inputs.funding,
+            marks=inputs.marks,
+            seed=request.seed,
+            initial_capital=request.initial_capital,
+            fund_venue=request.venues[0],
+            run_id=request.run_id,
+            overrides=dict(request.overrides),
+        )
+
+    # Persist the sandbox's event stream on the trusted side, then fold the report
+    # from the persisted log — identical to the in-process path, so the tearsheet
+    # and the per-trade log (get_results) read the exact same events.
+    user_data.append_events(tenant, request.run_id, sandboxed.events)
+    with _timed(timing, "report_ms"):
+        events = EventLog(user_data, tenant, request.run_id).read()
+        equity = equity_series_from_events(events)
+        report = build_report(equity, resolution_s=request.resolution_s, events=events)
+
+    summary = _summary(request, prepared, report, equity, [], sandboxed.notes, timing)
+    summary["rejections"] = sandboxed.rejections
+    return summary
 
 
 # -- internals ---------------------------------------------------------------

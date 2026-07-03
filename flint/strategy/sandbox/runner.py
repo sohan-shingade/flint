@@ -8,29 +8,25 @@ optimizer workers — comes through here.
 
 The parent spawns an env-scrubbed, isolated (`python -I`) subprocess, hands it
 the job over a pipe, enforces the wall-clock deadline and output cap, and decodes
-the result with JSON/Arrow only (never pickle).
+the result with JSON/Arrow only (never pickle). The spawn/scrub/limits machinery
+lives in ``_spawn`` so the full-run sandbox path (``run_backtest_in_sandbox``)
+reuses the exact same isolation with a different child payload.
 """
 
 from __future__ import annotations
 
-import json
-import signal
-import subprocess
-import sys
 from typing import Any
 
 from flint.ports import ResourceQuota
 
-from .errors import SandboxTimeout, SandboxViolation, StrategyError
-from .oslayer import wrap_command
+from ._spawn import OUTPUT_CAP_BYTES, spawn_child
+from .errors import StrategyError
 from .protocol import decode_value, encode_value
 from .screen import screen_or_raise
 
 _CHILD_MODULE = "flint.strategy.sandbox._child"
 
-# Cap on the child's result envelope. A strategy that tries to return more is a
-# violation, not a result. 8 MiB comfortably holds real tearsheet-sized output.
-OUTPUT_CAP_BYTES = 8 * 1024 * 1024
+__all__ = ["OUTPUT_CAP_BYTES", "run_strategy_sandboxed"]
 
 
 def run_strategy_sandboxed(
@@ -67,46 +63,7 @@ def run_strategy_sandboxed(
             "wall_seconds": quota.wall_seconds,
         },
     }
-    payload = json.dumps(job).encode("utf-8")
-
-    # `-I` isolated mode: ignore env vars and user site-packages. `env={}` means
-    # no FLINT_* secret can even exist in the child (unreachable by construction).
-    cmd = wrap_command([sys.executable, "-I", "-m", _CHILD_MODULE], quota)
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env={},
-    )
-
-    try:
-        stdout, stderr = proc.communicate(payload, timeout=quota.wall_seconds)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.communicate()
-        raise SandboxTimeout(
-            f"strategy exceeded wall-clock limit of {quota.wall_seconds}s"
-        ) from None
-
-    if len(stdout) > OUTPUT_CAP_BYTES:
-        raise SandboxViolation(
-            f"output exceeded cap of {OUTPUT_CAP_BYTES} bytes"
-        )
-
-    if proc.returncode != 0:
-        tail = stderr[-2000:].decode("utf-8", "replace")
-        if proc.returncode == -signal.SIGXCPU:
-            raise SandboxTimeout(f"strategy exceeded CPU limit of {quota.cpu_seconds}s")
-        raise SandboxViolation(
-            f"sandbox child exited with {proc.returncode}: {tail}"
-        )
-
-    try:
-        out = json.loads(stdout)  # JSON only — child output is untrusted
-    except json.JSONDecodeError as exc:
-        raise SandboxViolation(f"malformed child output: {exc}") from None
-
+    out = spawn_child(_CHILD_MODULE, job, quota)
     if out.get("ok"):
         return decode_value(out["value"])
     raise StrategyError(out.get("error_type", "Error"), out.get("error", ""))
