@@ -29,6 +29,13 @@ class Kind(StrEnum):
     # (§3.5, §9.1). Treated as a normal fetchable kind here (neither hard-gated
     # nor degradable); the trades→Tier-A fidelity wiring is a Phase-3 fill concern.
     TRADES = "trades"
+    # Top-of-book quotes (bid/ask px+sz) — Tier-2 tick-lane input. Like TRADES:
+    # a normal fetchable kind, neither hard-required nor degradable.
+    QUOTES = "quotes"
+    # L2 incremental book updates — flat per-level rows (Tier-3 book replay).
+    # ``sz == 0`` deletes the level; ``seq`` breaks ts ties. Neither hard-required
+    # nor degradable.
+    BOOK_DELTA = "book_delta"
 
     @property
     def is_hard_required(self) -> bool:
@@ -48,6 +55,20 @@ class Kind(StrEnum):
         spread/impact model at a lower, clearly-labelled tier.
         """
         return self is Kind.DEPTH
+
+    @property
+    def is_tick_scale(self) -> bool:
+        """True for event-granularity streams (trades, quotes, book deltas).
+
+        Tick-scale kinds are hour-partitioned in the store and their coverage is
+        **ledger-mandatory**: rows on disk contribute no coverage unless an
+        ingester asserted the range in the ``CoverageLedger`` — a quiet market
+        and a capture gap look identical at the row level, so coverage must be
+        asserted by whoever captured it, never inferred from row envelopes.
+        DEPTH stays out: it is *sampled* snapshots (regular cadence), not an
+        event stream, and keeps its envelope/degradable behavior.
+        """
+        return self in (Kind.TRADES, Kind.QUOTES, Kind.BOOK_DELTA)
 
 
 @dataclass(frozen=True, slots=True)

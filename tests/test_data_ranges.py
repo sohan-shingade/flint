@@ -83,3 +83,21 @@ def test_kind_gate_policy():
     assert Kind.DEPTH.is_degradable and not Kind.DEPTH.is_hard_required
     assert not Kind.CANDLES.is_hard_required and not Kind.CANDLES.is_degradable
     assert not Kind.OI.is_hard_required
+
+
+def test_kind_tick_scale_policy():
+    # The tick-scale set is exactly {TRADES, QUOTES, BOOK_DELTA}: event streams
+    # whose coverage is ledger-mandatory (rows never imply coverage).
+    assert Kind.TRADES.is_tick_scale
+    assert Kind.QUOTES.is_tick_scale
+    assert Kind.BOOK_DELTA.is_tick_scale
+    for kind in (Kind.CANDLES, Kind.FUNDING, Kind.OI, Kind.DEPTH):
+        assert not kind.is_tick_scale
+    # The new kinds are neither hard-required nor degradable; DEPTH keeps its
+    # sampled-snapshot degradable role.
+    for kind in (Kind.QUOTES, Kind.BOOK_DELTA):
+        assert not kind.is_hard_required
+        assert not kind.is_degradable
+    assert Kind.DEPTH.is_degradable
+    assert Kind.QUOTES.value == "quotes"
+    assert Kind.BOOK_DELTA.value == "book_delta"

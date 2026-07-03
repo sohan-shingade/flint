@@ -255,6 +255,8 @@ class CexFundingProvider:
                 "rate_type": _CEX_RATE_TYPE,
                 "venue": self.venue,
                 "market": market,
+                # A final rate settles at its own ts (§6.4).
+                "settlement_ts": ts,
             }
             for ts in ordered_ts
         ]

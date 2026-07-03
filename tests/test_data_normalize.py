@@ -8,8 +8,11 @@ from __future__ import annotations
 
 from flint.core.models import OrderbookSnapshot
 from flint.data.normalize import (
+    BOOK_DELTA_SCHEMA,
     DEPTH_SCHEMA,
+    FUNDING_SCHEMA,
     OI_SCHEMA,
+    QUOTES_SCHEMA,
     TRADES_SCHEMA,
     AssetContext,
     TradePrint,
@@ -117,3 +120,27 @@ def test_recorder_and_backfiller_depth_share_a_schema():
 
     merged = pa.concat_tables([archive, live])
     assert merged.num_rows == 2
+
+
+def test_quotes_and_book_delta_schemas_are_flat_tick_rows():
+    import pyarrow as pa
+
+    assert QUOTES_SCHEMA.names == [
+        "ts", "market", "venue", "bid_px", "bid_sz", "ask_px", "ask_sz",
+    ]
+    assert BOOK_DELTA_SCHEMA.names == [
+        "ts", "local_ts", "seq", "market", "venue", "side", "px", "sz",
+        "is_snapshot",
+    ]
+    assert BOOK_DELTA_SCHEMA.field("seq").type == pa.int64()
+    assert BOOK_DELTA_SCHEMA.field("is_snapshot").type == pa.bool_()
+
+
+def test_funding_schema_carries_nullable_settlement_ts_last():
+    import pyarrow as pa
+
+    # Appended last so lake-v1 files migrated on read match this exact order.
+    assert FUNDING_SCHEMA.names[-1] == "settlement_ts"
+    field = FUNDING_SCHEMA.field("settlement_ts")
+    assert field.type == pa.int64()
+    assert field.nullable

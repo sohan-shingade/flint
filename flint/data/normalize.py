@@ -119,6 +119,12 @@ FUNDING_SCHEMA = pa.schema(
         ("rate_type", pa.string()),
         ("venue", pa.string()),
         ("market", pa.string()),
+        # When the rate settles (or settled): a final row settles *at* its own
+        # ``ts``; a predicted row carries the upcoming settlement time when the
+        # source supplies one, else null. Nullable — never fabricated (D26).
+        # Appended last so lake-v1 files migrated on read (store/layout.py)
+        # match this exact column order.
+        ("settlement_ts", pa.int64()),
     ]
 )
 
@@ -131,6 +137,38 @@ TRADES_SCHEMA = pa.schema(
         ("size", pa.float64()),
         ("side", pa.string()),
         ("trade_id", pa.int64()),
+    ]
+)
+
+# Top-of-book quotes (Tier-2 tick lane): one row per BBO change.
+QUOTES_SCHEMA = pa.schema(
+    [
+        ("ts", pa.int64()),
+        ("market", pa.string()),
+        ("venue", pa.string()),
+        ("bid_px", pa.float64()),
+        ("bid_sz", pa.float64()),
+        ("ask_px", pa.float64()),
+        ("ask_sz", pa.float64()),
+    ]
+)
+
+# L2 incremental book updates (Tier-3 book replay): flat per-level rows matching
+# Tardis ``incremental_book_L2``. ``sz == 0`` deletes the level; ``seq`` breaks
+# ``ts`` ties (the tie-break column of the total-ordering guarantee);
+# ``local_ts`` is the capture/receipt time; ``is_snapshot`` marks rows that
+# belong to a full-book snapshot rather than an incremental update.
+BOOK_DELTA_SCHEMA = pa.schema(
+    [
+        ("ts", pa.int64()),
+        ("local_ts", pa.int64()),
+        ("seq", pa.int64()),
+        ("market", pa.string()),
+        ("venue", pa.string()),
+        ("side", pa.string()),  # "bid" or "ask"
+        ("px", pa.float64()),
+        ("sz", pa.float64()),
+        ("is_snapshot", pa.bool_()),
     ]
 )
 

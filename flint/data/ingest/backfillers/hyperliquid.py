@@ -272,6 +272,8 @@ class HyperliquidRestProvider:
                         "rate_type": _HL_FUNDING_RATE_TYPE,
                         "venue": VENUE,
                         "market": market,
+                        # A final rate settles at its own ts (§6.4).
+                        "settlement_ts": t,
                     }
                 )
                 last_time = max(last_time, t)

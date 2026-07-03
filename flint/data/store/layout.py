@@ -17,11 +17,18 @@ import pyarrow.parquet as pq
 
 # The current lake schema version. Bump when a file layout changes and register a
 # migration from the previous version so old files upgrade on read.
-SCHEMA_VERSION = 1
+# v2: FUNDING gains a nullable ``settlement_ts`` column (other kinds unchanged).
+SCHEMA_VERSION = 2
 
 _SCHEMA_VERSION_KEY = b"flint_schema_version"
-# Depth is hour-partitioned; every other kind is day-partitioned (§9.0).
-_HOUR_PARTITIONED = frozenset({"depth"})
+# Depth and the tick-scale kinds (trades/quotes/book deltas) are
+# hour-partitioned; every other kind is day-partitioned (§9.0).
+_HOUR_PARTITIONED = frozenset({"depth", "trades", "quotes", "book_delta"})
+
+
+def is_hour_partitioned(kind: str) -> bool:
+    """True if ``kind`` partitions ``date/hour`` instead of ``date`` (§9.0)."""
+    return kind in _HOUR_PARTITIONED
 
 
 def partition_path(
@@ -107,15 +114,45 @@ def read_parquet(
 ) -> pa.Table:
     """Read ``path`` and upgrade it on read to ``to_version`` if it is older.
 
-    An older file needs a ``registry`` covering the version gap; a current file
-    is returned as-is. The stored file is untouched (upgrade happens in memory).
+    ``registry`` defaults to the built-in :data:`DEFAULT_MIGRATIONS`; a current
+    file is returned as-is. The stored file is untouched (upgrade happens in
+    memory).
     """
     table = pq.read_table(path)
     version = read_schema_version(path)
     if version < to_version:
-        if registry is None:
-            raise KeyError(
-                f"{path} is schema v{version}; need v{to_version} and a registry"
-            )
-        table = registry.upgrade(table, version, to_version)
+        table = (registry or DEFAULT_MIGRATIONS).upgrade(table, version, to_version)
     return table
+
+
+# --- built-in lake migrations ------------------------------------------------
+
+# The registry every reader gets by default. Each lake SCHEMA_VERSION bump
+# registers its upgrade step here so old files promote on read everywhere.
+DEFAULT_MIGRATIONS = MigrationRegistry()
+
+
+@DEFAULT_MIGRATIONS.register(1)
+def _v1_to_v2(table: pa.Table) -> pa.Table:
+    """Lake v2: FUNDING gains a nullable ``settlement_ts`` column.
+
+    Only funding tables (recognised by their ``rate_type`` column) change; every
+    other kind passes through untouched. Legacy rows never recorded a settlement
+    time, so it is *derived, not fabricated*: a settled row (``rate_type`` of
+    ``"final"`` — or the pre-greenfield import's ``"legacy"``, which is a
+    settled rate) settles at its own ``ts``; a ``"predicted"`` row has no
+    settlement yet and stays null. Appended last to match ``FUNDING_SCHEMA``.
+    """
+    import pyarrow.compute as pc
+
+    if "rate_type" not in table.column_names or "settlement_ts" in table.column_names:
+        return table
+    settled = pc.not_equal(table.column("rate_type"), pa.scalar("predicted"))
+    settlement_ts = pc.if_else(
+        settled,
+        table.column("ts").cast(pa.int64()),
+        pa.scalar(None, pa.int64()),
+    )
+    return table.append_column(
+        pa.field("settlement_ts", pa.int64()), settlement_ts
+    )
