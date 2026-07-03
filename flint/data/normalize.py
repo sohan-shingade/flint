@@ -60,6 +60,45 @@ class TradePrint:
 
 
 @dataclass(frozen=True)
+class QuoteTick:
+    """One top-of-book change (HL ``bbo`` frame) — the Tier-2 QUOTES row.
+
+    HL sends a ``bbo`` frame only when the best bid/offer changes on a block;
+    either side may be ``null`` when that side of the book is empty, so the
+    price/size fields are ``None`` then — an absent quote is recorded as
+    absent, never fabricated (D26).
+    """
+
+    ts: int
+    market: str
+    venue: str
+    bid_px: float | None
+    bid_sz: float | None
+    ask_px: float | None
+    ask_sz: float | None
+
+
+@dataclass(frozen=True)
+class FundingObservation:
+    """One FUNDING row as captured — matches ``FUNDING_SCHEMA`` field-for-field.
+
+    The recorder emits these for the **predicted** rate carried by
+    ``activeAssetCtx`` (``rate_type="predicted"``, ``ts`` = capture time,
+    ``settlement_ts`` = the upcoming hour boundary). Final settled rows come
+    from the REST/vendor ingesters, not from here.
+    """
+
+    ts: int
+    market: str
+    venue: str
+    rate_hourly: float
+    interval_s: int
+    price_basis: str
+    rate_type: str
+    settlement_ts: int | None = None
+
+
+@dataclass(frozen=True)
 class AssetContext:
     """A perp's live context snapshot: OI + the three-price inputs + funding.
 
@@ -227,6 +266,34 @@ def normalize_l2book(data: Any, market: str | None = None) -> OrderbookSnapshot:
     )
 
 
+def _quote_side(level: Any) -> tuple[float | None, float | None]:
+    """One ``bbo`` side: a ``{px, sz, n}`` level, or ``None`` for an empty side."""
+    if level is None:
+        return None, None
+    return float(level["px"]), float(level["sz"])
+
+
+def normalize_bbo(data: Any, market: str | None = None) -> QuoteTick:
+    """Normalize an HL ``bbo`` frame to a :class:`QuoteTick`.
+
+    ``data`` is ``{coin, time, bbo: [bid_level | null, ask_level | null]}``
+    where each level is ``{px, sz, n}`` (HL sends the frame only when the BBO
+    changes on a block). A ``null`` side stays ``None`` — never fabricated.
+    """
+    levels = data.get("bbo") or [None, None]
+    bid_px, bid_sz = _quote_side(levels[0] if len(levels) > 0 else None)
+    ask_px, ask_sz = _quote_side(levels[1] if len(levels) > 1 else None)
+    return QuoteTick(
+        ts=int(data["time"]),
+        market=market or market_of_coin(str(data["coin"])),
+        venue=VENUE_HYPERLIQUID,
+        bid_px=bid_px,
+        bid_sz=bid_sz,
+        ask_px=ask_px,
+        ask_sz=ask_sz,
+    )
+
+
 def normalize_active_asset_ctx(
     data: Any, market: str | None = None, *, recv_ts: int
 ) -> AssetContext:
@@ -296,6 +363,43 @@ def books_to_arrow(books: list[OrderbookSnapshot]) -> pa.Table:
             for b in books
         ],
         schema=DEPTH_SCHEMA,
+    )
+
+
+def quotes_to_arrow(quotes: list[QuoteTick]) -> pa.Table:
+    return pa.Table.from_pylist(
+        [
+            {
+                "ts": q.ts,
+                "market": q.market,
+                "venue": q.venue,
+                "bid_px": q.bid_px,
+                "bid_sz": q.bid_sz,
+                "ask_px": q.ask_px,
+                "ask_sz": q.ask_sz,
+            }
+            for q in quotes
+        ],
+        schema=QUOTES_SCHEMA,
+    )
+
+
+def fundings_to_arrow(rows: list[FundingObservation]) -> pa.Table:
+    return pa.Table.from_pylist(
+        [
+            {
+                "ts": f.ts,
+                "rate_hourly": f.rate_hourly,
+                "interval_s": f.interval_s,
+                "price_basis": f.price_basis,
+                "rate_type": f.rate_type,
+                "venue": f.venue,
+                "market": f.market,
+                "settlement_ts": f.settlement_ts,
+            }
+            for f in rows
+        ],
+        schema=FUNDING_SCHEMA,
     )
 
 

@@ -133,6 +133,24 @@ class DurableCacheSource(DataSource):
         seeded.assert_covered(envelope, "hl_rest")
         return RangeSet((envelope,)).intersect(RangeSet((want,)))
 
+    def coverage_ledger(self, venue: str, market: str, kind: Kind) -> CoverageLedger:
+        """The asserted-coverage ledger of one stream directory, created if absent.
+
+        The write-side hook for coverage-asserting ingesters (the live recorder,
+        §9.2): assertions land in the same ``_coverage.json`` that ``available()``
+        reads, so recorded coverage flows through the ordinary gate machinery.
+        Attaching a writer to a populated pre-ledger non-tick directory first
+        seeds the inferred envelope (the same one-shot migration ``available()``
+        performs) so becoming asserted-authoritative never erases coverage the
+        envelope honestly implied. Tick kinds are never envelope-seeded (§9.0).
+        """
+        ledger = CoverageLedger(self._market_dir(venue, market, kind))
+        if not ledger.exists and not kind.is_tick_scale:
+            held = self._held.get((venue, market, kind))
+            if held is not None:
+                ledger.assert_covered(TimeRange(held[0], held[1] + 1), "hl_rest")
+        return ledger
+
     def fetch(
         self, venue: str, market: str, kind: Kind, span: TimeRange
     ) -> pa.Table:

@@ -39,7 +39,7 @@ from flint.core.models import (
     OrderbookSnapshot,
 )
 from flint.core.time import bar_end, bar_start
-from flint.data.ingest.recorders import WsMessageSource
+from flint.data.ingest.recorders import HyperliquidRecorder, WsMessageSource
 from flint.data.normalize import (
     VENUE_HYPERLIQUID,
     TradePrint,
@@ -52,6 +52,12 @@ from flint.engine.context import OpenInterestSnapshot
 from .aggregator import CandleAggregator, LiveBar
 from .clock import PaperClock
 from .gap import GapRecovery, GapSource
+
+# What a paper session's recorder tee captures by default (§9.2): the tick lane
+# (trades + bbo) and the ctx fold (OI + predicted funding). ``l2Book`` is off by
+# default — depth frames dwarf everything else in volume and are S3-backfillable;
+# opt in via ``record_channels`` for true book capture.
+DEFAULT_RECORD_CHANNELS = frozenset({"trades", "bbo", "activeAssetCtx"})
 
 
 @dataclass
@@ -113,6 +119,8 @@ class LiveFeed:
         gap_source: GapSource | None = None,
         funding_interval_s: int = 3600,
         resume_bar_start: int | None = None,
+        recorder_sink: HyperliquidRecorder | None = None,
+        record_channels: frozenset[str] = DEFAULT_RECORD_CHANNELS,
     ) -> None:
         if resolution_s <= 0:
             raise ValueError(f"resolution_s must be positive, got {resolution_s}")
@@ -130,6 +138,12 @@ class LiveFeed:
         self._last_emitted_bar_start: int | None = resume_bar_start
         self._agg: CandleAggregator | None = None
         self.recoveries: list[GapRecovery] = []
+        # Optional recorder tee (§9.2): the same frames the feed consumes flow
+        # into the durable cache, so a paper session passively builds tick
+        # history. Strictly optional — without a sink nothing here changes.
+        self._recorder = recorder_sink
+        self._record_channels = record_channels
+        self._connected_once = False
 
     # -- public API ------------------------------------------------------------
 
@@ -142,6 +156,20 @@ class LiveFeed:
         """
         frames = list(source.messages())
         emitted: list[LiveBar] = []
+
+        if self._recorder is not None:
+            # A second connection means the previous one dropped: close the
+            # recorder's coverage windows at the last good event so the offline
+            # span is never claimed covered (§9.2), then tee this connection's
+            # frames. The recorder buffers; flushing here persists rows +
+            # asserts coverage once per connection.
+            if self._connected_once:
+                self._recorder.mark_disconnect()
+            for channel, data in frames:
+                if channel in self._record_channels:
+                    self._recorder.process(channel, data)
+            self._recorder.flush()
+        self._connected_once = True
 
         first_ts = self._first_event_ts(frames)
         if first_ts is not None and self._last_emitted_bar_start is not None:
@@ -159,6 +187,10 @@ class LiveFeed:
         Used only when the caller knows the stream ended cleanly; a disconnect
         must *not* call this (the partial bar is authoritative from the lake).
         """
+        if self._recorder is not None:
+            # Graceful end: final recorder flush + coverage windows closed at
+            # the last observed event (§9.2).
+            self._recorder.close_session()
         if self._agg is None:
             return []
         return self._accept(self._agg.flush())

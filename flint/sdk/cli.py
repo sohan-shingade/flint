@@ -343,6 +343,76 @@ def cmd_export(args: argparse.Namespace, *, lab: Lab | None = None, out=print) -
     return 0
 
 
+def cmd_data_record(
+    args: argparse.Namespace, *, source: Any | None = None, cache: Any | None = None, out=print
+) -> int:
+    """Always-on live tick capture without a paper session (§9.2, §12).
+
+    A thin foreground wrapper: WS client + recorder + coverage ledger over the
+    durable cache. Rows land under the same lake layout every backtest reads,
+    and coverage is asserted with provenance ``"recorder"`` so recorded spans
+    flow through the ordinary ``available()`` gate machinery. Ctrl-C is the
+    graceful stop — the final flush closes every ledger range at the last
+    observed event, never beyond it.
+
+    ``source``/``cache`` are injectable for the mocked suite (D26); production
+    builds the live HL socket and a ``DurableCacheSource`` at ``--cache-root``.
+    """
+    import time as _time
+    from pathlib import Path
+
+    from flint.data.ingest.recorders import HyperliquidRecorder, HyperliquidWsSource
+    from flint.data.store import DurableCacheSource
+
+    markets = list(_csv(args.markets))
+    channels = list(_csv(args.channels))
+    store = cache if cache is not None else DurableCacheSource(
+        Path(args.cache_root).expanduser()
+    )
+    clock: Callable[[], int] = lambda: int(_time.time() * 1000)
+    recorder = HyperliquidRecorder(
+        store,
+        clock=clock,
+        venue=args.venue,
+        ledger_of=store.coverage_ledger,
+        session_start_ts=clock(),
+    )
+    ws = source if source is not None else HyperliquidWsSource(markets, channels)
+
+    written: dict[Any, int] = {}
+    frames = 0
+
+    def _tally(batch: dict[Any, int]) -> None:
+        for kind, n in batch.items():
+            written[kind] = written.get(kind, 0) + n
+
+    try:
+        for channel, data in ws.messages():
+            recorder.process(channel, data)
+            frames += 1
+            if frames % args.flush_every == 0:
+                _tally(recorder.flush())
+    except KeyboardInterrupt:
+        pass  # graceful stop: the finally block closes the session cleanly
+    finally:
+        _tally(recorder.close_session())
+
+    _emit(
+        out,
+        json.dumps(
+            {
+                "venue": args.venue,
+                "markets": markets,
+                "channels": channels,
+                "frames": frames,
+                "rows_written": {str(k): v for k, v in written.items()},
+            },
+            sort_keys=True,
+        ),
+    )
+    return 0
+
+
 def cmd_recorder_start(args: argparse.Namespace, *, out=print) -> int:
     """Describe the self-hosted capture (a foreground live process; §12/§20).
 
@@ -503,6 +573,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_cache.add_argument("--start", type=int, default=0)
     p_cache.add_argument("--end", type=int, default=0)
     p_cache.set_defaults(func=cmd_data_cache)
+
+    p_recd = data_sub.add_parser(
+        "record", help="always-on live tick capture into the durable cache"
+    )
+    p_recd.add_argument(
+        "--markets", required=True, help="comma-separated, e.g. SOL-PERP,BTC-PERP"
+    )
+    p_recd.add_argument("--venue", default="hyperliquid", choices=["hyperliquid"])
+    p_recd.add_argument(
+        "--channels",
+        default="trades,bbo,activeAssetCtx",
+        help="WS channels to capture; l2Book is opt-in (volume)",
+    )
+    p_recd.add_argument("--cache-root", dest="cache_root", default="~/.flint/cache")
+    p_recd.add_argument("--flush-every", dest="flush_every", type=int, default=500)
+    p_recd.set_defaults(func=cmd_data_record)
 
     p_imp = data_sub.add_parser(
         "import-legacy", help="lift legacy DuckDB runs into the library"
