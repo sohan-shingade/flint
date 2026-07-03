@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -17,7 +17,7 @@
   --color-gain: #57c84d;
   --color-loss: #e84d4d;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-  --font-display: 'Playfair Display', Georgia, serif;
+  --font-display: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 * {

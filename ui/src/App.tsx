@@ -120,7 +120,7 @@ export default function App() {
       <footer className="relative z-10 border-t border-border px-6 py-3">
         <div className="mx-auto flex max-w-[1400px] items-center justify-between text-[10px] tracking-wider text-ghost/70">
           <span>FLINT v{version}</span>
-          <span className="font-display text-[11px] italic text-ghost/60">Strike alpha on perps</span>
+          <span className="text-[11px] tracking-[0.2em] text-ghost/60">STRIKE ALPHA ON PERPS</span>
           <span>HYPERLIQUID · DUCKDB</span>
         </div>
       </footer>

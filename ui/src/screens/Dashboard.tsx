@@ -71,10 +71,10 @@ export default function Dashboard() {
           </div>
           <div className="min-w-0 flex-1">
             <div className="mb-1 flex items-baseline gap-4">
-              <h1 className="font-display text-4xl italic leading-none text-terminal">Flint</h1>
+              <h1 className="text-4xl font-bold leading-none tracking-[0.25em] text-terminal">FLINT</h1>
               <span className="text-[10px] tracking-[0.3em] text-ghost">PERP / DEX STRATEGY LAB</span>
             </div>
-            <p className="mb-4 font-display text-sm italic text-amber/60">Strike alpha on perps</p>
+            <p className="mb-4 text-sm tracking-[0.25em] text-amber/60">STRIKE ALPHA ON PERPS</p>
             <div className="flex flex-wrap items-center gap-6 text-[11px]">
               <div className="flex items-center gap-2">
                 <span className={`h-1.5 w-1.5 rounded-full ${health?.ok ? 'bg-phosphor' : 'bg-loss'}`} />
