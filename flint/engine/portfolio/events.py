@@ -30,9 +30,13 @@ RUN_FINISHED = "run_finished"
 
 # Phase-3 engine kinds (§6). ORDER_PLACED records an accepted order entering the
 # shared fill path; FILL an executed trade; FUNDING a settled funding payment;
-# LIQUIDATION a mark-triggered forced close. All carry ``ts`` = the domain time
-# they occurred at, so replay/fold (slice 3.5) reconstructs state in order.
+# LIQUIDATION a mark-triggered forced close. ORDER_REJECTED / ORDER_CANCELLED are
+# the terminal order-state transitions (§6.2) — a fill check failing and an IOC
+# remainder / close / run-end cancel respectively. All carry ``ts`` = the domain
+# time they occurred at, so replay/fold (slice 3.5) reconstructs state in order.
 ORDER_PLACED = "order_placed"
+ORDER_REJECTED = "order_rejected"
+ORDER_CANCELLED = "order_cancelled"
 FILL = "fill"
 FUNDING = "funding"
 LIQUIDATION = "liquidation"

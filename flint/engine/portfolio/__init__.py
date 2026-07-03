@@ -13,11 +13,14 @@ from .events import (
     FUNDING,
     LIQUIDATION,
     NOOP,
+    ORDER_CANCELLED,
     ORDER_PLACED,
+    ORDER_REJECTED,
     RUN_FINISHED,
     RUN_STARTED,
     Event,
 )
+from .replay import BookState, apply_fill_delta, fold
 from .upcasters import REGISTRY, UpcasterRegistry
 
 __all__ = [
@@ -29,7 +32,12 @@ __all__ = [
     "RUN_STARTED",
     "RUN_FINISHED",
     "ORDER_PLACED",
+    "ORDER_REJECTED",
+    "ORDER_CANCELLED",
     "FILL",
     "FUNDING",
     "LIQUIDATION",
+    "BookState",
+    "fold",
+    "apply_fill_delta",
 ]

@@ -16,6 +16,8 @@ from .loop import (
     Strategy,
 )
 from .money import ZERO, Money, money
+from .orders import OrderRecord, OrderStatus
+from .portfolio import BookState, fold
 from .state import Account, PortfolioState
 
 __all__ = [
@@ -26,6 +28,10 @@ __all__ = [
     "NoopStrategy",
     "PortfolioState",
     "Account",
+    "OrderRecord",
+    "OrderStatus",
+    "BookState",
+    "fold",
     "Money",
     "money",
     "ZERO",

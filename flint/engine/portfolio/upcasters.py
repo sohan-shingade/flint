@@ -20,6 +20,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .events import FILL
+
 PayloadUpcaster = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
@@ -70,3 +72,12 @@ class UpcasterRegistry:
 
 # The process-wide registry used by EventLog unless a caller injects its own.
 REGISTRY = UpcasterRegistry()
+
+
+@REGISTRY.register(FILL, 1)
+def _fill_v1_to_v2(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """FILL v2 adds ``margin_mode`` so replay/fold (slice 3.5) can rebuild a
+    position's cross/isolated tag from the event alone (§6.5). Pre-v2 fills
+    predate per-order margin mode and were all cross — the honest default.
+    """
+    return {**payload, "margin_mode": payload.get("margin_mode", "cross")}

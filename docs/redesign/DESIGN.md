@@ -778,7 +778,7 @@ Long 10 SOL, entry 100.00, 20× leverage so $50 margin, maintenance margin 2.5%.
 
 | Field | What it encodes | HL example |
 |---|---|---|
-| `liquidation_fee` | the penalty formula | distance-based: close lands between mark and the **bankruptcy price** via the HLP vault |
+| `liquidation_fee` | the post-trigger loss mechanism (HL: a backstop, not a clearance fee) | **no clearance fee on HL (verified)**; sub-bankruptcy loss = backstop forfeiture below ⅔ maintenance via the HLP vault *(erratum fixed during build — primary source normative; the prior "distance-based penalty formula" wording described the backstop mechanism, not a fee)* |
 | `bankruptcy_price` | the price at which margin is exactly zero | `entry − margin/size` for a long |
 | `insurance_fund` | who absorbs the gap below bankruptcy | v1 simplification: **assumed solvent** (documented on the tearsheet whenever a liq event occurs) |
 | `adl_rank` | how counterparties are chosen if the fund fails | HL: by PnL% × leverage rank — **not** "largest loser" |

@@ -87,3 +87,22 @@ class PortfolioState:
             if mark is not None:
                 total += pos.unrealized_pnl(mark)
         return total
+
+    def cross_margin_available(
+        self, venue: str, marks: dict[str, float]
+    ) -> float:
+        """The shared cross pool on ``venue`` = equity − locked isolated margin (§6.5).
+
+        Cross positions all draw on this one pool, so one breaching endangers the
+        rest (the cascade in ``loop._resolve_cross_pool``). Isolated positions
+        consume only their own dedicated ``isolated_margin`` and are excluded — a
+        scalar ``margin_used`` would hide exactly that split, which is what gets
+        leveraged traders killed. The sizing helpers (§8.1, slice 3.6) size off
+        this and ``equity`` so positions compound with the account.
+        """
+        isolated = sum(
+            pos.isolated_margin
+            for (pos_venue, _market), pos in self.positions.items()
+            if pos_venue == venue and pos.margin_mode == "isolated"
+        )
+        return self.equity(venue, marks) - isolated

@@ -35,7 +35,7 @@ sequence above is the contract.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from random import Random
 from typing import Protocol
 
@@ -56,10 +56,13 @@ from flint.engine.portfolio import (
     FILL,
     FUNDING,
     LIQUIDATION,
+    ORDER_CANCELLED,
     ORDER_PLACED,
+    ORDER_REJECTED,
     RUN_FINISHED,
     RUN_STARTED,
     EventLog,
+    apply_fill_delta,
 )
 from flint.venues import HYPERLIQUID, VenueSpec
 
@@ -71,6 +74,7 @@ from .fills import (
     TradePrint,
     fill_model_for,
 )
+from .orders import OrderRecord, OrderStatus
 from .funding.settlement import (
     clamp_funding_rate,
     settlement_payment,
@@ -186,7 +190,10 @@ class BacktestEngine:
         # Resting stop/limit/TP orders live until triggered, cancelled, or the
         # run ends (GTC).
         self._resting: list[Order] = []
-        self._coid = 0  # client-order-id counter (slice 3.5 makes it idempotent)
+        # The persisted order state machine (§6.2), keyed by client_order_id — the
+        # idempotency ledger: a re-submitted id is recognized here, never doubled.
+        self._orders: dict[str, OrderRecord] = {}
+        self._coid = 0  # auto client-order-id counter for engine-originated orders
         # Last representative (bar-closing) mark per (venue, market) — lets the
         # cross-pool liquidation check value positions on markets other than the
         # one whose candle is being processed this bar (§6.5).
@@ -220,8 +227,17 @@ class BacktestEngine:
         self._log.emit(RUN_STARTED, {"engine": "backtest"})
         for candle in candles:
             self._process_bar(candle, marks, funding, strat)
+        # GTC orders are open "until cancelled or the run ends" (§8.1): any order
+        # still resting at the end is cancelled to a terminal state, never left
+        # dangling — so the folded state machine has no orphaned live orders.
+        self._cancel_resting_at_run_end()
         self._log.emit(RUN_FINISHED, {"engine": "backtest"})
         return self.state
+
+    def _cancel_resting_at_run_end(self) -> None:
+        for order in self._resting:
+            self._cancel(order, reason="run_ended")
+        self._resting = []
 
     # -- the locked per-bar sequence (§6.1) ------------------------------------
 
@@ -273,8 +289,15 @@ class BacktestEngine:
                 continue
             ctx = self._fill_ctx(candle, candle.open, order, market_marks)
             result = self._fill.fill(order, ctx)
-            if result is not None:  # IOC: any unfilled remainder is cancelled
-                self._apply_fill(order, result)
+            if result is None:  # nothing filled (FOK unmet, zero-vol, band) → reject
+                self._reject(order, reason="no_fill")
+                continue
+            self._apply_fill(order, result)
+            # Market orders are IOC: any remainder left after a partial fill is
+            # cancelled, carrying the order to a terminal state (§6.2).
+            rec = self._orders.get(order.client_order_id)
+            if rec is not None and rec.status is OrderStatus.PARTIAL:
+                self._cancel(order, reason="ioc_remainder")
         self._pending_market = still_pending
 
     # -- (3) funding -----------------------------------------------------------
@@ -580,8 +603,7 @@ class BacktestEngine:
                     reduce_only=True,
                     margin_mode=pos.margin_mode,
                 )
-                self._pending_market.append(order)
-                self._emit_placed(order)
+                self._submit(order)
                 continue
             if sig.size <= 0:
                 # size_usd sizing needs the next bar's open mark — deferred to
@@ -599,7 +621,6 @@ class BacktestEngine:
                     tif=sig.tif or TimeInForce.GTC,
                     margin_mode=sig.margin_mode,
                 )
-                self._resting.append(order)
             else:
                 order = self._new_order(
                     market=sig.market,
@@ -610,49 +631,98 @@ class BacktestEngine:
                     tif=TimeInForce.IOC,
                     margin_mode=sig.margin_mode,
                 )
-                self._pending_market.append(order)
-            self._emit_placed(order)
+            self._submit(order)
+
+    # -- the persisted order state machine (§6.2) ------------------------------
+
+    def _submit(self, order: Order) -> OrderRecord:
+        """Register ``order`` through the persisted state machine, idempotently (§6.2).
+
+        A ``client_order_id`` already known is recognized and returned unchanged —
+        never re-queued or double-filled (the paper-reconnect guard). A fresh order
+        enters ``pending``, is accepted to ``placed`` (ORDER_PLACED emitted), and
+        joins the shared fill path: a market order waits for the next bar's open
+        (T+1); a resting order lives until triggered, cancelled, or the run ends.
+        """
+        existing = self._orders.get(order.client_order_id)
+        if existing is not None:
+            return existing  # idempotent duplicate — already in the machine
+        rec = OrderRecord(
+            client_order_id=order.client_order_id,
+            market=order.market,
+            venue=order.venue,
+            side=order.side,
+            type=order.type,
+            size=order.size,
+            price=order.price,
+        )
+        self._orders[order.client_order_id] = rec
+        rec.transition(OrderStatus.PLACED)
+        self._emit_placed(order)
+        if order.type is OrderType.MARKET:
+            self._pending_market.append(order)
+        else:
+            self._resting.append(order)
+        return rec
+
+    def _reject(self, order: Order, *, reason: str) -> None:
+        """Carry ``order`` to the terminal ``rejected`` state and emit (§6.2)."""
+        rec = self._orders.get(order.client_order_id)
+        if rec is None or rec.is_terminal:
+            return
+        rec.transition(OrderStatus.REJECTED, reason=reason)
+        self._emit_order_terminal(ORDER_REJECTED, order, reason)
+
+    def _cancel(self, order: Order, *, reason: str) -> None:
+        """Carry ``order`` to the terminal ``cancelled`` state and emit (§6.2)."""
+        rec = self._orders.get(order.client_order_id)
+        if rec is None or rec.is_terminal:
+            return
+        rec.transition(OrderStatus.CANCELLED, reason=reason)
+        self._emit_order_terminal(ORDER_CANCELLED, order, reason)
+
+    def _emit_order_terminal(self, kind: str, order: Order, reason: str) -> None:
+        self._log.emit(
+            kind,
+            {
+                "client_order_id": order.client_order_id,
+                "market": order.market,
+                "venue": order.venue,
+                "reason": reason,
+            },
+        )
 
     # -- shared fill application -----------------------------------------------
 
     def _apply_fill(
         self, order: Order, result: FillResult, *, intrabar_ambiguous: bool = False
     ) -> None:
-        """Apply a fill to cash + the position book and emit a FILL event."""
+        """Apply a fill to cash + the position book and emit a FILL event.
+
+        The position math is ``apply_fill_delta`` — the *same* reducer
+        ``replay.fold`` uses — so the live book and a folded book cannot diverge
+        (§2.10). The fill also advances the order's state machine (§6.2) and the
+        FILL event carries ``margin_mode`` (v2) so fold rebuilds the position's
+        cross/isolated tag from the event alone.
+        """
         fill = result.fill
         acct = self.state.account(fill.venue)
         acct.cash -= money(fill.fee)
         acct.fees_paid += money(fill.fee)
-        key = (fill.venue, fill.market)
-        pos = self.state.positions.get(key)
-        realized = 0.0
-        if pos is None:
-            self.state.positions[key] = Position(
-                market=fill.market,
-                venue=fill.venue,
-                side=fill.side,
-                size=fill.size,
-                entry_price=fill.price,
-                margin_mode=order.margin_mode,
-            )
-        elif pos.side is fill.side:
-            total = pos.size + fill.size
-            entry = (pos.entry_price * pos.size + fill.price * fill.size) / total
-            self.state.positions[key] = replace(pos, size=total, entry_price=entry)
-        else:
-            closed = min(pos.size, fill.size)
-            realized = (fill.price - pos.entry_price) * pos.side.sign * closed
+        realized = apply_fill_delta(
+            self.state.positions,
+            (fill.venue, fill.market),
+            side=fill.side,
+            size=fill.size,
+            price=fill.price,
+            margin_mode=order.margin_mode,
+        )
+        if realized:
             acct.credit(money(realized))
             acct.realized_pnl += money(realized)
-            remaining = pos.size - fill.size
-            if remaining > 0:
-                self.state.positions[key] = replace(pos, size=remaining)
-            elif remaining == 0:
-                del self.state.positions[key]
-            else:  # flip: close the old side, open the remainder on the fill side
-                self.state.positions[key] = replace(
-                    pos, side=fill.side, size=-remaining, entry_price=fill.price
-                )
+        rec = self._orders.get(fill.client_order_id)
+        if rec is not None and not rec.is_terminal:
+            rec.apply_fill(fill.size)
         self._log.emit(
             FILL,
             {
@@ -667,11 +737,13 @@ class BacktestEngine:
                 "fidelity_tier": fill.fidelity_tier,
                 "slippage_bps": fill.slippage_bps,
                 "is_partial": fill.is_partial,
+                "margin_mode": order.margin_mode,
                 "realized_pnl": str(money(realized)),
                 "intrabar_ambiguous": intrabar_ambiguous,
                 "flags": list(result.flags),
             },
             ts=fill.ts,
+            event_version=2,
         )
 
     # -- small helpers ---------------------------------------------------------
