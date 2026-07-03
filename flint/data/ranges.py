@@ -25,6 +25,10 @@ class Kind(StrEnum):
     FUNDING = "funding"
     OI = "oi"
     DEPTH = "depth"
+    # Trade prints — the now-or-never WS capture that lifts fills to Tier A
+    # (§3.5, §9.1). Treated as a normal fetchable kind here (neither hard-gated
+    # nor degradable); the trades→Tier-A fidelity wiring is a Phase-3 fill concern.
+    TRADES = "trades"
 
     @property
     def is_hard_required(self) -> bool:

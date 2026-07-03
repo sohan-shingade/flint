@@ -9,6 +9,7 @@ from .manager import (
     Leg,
     PreparedData,
 )
+from .normalize import AssetContext, TradePrint
 from .ranges import Kind, RangeSet, TimeRange
 from .sources import (
     DataSource,
@@ -36,6 +37,8 @@ __all__ = [
     "FundingCoverageError",
     "Leg",
     "PreparedData",
+    "AssetContext",
+    "TradePrint",
     "Kind",
     "RangeSet",
     "TimeRange",

@@ -13,6 +13,7 @@ from .quality import (
     detect_candle_gaps,
     expected_bar_count,
 )
+from .scheduler import CronScheduler
 from .transport import HttpTransport, HttpsObjectStore, HttpxTransport, ObjectStore
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "check_prewrite",
     "detect_candle_gaps",
     "expected_bar_count",
+    "CronScheduler",
     "HttpTransport",
     "HttpsObjectStore",
     "HttpxTransport",

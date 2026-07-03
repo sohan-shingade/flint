@@ -23,11 +23,22 @@ from typing import Any
 
 
 class HttpTransport(ABC):
-    """A JSON-over-HTTP POST. One method — the only shape HL's info API needs."""
+    """JSON over HTTP. POST (HL's info API) + GET (Pyth Hermes latest prices)."""
 
     @abstractmethod
     def post_json(self, url: str, body: Mapping[str, Any]) -> Any:
         """POST ``body`` as JSON to ``url``; return the decoded JSON response."""
+        ...
+
+    @abstractmethod
+    def get_json(
+        self,
+        url: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Any:
+        """GET ``url`` with query ``params`` and ``headers``; return decoded JSON."""
         ...
 
 
@@ -54,6 +65,24 @@ class HttpxTransport(HttpTransport):
         import httpx
 
         resp = httpx.post(url, json=dict(body), timeout=self._timeout_s)
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_json(
+        self,
+        url: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Any:
+        import httpx
+
+        resp = httpx.get(
+            url,
+            params=dict(params) if params else None,
+            headers=dict(headers) if headers else None,
+            timeout=self._timeout_s,
+        )
         resp.raise_for_status()
         return resp.json()
 

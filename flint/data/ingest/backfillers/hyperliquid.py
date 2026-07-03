@@ -15,8 +15,18 @@ Two ingestion paths for the one v1 execution venue:
   **idempotent upserts keyed ``(venue, market, ts)``** through an injectable sink
   (the local cache today, the lake later), after running the §9.0 quality bars.
 
-Both take injectable transports (``transport.py``); no method here opens a socket
-on its own, so every test drives them with recorded fixture fragments (D26).
+**Mark/oracle coverage is coupled to OI coverage (v1, team-lead ruling).** An
+``asset_ctxs`` record is one row bundling ``oi`` + ``mark_price`` + ``index_price``
+(oracle) + ``funding_hourly``, persisted under ``Kind.OI`` — so mark and oracle
+history exist exactly where OI history does, never independently. If engine wiring
+ever needs a standalone mark series at a different cadence, the additive fix is a
+dedicated ``Kind.MARK`` (its own rows/schema); nothing here needs rewriting.
+
+Normalization of the ``l2Book`` and ``asset_ctxs`` shapes is delegated to
+``data.normalize`` — the one parser shared with the WS recorders and the Phase-5
+LiveFeed (§6.7), so an archive row and a live frame land byte-compatible in the
+store. Both classes take injectable transports (``transport.py``); no method here
+opens a socket on its own, so every test drives them with recorded fragments (D26).
 """
 
 from __future__ import annotations
@@ -29,6 +39,12 @@ import pyarrow as pa
 
 from ..quality import BackfillResult, check_prewrite
 from ..transport import HttpTransport, ObjectStore
+from ...normalize import (
+    books_to_arrow,
+    contexts_to_arrow,
+    normalize_asset_ctx_record,
+    normalize_l2book,
+)
 from ...ranges import Kind, RangeSet, TimeRange
 
 VENUE = "hyperliquid"
@@ -108,28 +124,8 @@ _FUNDING_SCHEMA = pa.schema(
     ]
 )
 
-_LEVEL_TYPE = pa.list_(pa.float64())  # one [px, sz] pair
-_DEPTH_SCHEMA = pa.schema(
-    [
-        ("ts", pa.int64()),
-        ("market", pa.string()),
-        ("venue", pa.string()),
-        ("bids", pa.list_(_LEVEL_TYPE)),  # best-first [[px, sz], ...]
-        ("asks", pa.list_(_LEVEL_TYPE)),
-    ]
-)
-
-_OI_SCHEMA = pa.schema(
-    [
-        ("ts", pa.int64()),
-        ("market", pa.string()),
-        ("venue", pa.string()),
-        ("oi", pa.float64()),
-        ("mark_price", pa.float64()),
-        ("index_price", pa.float64()),
-        ("funding_hourly", pa.float64()),
-    ]
-)
+# Depth + OI Arrow schemas are owned by ``data.normalize`` (shared with the WS
+# recorders + LiveFeed) so archive rows and live frames are store-compatible.
 
 
 class UpsertSink(Protocol):
@@ -355,7 +351,7 @@ class HyperliquidS3Backfiller:
         A missing hour object is a coverage gap (recorded in ``gaps``), not an
         error — the archive genuinely lacks some early hours.
         """
-        rows: list[dict[str, Any]] = []
+        books = []
         missing_hours: list[TimeRange] = []
         for hour in hours:
             recs = self._decode_lines(self._store.get(self.l2book_key(market, date, hour)))
@@ -364,8 +360,8 @@ class HyperliquidS3Backfiller:
                 missing_hours.append(TimeRange(base, base + 3_600_000))
                 continue
             for r in recs:
-                rows.append(_normalize_l2book(r, market))
-        table = _dedupe_by_ts(pa.Table.from_pylist(rows, schema=_DEPTH_SCHEMA))
+                books.append(normalize_l2book(r, market))
+        table = _dedupe_by_ts(books_to_arrow(books))
         quality = check_prewrite(table, price_col=None, volume_col=None)
         written = 0
         if quality.ok and table.num_rows:
@@ -390,15 +386,15 @@ class HyperliquidS3Backfiller:
         context carries ``oi`` plus the mark/oracle prices in the same row).
         """
         recs = self._decode_lines(self._store.get(self.asset_ctxs_key(date)))
-        by_market: dict[str, list[dict[str, Any]]] = {m: [] for m in markets}
+        by_market: dict[str, list] = {m: [] for m in markets}
         wanted = {coin_of(m): m for m in markets}
         for r in recs:
             market = wanted.get(str(r.get("coin", "")))
             if market is not None:
-                by_market[market].append(_normalize_asset_ctx(r, market))
+                by_market[market].append(normalize_asset_ctx_record(r, market))
         results: dict[str, BackfillResult] = {}
-        for market, mrows in by_market.items():
-            table = _dedupe_by_ts(pa.Table.from_pylist(mrows, schema=_OI_SCHEMA))
+        for market, contexts in by_market.items():
+            table = _dedupe_by_ts(contexts_to_arrow(contexts))
             quality = check_prewrite(table, price_col="mark_price", volume_col=None)
             written = 0
             if quality.ok and table.num_rows:
@@ -408,42 +404,6 @@ class HyperliquidS3Backfiller:
                 kind=str(Kind.OI), rows_written=written, quality=quality
             )
         return results
-
-
-# --- archive record normalisers ---------------------------------------------
-
-
-def _levels(side: Any) -> list[list[float]]:
-    """Normalise an HL book side (``[{"px","sz","n"}, ...]``) to ``[[px, sz], ...]``."""
-    out: list[list[float]] = []
-    for lvl in side or []:
-        out.append([float(lvl["px"]), float(lvl["sz"])])
-    return out
-
-
-def _normalize_l2book(rec: dict[str, Any], market: str) -> dict[str, Any]:
-    levels = rec.get("levels") or [[], []]
-    bids = _levels(levels[0]) if len(levels) > 0 else []
-    asks = _levels(levels[1]) if len(levels) > 1 else []
-    return {
-        "ts": int(rec["time"]),
-        "market": market,
-        "venue": VENUE,
-        "bids": bids,
-        "asks": asks,
-    }
-
-
-def _normalize_asset_ctx(rec: dict[str, Any], market: str) -> dict[str, Any]:
-    return {
-        "ts": int(rec["time"]),
-        "market": market,
-        "venue": VENUE,
-        "oi": float(rec.get("openInterest", 0.0)),
-        "mark_price": float(rec.get("markPx", 0.0)),
-        "index_price": float(rec.get("oraclePx", 0.0)),
-        "funding_hourly": float(rec.get("funding", 0.0)),
-    }
 
 
 def _hour_ms(date: str, hour: int) -> int:
