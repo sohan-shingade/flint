@@ -234,6 +234,8 @@ def _migrate_funding(
                     "rate_type": _LEGACY_FUNDING_RATE_TYPE,
                     "venue": r["venue"],
                     "market": r["market"],
+                    # Legacy rows are settled rates: they settled at their ts.
+                    "settlement_ts": int(r["ts"]),
                 },
             )
             for r in rows

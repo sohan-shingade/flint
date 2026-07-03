@@ -9,11 +9,24 @@ partitions (depth hour-partitioned), each file stamped with ``schema_version``
 and upgraded on read (§9.0) — the same physical layout the hosted lake uses, so
 a cached partition and a lake partition are byte-identical.
 
-Coverage is reported as the honest ``[min_ts, max_ts + 1)`` envelope of the rows
-actually on disk for a ``(venue, market, kind)`` — never assumed — mirroring the
-in-memory tier. The held-range index is seeded from the ts column statistics of
-existing partition files on construction, so re-opening a populated cache knows
-what it holds without re-reading every row.
+Coverage has two regimes (§9.0):
+
+* **Asserted** — a ``_coverage.json`` :class:`CoverageLedger` in the
+  ``(kind, venue, market)`` directory holds ingester-asserted ranges. When one
+  is present it is authoritative: ``available()`` reports exactly what was
+  asserted, and non-tick write-throughs extend it with the stored envelope.
+  Tick-scale kinds (trades/quotes/book deltas) **require** it — rows without a
+  ledger contribute *no* coverage, because a quiet market and a capture gap are
+  indistinguishable at the row level.
+* **Inferred** — with no ledger, non-tick kinds keep the honest
+  ``[min_ts, max_ts + 1)`` envelope of the rows actually on disk, mirroring the
+  in-memory tier. The first ``available()`` touch of such a populated directory
+  seeds a ledger from that envelope (one-shot migration, provenance
+  ``hl_rest``) so pre-ledger caches keep working verbatim.
+
+The held-range index is seeded from the ts column statistics of existing
+partition files on construction, so re-opening a populated cache knows what it
+holds without re-reading every row.
 """
 
 from __future__ import annotations
@@ -27,10 +40,25 @@ import pyarrow.parquet as pq
 
 from ..ranges import Kind, RangeSet, TimeRange
 from ..sources import DataSource
+from .coverage import CoverageLedger
 from .layout import MigrationRegistry, partition_path, read_parquet, write_parquet
 
 _PART_FILE = "part.parquet"
-_HOUR_PARTITIONED = frozenset({Kind.DEPTH})
+# Sampled depth snapshots plus every tick-scale kind (mirrors layout.py's
+# string-keyed set for the path grammar).
+_HOUR_PARTITIONED = frozenset({Kind.DEPTH}) | frozenset(
+    k for k in Kind if k.is_tick_scale
+)
+
+# Duplicate-row identity per kind (§B2 pre-flight fix): dedupe by ts alone
+# silently drops one of a predicted+final funding pair sharing a settlement ts,
+# and distinct trades/deltas can legitimately share a millisecond. Columns
+# missing from a table are skipped, so schema-light fixtures degrade to ts.
+_DEDUPE_KEYS: dict[Kind, tuple[str, ...]] = {
+    Kind.FUNDING: ("ts", "rate_type"),
+    Kind.TRADES: ("ts", "trade_id"),
+    Kind.BOOK_DELTA: ("ts", "seq"),
+}
 
 
 def _date_of(ts_ms: int) -> str:
@@ -41,14 +69,24 @@ def _hour_of(ts_ms: int) -> int:
     return datetime.fromtimestamp(ts_ms / 1000, tz=UTC).hour
 
 
-def _dedupe_sorted_by_ts(table: pa.Table) -> pa.Table:
+def _dedupe_sorted(table: pa.Table, kind: Kind) -> pa.Table:
+    """Sort by the kind's identity key and drop consecutive duplicates."""
     import pyarrow.compute as pc
 
-    if table.num_rows < 2 or "ts" not in table.column_names:
-        return table.sort_by("ts") if table.num_rows and "ts" in table.column_names else table
-    sorted_table = table.sort_by("ts")
-    ts = sorted_table.column("ts").combine_chunks()
-    keep = pa.concat_arrays([pa.array([True]), pc.not_equal(ts[1:], ts[:-1])])
+    if "ts" not in table.column_names or table.num_rows == 0:
+        return table
+    keys = tuple(
+        c for c in _DEDUPE_KEYS.get(kind, ("ts",)) if c in table.column_names
+    ) or ("ts",)
+    sorted_table = table.sort_by([(k, "ascending") for k in keys])
+    if sorted_table.num_rows < 2:
+        return sorted_table
+    differs = None
+    for k in keys:
+        col = sorted_table.column(k).combine_chunks()
+        step = pc.not_equal(col[1:], col[:-1])
+        differs = step if differs is None else pc.or_(differs, step)
+    keep = pa.concat_arrays([pa.array([True]), differs])
     return sorted_table.filter(keep)
 
 
@@ -72,10 +110,27 @@ class DurableCacheSource(DataSource):
     def available(
         self, venue: str, market: str, kind: Kind, want: TimeRange
     ) -> RangeSet:
+        ledger = CoverageLedger.load(self._market_dir(venue, market, kind))
+        if ledger is not None:
+            # Asserted coverage is authoritative once a ledger exists.
+            return ledger.covered().intersect(RangeSet((want,)))
+        if kind.is_tick_scale:
+            # Ledger-mandatory: rows without an asserted ledger contribute NO
+            # coverage — a quiet market and a capture gap look identical at the
+            # row level, so tick coverage is never inferred (§9.0).
+            return RangeSet()
         held = self._held.get((venue, market, kind))
         if held is None:
             return RangeSet()
         envelope = TimeRange(held[0], held[1] + 1)
+        # One-shot envelope-seeding migration: a populated pre-ledger directory
+        # gets its inferred envelope asserted (provenance "hl_rest") on this
+        # first available() touch, so existing caches keep working while all
+        # later reads go through the ledger path above. available() is the
+        # trigger because it is the single entry point of every coverage
+        # question (the manager's source chain always asks before fetching).
+        seeded = CoverageLedger(self._market_dir(venue, market, kind))
+        seeded.assert_covered(envelope, "hl_rest")
         return RangeSet((envelope,)).intersect(RangeSet((want,)))
 
     def fetch(
@@ -88,7 +143,7 @@ class DurableCacheSource(DataSource):
         tables = [t for t in tables if t.num_rows]
         if not tables:
             return pa.table({})
-        merged = _dedupe_sorted_by_ts(pa.concat_tables(tables))
+        merged = _dedupe_sorted(pa.concat_tables(tables), kind)
         return self._slice_half_open(merged, span)
 
     def store(self, venue: str, market: str, kind: Kind, table: pa.Table) -> None:
@@ -98,12 +153,24 @@ class DurableCacheSource(DataSource):
         for path, part in self._split_into_partitions(venue, market, kind, table):
             existing = read_parquet(str(path), registry=self._registry) if path.exists() else None
             combined = pa.concat_tables([existing, part]) if existing is not None else part
-            merged = _dedupe_sorted_by_ts(combined)
+            merged = _dedupe_sorted(combined, kind)
             path.parent.mkdir(parents=True, exist_ok=True)
             write_parquet(merged, str(path))
-        self._extend_held(venue, market, kind, table)
+        lo, hi = self._extend_held(venue, market, kind, table)
+        if not kind.is_tick_scale:
+            # Once a directory has an authoritative ledger, non-tick
+            # write-throughs must keep extending it (the stored table's envelope
+            # is exactly the inference the pre-ledger fallback would have made).
+            # Tick kinds never self-assert: their ingesters own the assertion.
+            ledger = CoverageLedger.load(self._market_dir(venue, market, kind))
+            if ledger is not None:
+                ledger.assert_covered(TimeRange(lo, hi + 1), "hl_rest")
 
     # --- partition layout --------------------------------------------------
+
+    def _market_dir(self, venue: str, market: str, kind: Kind) -> Path:
+        """The ``(kind, venue, market)`` directory — where the ledger lives."""
+        return self._root / kind.value / venue / market
 
     def _partition_dir(
         self, venue: str, market: str, kind: Kind, ts_ms: int
@@ -144,7 +211,8 @@ class DurableCacheSource(DataSource):
 
     def _extend_held(
         self, venue: str, market: str, kind: Kind, table: pa.Table
-    ) -> None:
+    ) -> tuple[int, int]:
+        """Extend the held index with ``table``'s ts bounds; return them."""
         import pyarrow.compute as pc
 
         col = table.column("ts")
@@ -156,6 +224,7 @@ class DurableCacheSource(DataSource):
             self._held[key] = (lo, hi)
         else:
             self._held[key] = (min(prev[0], lo), max(prev[1], hi))
+        return lo, hi
 
     def _reindex(self) -> None:
         """Seed the held-range index from ts stats of existing partition files."""

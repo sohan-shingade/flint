@@ -139,9 +139,12 @@ def test_funding_normalised_to_hourly_with_derived_8h_interval():
     table = prov.fetch_range("SOL-PERP", Kind.FUNDING, TimeRange(T0, T0 + 3 * H8))
 
     assert table.column_names == [
-        "ts", "rate_hourly", "interval_s", "price_basis", "rate_type", "venue", "market",
+        "ts", "rate_hourly", "interval_s", "price_basis", "rate_type", "venue",
+        "market", "settlement_ts",
     ]
     assert table.column("ts").to_pylist() == [T0, T0 + H8, T0 + 2 * H8]
+    # Final rates settle at their own ts (§6.4).
+    assert table.column("settlement_ts").to_pylist() == [T0, T0 + H8, T0 + 2 * H8]
     # per-interval rate / 8h
     assert table.column("rate_hourly").to_pylist() == pytest.approx(
         [0.0001, 0.0002, -0.0001]

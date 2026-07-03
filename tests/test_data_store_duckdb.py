@@ -168,11 +168,17 @@ def test_read_parquet_upgrades_old_file_on_read(tmp_path):
     assert "venue" not in pq.read_table(path).column_names
 
 
-def test_read_parquet_needs_a_registry_for_old_files(tmp_path):
+def test_read_parquet_defaults_to_builtin_migrations(tmp_path):
+    # A lake-v1 file promotes through DEFAULT_MIGRATIONS without an explicit
+    # registry (non-funding tables pass through the v1→v2 step unchanged)...
     path = str(tmp_path / "old.parquet")
     write_parquet(pa.table({"ts": [1]}), path, schema_version=1)
+    assert read_parquet(path, to_version=2).column_names == ["ts"]
+    # ...but a version with no registered step still refuses loudly.
+    ancient = str(tmp_path / "ancient.parquet")
+    write_parquet(pa.table({"ts": [1]}), ancient, schema_version=0)
     with pytest.raises(KeyError):
-        read_parquet(path, to_version=2)  # no registry to bridge the gap
+        read_parquet(ancient, to_version=2)
 
 
 def test_migration_registry_rejects_duplicate_and_walks_chain():
