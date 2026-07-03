@@ -26,9 +26,14 @@ Contract:
   the copy.
 
 Run metadata (equity journals, strategy rows) has no market-data home in the new
-store, and the Run Library that will own it is Phase 6. This importer therefore
-*inventories* run-metadata tables (row counts in the report) but does not move
-them; that lands with the Run Library. See ``docs/redesign/MIGRATION.md``.
+store, so :func:`migrate_legacy_duckdb` only *inventories* those tables (row counts
+in the report) — it never moves them. The Run Library (Phase 6, ``research/runlib.py``)
+is what owns them, and :func:`extract_legacy_run_metadata` /
+:func:`import_legacy_runs_from_duckdb` are the read-only bridge into it: they lift the
+``strategies`` / ``journal_equity`` rows out of the same read-only connection and hand
+them to the Run Library importer, which maps them into tenant-scoped head records with
+honest ``"legacy"`` sentinels (never a fabricated seed or engine version, D26). See
+``docs/redesign/MIGRATION.md`` and ``research/runlib.py``.
 """
 
 from __future__ import annotations
@@ -47,6 +52,8 @@ from .ranges import Kind
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import duckdb
+
+    from flint.ports import TenantContext, UserDataPort
 
 _logger = logging.getLogger("flint.data.migrate")
 
@@ -316,6 +323,93 @@ def _inventory_run_metadata(
         if _table_exists(con, name):
             (count,) = con.execute(f"SELECT count(*) FROM {name}").fetchone()
             report.run_metadata_counts[name] = int(count)
+
+
+# --- run-metadata bridge into the Run Library (§19.6, research/runlib.py) ----
+
+
+def extract_legacy_run_metadata(
+    legacy_path: str | Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read the legacy ``strategies`` / ``journal_equity`` rows as import-shaped dicts.
+
+    The read-only companion to :func:`migrate_legacy_duckdb` (which only *counts* these
+    run-metadata tables): opens ``legacy_path`` strictly read-only (§19.6 — the greenfield
+    deletes old code, never old data) and returns ``(strategy_rows, journal_rows)`` in the
+    exact shape :func:`flint.research.runlib.import_legacy_runs` accepts. Legacy column
+    names are translated to that surface's keys and values are carried verbatim — nothing
+    is fabricated (D26); absent tables yield an empty list, never an error.
+
+    ``journal_equity`` has no stored link to ``strategies`` in the legacy schema (its
+    ``run_id`` is a run identifier, not a strategy name/id), so the two are extracted
+    independently and grouped downstream by their own keys — an honest reflection of two
+    disconnected legacy tables, not an invented join.
+    """
+    import duckdb
+
+    path = Path(legacy_path)
+    if not path.exists():
+        raise FileNotFoundError(f"legacy DuckDB not found: {path}")
+
+    con = duckdb.connect(str(path), read_only=True)
+    try:
+        strategy_rows = _extract_strategy_rows(con)
+        journal_rows = _extract_journal_rows(con)
+    finally:
+        con.close()
+    return strategy_rows, journal_rows
+
+
+def import_legacy_runs_from_duckdb(
+    tenant: TenantContext,
+    port: UserDataPort,
+    legacy_path: str | Path,
+) -> list[str]:
+    """One call: extract legacy run metadata and persist it into ``tenant``'s Run Library.
+
+    Bridges :func:`extract_legacy_run_metadata` (read-only lift out of the legacy DuckDB)
+    into :func:`flint.research.runlib.import_legacy_runs` (tenant-scoped write through
+    ``UserDataPort``, §2.7). Idempotent on ``legacy:<name>`` — re-running over an
+    already-imported Run Library is a no-op. Returns the imported run_ids.
+    """
+    # Lazy import: this module is a one-shot operational bridge, and the Run Library
+    # lives in research/ (a sibling of data/, §4) — data/ never imports research/ at
+    # module load, so the coupling exists only when this bridge is actually called.
+    from flint.research.runlib import import_legacy_runs
+
+    strategy_rows, journal_rows = extract_legacy_run_metadata(legacy_path)
+    return import_legacy_runs(
+        tenant, port, strategy_rows=strategy_rows, journal_rows=journal_rows
+    )
+
+
+def _extract_strategy_rows(con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
+    """``strategies`` rows shaped for the Run Library importer (name/source/created_ts)."""
+    if not _table_exists(con, "strategies"):
+        return []
+    rows = _select(con, "SELECT name, code, created_at FROM strategies")
+    return [
+        {
+            "name": r["name"],
+            "source": r["code"],
+            "created_ts": int(r["created_at"]),
+        }
+        for r in rows
+    ]
+
+
+def _extract_journal_rows(con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
+    """``journal_equity`` rows shaped for the importer, ordered so each run's last row
+    is its latest-ts equity endpoint (the importer reads the group's tail verbatim)."""
+    if not _table_exists(con, "journal_equity"):
+        return []
+    rows = _select(
+        con, "SELECT run_id, ts, equity FROM journal_equity ORDER BY run_id, ts"
+    )
+    return [
+        {"strategy": r["run_id"], "ts": int(r["ts"]), "equity": r["equity"]}
+        for r in rows
+    ]
 
 
 # --- helpers ----------------------------------------------------------------
