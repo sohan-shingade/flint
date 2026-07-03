@@ -213,12 +213,32 @@ def write_shards(shards: dict[str, str]) -> list[Path]:
     return written
 
 
+def _without_hash_line(content: str) -> str:
+    """Drop the volatile `> source git hash:` header line for staleness comparison.
+
+    The hash line changes on every commit, so comparing it would report the
+    committed codemap as stale the moment HEAD moves past the regen commit.
+    """
+    return "\n".join(
+        line for line in content.splitlines() if not line.startswith("> source git hash:")
+    )
+
+
 def check_stale(shards: dict[str, str]) -> bool:
-    """Return True if the on-disk map differs from freshly generated shards."""
+    """Return True if the on-disk map differs from freshly generated shards.
+
+    The comparison ignores the source-git-hash header line so a committed,
+    up-to-date codemap does not read as stale simply because HEAD advanced.
+    """
     if not OUTPUT_DIR.exists():
         return bool(shards)
     on_disk = {p.name: p.read_text(encoding="utf-8") for p in OUTPUT_DIR.glob("*.md")}
-    return on_disk != shards
+    if on_disk.keys() != shards.keys():
+        return True
+    return any(
+        _without_hash_line(on_disk[name]) != _without_hash_line(content)
+        for name, content in shards.items()
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
