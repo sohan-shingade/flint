@@ -249,36 +249,93 @@ def test_cli_paper_starts_a_session_and_reports_the_run_id():
 # -- live (D20 safety cap) ---------------------------------------------------
 
 
+class _FakeSecrets:
+    def __init__(self, key: str | None = "0xKEY") -> None:
+        self.key = key
+
+    def get_secret(self, tenant, name):
+        return self.key
+
+
+class _FakeLiveClient:
+    def cancel_all(self, market=None):
+        return ["oid-1"]
+
+    def clearinghouse_state(self):
+        from flint.venues.hyperliquid import ClearinghouseState
+
+        return ClearinghouseState()
+
+
+def _live_ns(**kw) -> argparse.Namespace:
+    kw.setdefault("stop", False)
+    kw.setdefault("all", False)
+    kw.setdefault("flatten", False)
+    kw.setdefault("run_id", None)
+    kw.setdefault("max_position_usd", None)
+    kw.setdefault("max_daily_loss_usd", None)
+    kw.setdefault("strategy", None)
+    kw.setdefault("market", MARKET)
+    kw.setdefault("verbose", False)
+    return _ns(**kw)
+
+
 def test_cli_live_refuses_without_a_position_cap():
     out, sink = _collect()
-    rc = cli.cmd_live(
-        _ns(
-            stop=False,
-            max_position_usd=None,
-            max_daily_loss_usd=None,
-            strategy=None,
-            market=None,
-        ),
-        out=sink,
-    )
+    rc = cli.cmd_live(_live_ns(), lab=_lab(), secrets=_FakeSecrets(), out=sink)
     assert rc == 2
     assert "--max-position-usd is required" in out[0]
 
 
-def test_cli_live_with_a_cap_is_an_honest_not_yet_no_order_placed():
+def test_cli_live_refuses_without_a_venue_key():
     out, sink = _collect()
     rc = cli.cmd_live(
-        _ns(
-            stop=False,
-            max_position_usd=1000.0,
-            max_daily_loss_usd=250.0,
-            strategy="x",
-            market=MARKET,
-        ),
+        _live_ns(max_position_usd=1000.0),
+        lab=_lab(),
+        secrets=_FakeSecrets(key=None),
+        out=sink,
+    )
+    assert rc == 2
+    assert "signing key" in out[0]
+
+
+def test_cli_live_arms_a_run_and_places_no_order():
+    ud = InMemoryUserData()
+    out, sink = _collect()
+    rc = cli.cmd_live(
+        _live_ns(max_position_usd=1000.0, max_daily_loss_usd=250.0, run_id="live-x"),
+        lab=_lab(ud),
+        secrets=_FakeSecrets(),
+        client_factory=lambda key: _FakeLiveClient(),
         out=sink,
     )
     assert rc == 0
-    assert "no order was placed" in out[0]
+    assert "armed" in out[0] and "no order was placed" in out[0]
+    assert ud.load_run(TenantContext(tenant_id="alice"), "live-x").kind == "live"
+
+
+def test_cli_live_stop_all_reports_stopped_runs():
+    ud = InMemoryUserData()
+    lab = _lab(ud)
+    # Arm one run, then stop everything with the kill switch.
+    cli.cmd_live(
+        _live_ns(max_position_usd=1000.0, run_id="live-x"),
+        lab=lab,
+        secrets=_FakeSecrets(),
+        client_factory=lambda key: _FakeLiveClient(),
+        out=_collect()[1],
+    )
+    out, sink = _collect()
+    rc = cli.cmd_live(
+        _live_ns(stop=True, all=True),
+        lab=lab,
+        secrets=_FakeSecrets(),
+        client_factory=lambda key: _FakeLiveClient(),
+        out=sink,
+    )
+    assert rc == 0
+    assert "stopped" in out[0]
+    assert ud.load_run(TenantContext(tenant_id="alice"), "live-x").status == "stopped"
 
 
 # -- serve (local API security) ----------------------------------------------

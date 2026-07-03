@@ -339,3 +339,81 @@ def test_paper_ws_rejects_a_bad_token():
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect("/api/v1/paper/p1/stream?token=wrong") as ws:
             ws.receive_json()
+
+
+# -- live kill switch (D20) --------------------------------------------------
+
+
+class _FakeSecrets:
+    def get_secret(self, tenant, name):
+        return "0xKEY"
+
+
+class _FakeLiveClient:
+    def place_order(self, order):
+        from flint.venues.hyperliquid import ExecReport
+
+        return ExecReport(
+            client_order_id=order.client_order_id,
+            market=order.market,
+            side=order.side,
+            status="filled",
+            filled_size=order.size,
+            avg_price=order.price or 100.0,
+            fee=0.0,
+        )
+
+    def cancel_all(self, market=None):
+        return ["oid-1"]
+
+    def clearinghouse_state(self):
+        from flint.venues.hyperliquid import ClearinghouseState
+
+        return ClearinghouseState()
+
+
+def _live_client(user_data):
+    app = create_app(
+        user_data=user_data,
+        data=_data(),
+        token=TOKEN,
+        secrets=_FakeSecrets(),
+        live_client_factory=lambda key: _FakeLiveClient(),
+    )
+    return TestClient(app)
+
+
+def test_live_stop_route_stops_a_running_run():
+    from flint.live import LiveCaps, LiveExecutor
+
+    ud = InMemoryUserData()
+    tenant = TenantContext.local()
+    LiveExecutor.start(
+        tenant=tenant,
+        store=ud,
+        secrets=_FakeSecrets(),
+        run_id="live-1",
+        market=MARKET,
+        caps=LiveCaps(max_position_usd=1000.0),
+        client_factory=lambda key: _FakeLiveClient(),
+    )
+    client = _live_client(ud)
+    resp = client.post("/api/v1/live/live-1/stop", headers=_auth())
+    assert resp.status_code == 200
+    assert resp.json()["reason"] == "operator"
+    assert ud.load_run(tenant, "live-1").status == "stopped"
+
+
+def test_live_stop_route_404_for_unknown_run():
+    ud = InMemoryUserData()
+    client = _live_client(ud)
+    resp = client.post("/api/v1/live/ghost/stop", headers=_auth())
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "not_found"
+
+
+def test_live_stop_route_requires_the_token():
+    ud = InMemoryUserData()
+    client = _live_client(ud)
+    resp = client.post("/api/v1/live/live-1/stop")  # no bearer token
+    assert resp.status_code == 401

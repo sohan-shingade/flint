@@ -20,7 +20,6 @@ from flint.data.sources import InMemoryCacheSource
 from flint.ports import TenantContext
 from flint.services import (
     ValidationError,
-    compile_strategy,
     run_backtest_source,
     run_results,
     validate_strategy,
@@ -266,9 +265,22 @@ def test_run_backtest_source_funding_gap_is_a_structured_rejection_not_an_error(
     assert ud.load_run(ALICE, "rej").status == "done"
 
 
-def test_compile_strategy_rejects_source_with_no_strategy_subclass():
+def test_run_backtest_source_rejects_source_with_no_strategy_subclass():
+    # A source with no Strategy subclass has no entry point to run: the user-source
+    # path refuses it (ValidationError) rather than exec-ing anything.
+    ud = InMemoryUserData()
     with pytest.raises(ValidationError):
-        compile_strategy(NO_ENTRY)
+        run_backtest_source(
+            ALICE,
+            source=NO_ENTRY,
+            run_id="no-entry",
+            universe=(MARKET,),
+            venues=(VENUE,),
+            start_ms=T0,
+            end_ms=_covered_end(),
+            user_data=ud,
+            data=_data(),
+        )
 
 
 def test_run_results_is_tenant_scoped():
@@ -403,7 +415,9 @@ def test_run_backtest_source_in_sandbox_matches_in_process_bit_for_bit():
     from flint.strategy.ml import MLStrategy
     from flint.strategy.templates.registry import TemplateSpec
 
-    cls = compile_strategy(CLEAN, name="MomoStrat")
+    ns: dict = {}
+    exec(CLEAN, ns)  # noqa: S102 — a hand-authored fixture, the parity reference
+    cls = ns["MomoStrat"]
     spec = TemplateSpec(
         name=cls.__name__,
         strategy_cls=cls,

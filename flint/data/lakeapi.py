@@ -25,7 +25,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
 import pyarrow as pa

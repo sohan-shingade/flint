@@ -36,7 +36,6 @@ from flint.data import CoverageMode, DataManager, FundingCoverageError
 from flint.engine.portfolio import EventLog
 from flint.ports import TenantContext, UserDataPort
 from flint.research import analyze, build_report, equity_series_from_events
-from flint.strategy import Strategy
 from flint.strategy.sandbox import (
     SandboxError,
     SandboxTimeout,
@@ -248,37 +247,6 @@ def validate_strategy(source: str) -> ValidationReport:
         blind_spots=result.blind_spots,
         dynamic_ran=True,
     )
-
-
-def compile_strategy(source: str, *, name: str = "user_strategy") -> type[Strategy]:
-    """Compile validated ``source`` and return its single ``Strategy`` subclass.
-
-    Runs the screen defensively (the surface has already validated), then execs
-    in a fresh namespace. Raises :class:`ValidationError` if the source defines no
-    ``Strategy`` subclass or more than one (an agent needs one unambiguous entry).
-    """
-    violations = screen_source(source)
-    if violations:
-        raise ValidationError(
-            "strategy source failed the sandbox screen",
-            detail="; ".join(str(_violation(v)["message"]) for v in violations),
-            hint="call validate_strategy to see line-precise issues",
-        )
-    class_name = _strategy_class_name(source)
-    if class_name is None:
-        raise ValidationError(
-            "strategy source defines no Strategy subclass",
-            detail="the engine runs a subclass of flint.strategy.Strategy",
-            hint="define `class MyStrategy(Strategy): ...` with an on_candle method",
-        )
-    namespace: dict[str, Any] = {}
-    exec(compile(source, f"<{name}>", "exec"), namespace)  # noqa: S102 — gated by validate
-    cls = namespace.get(class_name)
-    if not (isinstance(cls, type) and issubclass(cls, Strategy)):
-        raise ValidationError(
-            f"could not resolve Strategy subclass {class_name!r} from source",
-        )
-    return cls
 
 
 def run_backtest_source(

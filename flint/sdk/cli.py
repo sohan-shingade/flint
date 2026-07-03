@@ -132,30 +132,115 @@ def cmd_paper(args: argparse.Namespace, *, lab: Lab | None = None, out=print) ->
     return 0
 
 
-def cmd_live(args: argparse.Namespace, *, out=print) -> int:
-    """The HL live executor entry — refuses to start without an explicit position cap.
+def cmd_live(
+    args: argparse.Namespace,
+    *,
+    lab: Lab | None = None,
+    secrets=None,
+    client_factory=None,
+    out=print,
+) -> int:
+    """The HL live executor entry (D20, §3.6) — caps enforced, kill switch armed.
 
-    The executor itself (order state machine, kill switch, reconciliation) lands in the
-    final build slice; this command enforces the D20 safety contract up front — a live
-    run **must** name a ``--max-position-usd`` cap — and is otherwise an honest not-yet.
+    ``--stop`` is the kill switch: ``--all`` stops every running live run for the
+    tenant, ``--run-id <id>`` stops one; ``--flatten`` also closes open positions.
+    Starting a run **requires** ``--max-position-usd`` (the D20 cap) and a venue
+    signing key resolved from the ``SecretsPort`` — it refuses (exit 2) without
+    either, never placing an order. The executor's logic (order state machine,
+    caps, reconciliation, kill switch) is real and persisted; the continuous
+    market-data feed loop and the real HL order transport are the v1.x deferrals
+    (docs/redesign/STATUS.md), so this command arms the run but places no order.
     """
+    from flint.adapters import EnvSecrets
+    from flint.live import LiveCaps, LiveExecutor, LiveStartRefused, stop_all_live
+    from flint.services import new_run_id
+    from flint.venues.hyperliquid import hyperliquid_client_factory
+
+    lab = lab or _build_lab(args)
+    secrets = secrets or EnvSecrets()
+    factory = client_factory or hyperliquid_client_factory
+
     if args.stop:
-        _emit(
-            out, "live kill switch is wired with the HL executor (final build slice)."
-        )
-        return 0
+        if args.all:
+            reports = stop_all_live(
+                lab.tenant,
+                store=lab.user_data,
+                secrets=secrets,
+                client_factory=factory,
+                flatten=args.flatten,
+            )
+            _emit(
+                out,
+                json.dumps(
+                    {"stopped": [r.to_payload() for r in reports]},
+                    sort_keys=True,
+                    default=str,
+                ),
+            )
+            return 0
+        if args.run_id:
+            try:
+                executor = LiveExecutor.resume(
+                    tenant=lab.tenant,
+                    store=lab.user_data,
+                    secrets=secrets,
+                    run_id=args.run_id,
+                    client_factory=factory,
+                )
+            except KeyError:
+                _emit(out, f"no live run {args.run_id!r} for this tenant.")
+                return 1
+            except LiveStartRefused as refused:
+                _emit(out, refused.message)
+                return 1
+            report = executor.stop(flatten=args.flatten)
+            _emit(out, json.dumps(report.to_payload(), sort_keys=True, default=str))
+            return 0
+        _emit(out, "pass --all to stop every live run, or --run-id <id> to stop one.")
+        return 2
+
     if args.max_position_usd is None:
         _emit(
             out,
             "refusing to start live: --max-position-usd is required (D20 safety cap).",
         )
         return 2
+
+    caps = LiveCaps(
+        max_position_usd=args.max_position_usd,
+        max_daily_loss_usd=args.max_daily_loss_usd,
+    )
+    run_id = args.run_id or new_run_id()
+    log = get_logger("live", run_id=run_id, tenant=lab.tenant.tenant_id)
+    try:
+        LiveExecutor.start(
+            tenant=lab.tenant,
+            store=lab.user_data,
+            secrets=secrets,
+            run_id=run_id,
+            market=args.market,
+            caps=caps,
+            client_factory=factory,
+        )
+    except LiveStartRefused as refused:
+        _emit(
+            out,
+            refused.message + (f" ({refused.hint})" if refused.hint else ""),
+        )
+        return 2
+    log.info("live run armed", extra={"fields": {"run_id": run_id}})
+    daily = (
+        f", max daily loss ${args.max_daily_loss_usd}"
+        if args.max_daily_loss_usd is not None
+        else ""
+    )
     _emit(
         out,
-        f"live caps accepted (max position ${args.max_position_usd}, "
-        f"max daily loss ${args.max_daily_loss_usd}). "
-        "The HL live executor is not yet wired in this build — it lands in the final "
-        "slice over this same paper/engine code path; no order was placed.",
+        f"live run {run_id} armed on {args.market} "
+        f"(max position ${args.max_position_usd}{daily}).\n"
+        f"caps + kill switch enforced; stop with `flint live --stop --run-id {run_id}`.\n"
+        "the market-data feed loop and real HL order transport land in v1.x "
+        "(docs/redesign/STATUS.md); no order was placed by this command.",
     )
     return 0
 
@@ -381,8 +466,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_live.add_argument(
         "--max-daily-loss-usd", dest="max_daily_loss_usd", type=float, default=None
     )
+    p_live.add_argument("--run-id", dest="run_id", help="live run id (start or --stop)")
     p_live.add_argument(
-        "--stop", action="store_true", help="kill switch: stop live runs"
+        "--stop", action="store_true", help="kill switch: stop live run(s)"
+    )
+    p_live.add_argument(
+        "--all", action="store_true", help="with --stop: stop every running live run"
+    )
+    p_live.add_argument(
+        "--flatten",
+        action="store_true",
+        help="with --stop: also close open positions (reduce-only)",
     )
     p_live.set_defaults(func=cmd_live)
 

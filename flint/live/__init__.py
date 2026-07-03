@@ -31,12 +31,28 @@ from .drift import (
     StructuralDrift,
     build_drift_report,
 )
+from .executor import (
+    DriftAlert,
+    LiveCaps,
+    LiveExecutor,
+    LiveReject,
+    LiveStartRefused,
+    StopReport,
+    stop_all_live,
+)
 from .session import PaperSession, RunResult, build_adapter
 
 __all__ = [
     "PaperSession",
     "RunResult",
     "build_adapter",
+    "LiveExecutor",
+    "LiveCaps",
+    "LiveReject",
+    "LiveStartRefused",
+    "DriftAlert",
+    "StopReport",
+    "stop_all_live",
     "DriftReport",
     "StructuralDrift",
     "MarketDrift",

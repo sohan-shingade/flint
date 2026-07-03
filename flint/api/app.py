@@ -22,10 +22,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocket
 
-from flint.adapters import InMemoryUserData, InProcessJobRunner
+from flint.adapters import EnvSecrets, InMemoryUserData, InProcessJobRunner
 from flint.data import DataManager
 from flint.data.ranges import Kind
-from flint.ports import JobRunnerPort, TenantContext, UserDataPort
+from flint.ports import JobRunnerPort, SecretsPort, TenantContext, UserDataPort
+from flint.venues.hyperliquid import hyperliquid_client_factory
 from flint.services import (
     AlertConfigStore,
     BacktestJobs,
@@ -39,6 +40,7 @@ from flint.services import (
     new_run_id,
     paper_snapshot,
     pull_data,
+    stop_live,
 )
 
 from .schemas import AlertBody, BacktestBody, DataPullBody
@@ -66,6 +68,10 @@ class Deps:
     tenant: TenantContext
     token: str
     allowed_origins: frozenset[str] = field(default_factory=frozenset)
+    # Live kill switch: the SecretsPort resolves the venue key server-side and the
+    # factory builds the (production or, in tests, mocked) live venue client.
+    secrets: SecretsPort = field(default_factory=EnvSecrets)
+    live_client_factory: object = hyperliquid_client_factory
 
 
 def _now_ms() -> int:
@@ -80,6 +86,8 @@ def create_app(
     tenant: TenantContext | None = None,
     token: str | None = None,
     allowed_origins: frozenset[str] | None = None,
+    secrets: SecretsPort | None = None,
+    live_client_factory=None,
 ) -> FastAPI:
     """Build the API app with its services composed and security wired.
 
@@ -87,6 +95,9 @@ def create_app(
     bare ``create_app()`` is a runnable local server; ``flint serve`` (7.2) injects
     the durable adapters + the token it prints. The token is exposed on
     ``app.state.token`` so the serve command can auto-inject it into the local UI.
+    ``secrets``/``live_client_factory`` back the live kill switch; they default to
+    the server-side ``.env`` secrets and the production HL client factory, and are
+    injected with a fake venue in tests (no real key/order, D26).
     """
     user_data = user_data or InMemoryUserData()
     data = data or DataManager()
@@ -99,6 +110,8 @@ def create_app(
         tenant=tenant or TenantContext.local(),
         token=token or generate_token(),
         allowed_origins=allowed_origins or frozenset(),
+        secrets=secrets or EnvSecrets(),
+        live_client_factory=live_client_factory or hyperliquid_client_factory,
     )
 
     app = FastAPI(title="Flint API", version="1")
@@ -244,6 +257,21 @@ def _install_routes(app: FastAPI) -> None:
         deps: Deps = request.app.state.deps
         return deps.alerts.create(
             deps.tenant, rule=body.rule, threshold=body.threshold, channel=body.channel
+        )
+
+    @app.post(f"{api}/live/{{run_id}}/stop", dependencies=_WRITE)
+    def stop_live_run(
+        request: Request, run_id: str, flatten: bool = False
+    ) -> dict:
+        """The UI-callable kill switch — cancel a live run's orders, optionally flatten."""
+        deps: Deps = request.app.state.deps
+        return stop_live(
+            deps.tenant,
+            run_id,
+            store=deps.user_data,
+            secrets=deps.secrets,
+            client_factory=deps.live_client_factory,
+            flatten=flatten,
         )
 
     @app.websocket(f"{api}/paper/{{run_id}}/stream")

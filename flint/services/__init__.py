@@ -27,12 +27,12 @@ from .errors import (
 )
 from .jobs import BacktestJobs, JobRecord, new_run_id
 from .lab import funding_lab
+from .live import stop_live
 from .optimize import OptimizeOutcome, OptimizeRequest, run_optimization
 from .paper import paper_snapshot, start_paper
 from .runs import compare_runs, export_run, import_legacy_runs, list_runs, run_results
 from .strategy_source import (
     ValidationReport,
-    compile_strategy,
     run_backtest_source,
     validate_strategy,
 )
@@ -65,9 +65,9 @@ __all__ = [
     # user strategy source (agent surface, §13)
     "validate_strategy",
     "run_backtest_source",
-    "compile_strategy",
     "ValidationReport",
     # alerts
+    "stop_live",
     "AlertConfigStore",
     # paper monitor
     "paper_snapshot",
