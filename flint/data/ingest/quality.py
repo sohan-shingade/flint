@@ -100,6 +100,7 @@ def check_prewrite(
     table: pa.Table,
     *,
     ts_col: str = "ts",
+    key_cols: tuple[str, ...] = (),
     price_col: str | None = "close",
     volume_col: str | None = "volume",
     spike_ratio: float = 10.0,
@@ -108,8 +109,12 @@ def check_prewrite(
 
     * **Ordering** (error): ``ts`` must be non-decreasing — a worker upserts in
       order so late-arriving out-of-order pages are caught, not silently stored.
-    * **Duplicate keys** (error): two rows sharing a ``ts`` collide on the
-      ``(venue, market, ts)`` key; the batch must be de-duplicated first.
+    * **Duplicate keys** (error): two rows sharing the row-identity key collide
+      in the store; the batch must be de-duplicated first. The identity is
+      ``ts`` plus any ``key_cols`` (per-kind tie-breakers — ``trade_id`` for
+      trades, ``rate_type`` for funding, ``seq`` for book deltas — mirroring
+      the store's per-kind dedupe keys): tick streams legitimately carry many
+      rows per millisecond, so ts alone is not their identity (§B2).
     * **Price spike** (warning): a close jumping by more than ``spike_ratio``×
       (or below ``1/spike_ratio``×) the previous close is flagged for review.
     * **Zero volume** (warning): HL's known zero-volume-bug candles are flagged.
@@ -124,10 +129,18 @@ def check_prewrite(
     ts = table.column(ts_col)
     if n >= 2:
         # Non-decreasing check and duplicate check, both off the same neighbours.
-        prev, curr = ts[:-1], ts[1:]
+        ts_flat = ts.combine_chunks() if isinstance(ts, pa.ChunkedArray) else ts
+        prev, curr = ts_flat[:-1], ts_flat[1:]
         if pc.any(pc.greater(prev, curr)).as_py():
             errors.append("timestamps not sorted ascending")
-        dupes = pc.sum(pc.equal(prev, curr)).as_py() or 0
+        same = pc.equal(prev, curr)
+        for key in key_cols:
+            if key not in table.column_names:
+                continue
+            col = table.column(key)
+            col = col.combine_chunks() if isinstance(col, pa.ChunkedArray) else col
+            same = pc.and_(same, pc.equal(col[:-1], col[1:]))
+        dupes = pc.sum(same).as_py() or 0
         if dupes:
             errors.append(f"{dupes} duplicate ts key(s)")
 

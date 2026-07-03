@@ -1,0 +1,60 @@
+{
+ "id": "hyperliquid",
+ "name": "Hyperliquid",
+ "enabled": true,
+ "availableSince": "2024-10-29T00:00:00.000Z",
+ "datasets": {
+  "formats": [
+   "csv"
+  ],
+  "exportedFrom": "2024-10-29T00:00:00.000Z",
+  "exportedUntil": "2026-07-03T00:00:00.000Z",
+  "symbols": [
+   {
+    "id": "0G",
+    "type": "perpetual",
+    "dataTypes": [
+     "trades",
+     "incremental_book_L2",
+     "quotes",
+     "book_snapshot_5",
+     "book_snapshot_25",
+     "derivative_ticker",
+     "book_ticker"
+    ],
+    "availableSince": "2025-09-22T00:00:00.000Z",
+    "availableTo": "2026-07-03T00:00:00.000Z"
+   },
+   {
+    "id": "BTC",
+    "type": "perpetual",
+    "dataTypes": [
+     "trades",
+     "incremental_book_L2",
+     "quotes",
+     "book_snapshot_5",
+     "book_snapshot_25",
+     "derivative_ticker",
+     "book_ticker"
+    ],
+    "availableSince": "2024-10-29T00:00:00.000Z",
+    "availableTo": "2026-07-03T00:00:00.000Z"
+   },
+   {
+    "id": "SOL",
+    "type": "perpetual",
+    "dataTypes": [
+     "trades",
+     "incremental_book_L2",
+     "quotes",
+     "book_snapshot_5",
+     "book_snapshot_25",
+     "derivative_ticker",
+     "book_ticker"
+    ],
+    "availableSince": "2024-10-29T00:00:00.000Z",
+    "availableTo": "2026-07-03T00:00:00.000Z"
+   }
+  ]
+ }
+}

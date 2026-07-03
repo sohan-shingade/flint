@@ -164,8 +164,16 @@ class DataManager:
             )
         else:
             self._sources = tuple(sources)
-            # Write-through targets the first source if it is a writable cache.
-            self._cache = sources[0] if sources and isinstance(sources[0], InMemoryCacheSource) else None
+            # Write-through targets the first source if it is a writable cache
+            # (in-memory or the durable Parquet tier — both expose ``store``).
+            from .store.durable_cache import DurableCacheSource
+
+            self._cache = (
+                sources[0]
+                if sources
+                and isinstance(sources[0], (InMemoryCacheSource, DurableCacheSource))
+                else None
+            )
 
     # --- public API --------------------------------------------------------
 
