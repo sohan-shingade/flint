@@ -9,6 +9,13 @@ from __future__ import annotations
 
 from flint.venues import MarketStructure
 
+from .arrow import (
+    TakerWalk,
+    arrow_taker_fills,
+    depth_level_arrays,
+    materialize,
+    taker_walk_batch,
+)
 from .base import FillContext, FillModel, FillResult, TradePrint
 from .clob import ClobFillModel
 from .latency import LatencyModel
@@ -35,4 +42,9 @@ __all__ = [
     "OraclePoolFillModel",
     "LatencyModel",
     "fill_model_for",
+    "TakerWalk",
+    "arrow_taker_fills",
+    "depth_level_arrays",
+    "materialize",
+    "taker_walk_batch",
 ]
