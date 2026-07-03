@@ -14,7 +14,7 @@ _Ingestion quality bars — the checks every worker runs before a write (§9.0).
     - `def ok(self) -> bool` — True when nothing blocks the write (warnings are allowed).
 - `def expected_bar_count(span: TimeRange, resolution_s: int) -> int` — How many epoch-aligned bars of width ``resolution_s`` fall in ``span``.
 - `def detect_candle_gaps(table: pa.Table, resolution_s: int, span: TimeRange, *, ts_col: str='ts') -> RangeSet` — Return the aligned bars in ``span`` missing from ``table`` (cadence gaps).
-- `def check_prewrite(table: pa.Table, *, ts_col: str='ts', price_col: str | None='close', volume_col: str | None='volume', spike_ratio: float=10.0) -> QualityReport` — Run the §9.0 pre-write checks over one fetched batch (no repair, D26).
+- `def check_prewrite(table: pa.Table, *, ts_col: str='ts', key_cols: tuple[str, ...]=(), price_col: str | None='close', volume_col: str | None='volume', spike_ratio: float=10.0) -> QualityReport` — Run the §9.0 pre-write checks over one fetched batch (no repair, D26).
 - `class BackfillResult` — What one backfill call produced — rows persisted plus its quality record.
 
 ### `flint.data.ingest.scheduler`

@@ -26,6 +26,16 @@ class VendorKeyMissing(Exception):
     """The user has not supplied this vendor's BYO API key (D23)."""
 
 
+# Row-identity tie-breakers per kind, matching the store's per-kind dedupe keys
+# (store/durable_cache.py) — tick streams carry many rows per millisecond, so
+# ts alone is not their identity (§B2).
+_IDENTITY_COLS: dict[Kind, tuple[str, ...]] = {
+    Kind.TRADES: ("trade_id",),
+    Kind.FUNDING: ("rate_type",),
+    Kind.BOOK_DELTA: ("seq",),
+}
+
+
 @runtime_checkable
 class VendorFetcher(Protocol):
     """One paid vendor's read surface, driven by the user's own key (D23).
@@ -74,7 +84,12 @@ class VendorBackfiller:
             return BackfillResult(kind=str(kind), rows_written=0, quality=check_prewrite(pa.table({})))
         table = self._fetcher.fetch(venue, market, kind, span)
         price_col = "price" if kind is Kind.TRADES else None
-        quality = check_prewrite(table, price_col=price_col, volume_col=None)
+        quality = check_prewrite(
+            table,
+            key_cols=_IDENTITY_COLS.get(kind, ()),
+            price_col=price_col,
+            volume_col=None,
+        )
         written = 0
         if quality.ok and table.num_rows:
             self._cache.store(venue, market, kind, table)

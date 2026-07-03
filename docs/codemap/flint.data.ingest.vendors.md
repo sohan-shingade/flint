@@ -21,11 +21,24 @@ _BYO-license vendor lane — interface + local-only backfiller (§9.1, D23)._
     - `def backfill(self, venue: str, market: str, kind: Kind, span: TimeRange) -> BackfillResult`
 
 ### `flint.data.ingest.vendors.tardis`
-_Tardis BYO-license fetcher — stub (§9.1, D23)._
-- imports: `....ports.secrets`, `....ports.tenant`, `...normalize`, `...ranges`, `.base`
-- `class VendorTransport(Protocol)` — The vendor network seam — a keyed JSON GET (tests inject recorded fragments).
-    - `def get_json(self, url: str, *, params: Mapping[str, Any] | None=None, headers: Mapping[str, str] | None=None) -> Any`
-- `class TardisFetcher` — A ``VendorFetcher`` for Tardis trade history, keyed by the user's BYO key.
-    - `def __init__(self, transport: VendorTransport, secrets: SecretsPort, tenant: TenantContext, *, base_url: str=TARDIS_API_BASE) -> None`
+_Tardis vendor adapter — the CSV datasets API, BYO-license (§9.2, D23)._
+- imports: `....ports.secrets`, `....ports.tenant`, `...normalize`, `...ranges`, `...sources`, `...store.coverage`, `..backfillers.hyperliquid`, `.base`
+- `class TardisTransportError(Exception)` — A non-recoverable transport failure (bad status or retries exhausted).
+- `class TardisBytesTransport(Protocol)` — The network seam — a keyed bytes GET; tests inject recorded gzip bytes.
+    - `def get_bytes(self, url: str, *, headers: Mapping[str, str] | None=None) -> bytes | None`
+- `class HttpxBytesTransport` — Production :class:`TardisBytesTransport` on httpx, with backoff.
+    - `def __init__(self, *, client: Any | None=None, max_attempts: int=5, backoff_base_s: float=1.0, sleep: Callable[[float], None]=time.sleep) -> None`
+    - `def get_bytes(self, url: str, *, headers: Mapping[str, str] | None=None) -> bytes | None`
+- `class TardisCsvClient` — Pure Tardis CSV codec: URL grammar + gunzip + CSV→Arrow (µs→ms).
+    - `def dataset_url(exchange: str, data_type: str, day: date, symbol: str, *, base: str=TARDIS_DATASETS_BASE) -> str` — ``{base}/{exchange}/{dataType}/{yyyy}/{mm}/{dd}/{symbol}.csv.gz``.
+    - `def parse(cls, data_type: str, gz: bytes, *, market: str, venue: str) -> dict[Kind, pa.Table]` — Decode one day file into kind-keyed tables in the frozen schemas.
+- `class TardisFetcher` — Ledger-driven day-by-day Tardis fetcher, on the user's own key (D23).
+    - `def __init__(self, transport: TardisBytesTransport, secrets: SecretsPort, tenant: TenantContext, *, exchange: str='hyperliquid', datasets_base: str=TARDIS_DATASETS_BASE, api_base: str=TARDIS_API_BASE, meta_cache_dir: str | Path | None=None, sink: LocalCacheSink | None=None, ledger_root: str | Path | None=None, now_ms: Callable[[], int] | None=None, on_day: Callable[[str, Kind, int], None] | None=None) -> None`
+    - `def has_key(self) -> bool`
+    - `def availability(self, market: str, kind: Kind) -> TimeRange | None` — The per-symbol ``[availableSince, availableTo)`` window, or None.
     - `def supports(self, venue: str, market: str, kind: Kind) -> bool`
+    - `def fetch(self, venue: str, market: str, kind: Kind, span: TimeRange) -> pa.Table` — Rows in ``span`` for ``kind``, landing whole vendor days on the way.
+- `class TardisVendorSource(DataSource)` — The Tardis tier of the source chain — after the free-venue provider.
+    - `def __init__(self, fetcher: TardisFetcher, *, now_ms: Callable[[], int] | None=None) -> None`
+    - `def available(self, venue: str, market: str, kind: Kind, want: TimeRange) -> RangeSet`
     - `def fetch(self, venue: str, market: str, kind: Kind, span: TimeRange) -> pa.Table`
