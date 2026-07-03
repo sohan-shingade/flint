@@ -65,6 +65,9 @@ from flint.engine.portfolio import (
     EventLog,
     apply_fill_delta,
 )
+# EQUITY is imported from the submodule (not re-exported by portfolio/__init__ yet)
+# to keep this slice's edits within its fence.
+from flint.engine.portfolio.events import EQUITY
 from flint.venues import HYPERLIQUID, VenueSpec
 
 from .fills import (
@@ -87,7 +90,7 @@ from .liquidation.check import (
     liquidation_price,
     tiered_maintenance,
 )
-from .money import money
+from .money import ZERO, money
 from .state import PortfolioState
 
 
@@ -450,6 +453,45 @@ class BacktestEngine:
         # (7) This bar is now closed — add it to history so a LATER bar's ctx can
         # see it (never the current bar, which is still open at decision time).
         self._candle_history.setdefault(market, []).append(candle)
+        # (8) Emit the per-bar equity snapshot. Placed LAST in the locked sequence:
+        # every cash/position move for this bar (T+1 fills, funding, liquidation,
+        # resting fills) has settled, and step (6) only queued future orders. The
+        # event is additive/derived — it moves no cash and replay.fold ignores it.
+        self._emit_equity(candle.ts)
+
+    def _emit_equity(self, ts: int) -> None:
+        """Emit the §6.1 per-bar EQUITY snapshot from ``PortfolioState`` (additive).
+
+        Portfolio-wide totals at the bar boundary: ``cash`` (free collateral across
+        accounts), ``unrealized`` (mark-to-market of open positions at each market's
+        bar-closing mark), ``accrued_funding`` (cumulative funding settled to date —
+        already inside ``cash``, see ``events.EQUITY``), and ``equity = cash +
+        unrealized``. Money is ``Decimal``-as-str; unrealized is a float snapshot
+        (§5: prices/mark-to-market are float) converted once here at the boundary.
+        A position on a market with no recorded mark yet contributes zero (it cannot
+        be valued this bar — never invented, D26).
+        """
+        cash = ZERO
+        accrued_funding = ZERO
+        for acct in self.state.accounts.values():
+            cash += acct.cash
+            accrued_funding += acct.funding_paid
+        unrealized = 0.0
+        for key, pos in self.state.positions.items():
+            mark = self._last_mark.get(key)
+            if mark is not None:
+                unrealized += pos.unrealized_pnl(mark)
+        unrealized_money = money(unrealized)
+        self._log.emit(
+            EQUITY,
+            {
+                "equity": str(cash + unrealized_money),
+                "unrealized": str(unrealized_money),
+                "accrued_funding": str(accrued_funding),
+                "cash": str(cash),
+            },
+            ts=ts,
+        )
 
     # -- (2) T+1 market fills --------------------------------------------------
 

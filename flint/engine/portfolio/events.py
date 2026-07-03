@@ -41,6 +41,22 @@ FILL = "fill"
 FUNDING = "funding"
 LIQUIDATION = "liquidation"
 
+# EQUITY is the per-bar mark-to-market snapshot (§6.1 bar boundary): total equity
+# with its components, emitted once at the end of each locked per-bar sequence so
+# the tearsheet can fold an equity curve without re-deriving it from cash moves.
+# It is purely additive — a derived observation, never a source of cash movement —
+# so ``replay.fold`` ignores it and no existing kind or ordering changes. Payload
+# (event_version=1, Decimal-as-str per event-log discipline):
+#   equity          = cash + unrealized PnL, valued at the bar-closing mark
+#   unrealized      = mark-to-market PnL of open positions at that mark
+#   accrued_funding = cumulative funding settled to the account to date. This
+#                     engine settles funding discretely into ``cash`` (§6.4), so
+#                     there is no separately-held *unpaid* funding — this is the
+#                     realized funding cash flow already inside ``cash``, exposed
+#                     so the equity curve decomposes into its funding line.
+#   cash            = free collateral across accounts (incl. realized PnL/fees/funding)
+EQUITY = "equity"
+
 
 @dataclass(frozen=True, slots=True)
 class Event:
