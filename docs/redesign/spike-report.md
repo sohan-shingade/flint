@@ -6,20 +6,26 @@ Harness: `scripts/spike_throughput.py`. Run: `python scripts/spike_throughput.py
 
 The Tier-A leg now runs through the Arrow-native taker book-walk shipped in slice
 7.1 (`flint/engine/fills/arrow.py`, commit 7ad6f3d; design note
-`docs/redesign/ARROW-FILL-PATH.md`). The naive path below is retained as the
-baseline the harness still times side-by-side.
+`docs/redesign/ARROW-FILL-PATH.md`), on the **same tiled hand-authored 20-level
+frame** the original spike used (79f29bb), so the numbers below are directly
+comparable. The naive path is retained as the baseline the harness still times
+side-by-side.
 
-| Workload | Budget (§19.4) | Measured (Arrow path) | Projected 6mo/3mkt | Result |
-|---|---|---|---|---|
-| Tier-A (HL depth), Arrow-native | ≤ 15 min | 86,400 snaps in **~0.34 s** (~250k snaps/s) | 47.2 M snaps → **~2.5–4 min** | **PASS** (≈4–6× headroom) |
-| naive baseline (same run, for reference) | — | 86,400 snaps in ~8–9 s | ~50–62 min | still fails |
+**Before → after (Tier-A depth replay, 6mo/3mkt = 47.2 M snapshots):**
 
-**OVERALL: PASS.** The Arrow path is **~20–29× faster** than the naive loop it
-replaces (machine-noisy; measured across repeated runs on this dev host). The
-fill is bit-identical to the scalar `ClobFillModel` (parity gate,
-`tests/test_engine_fills_arrow.py`) and produces the **same fill count and the
-same Decimal cash** as the naive loop on the benchmark frame — the speed-up
-changes only the data plane, not a single fill.
+| | Throughput | Projected time | vs 15-min budget |
+|---|---|---|---|
+| Original spike (79f29bb), naive path | **12,697 snaps/s** | ~62 min | **FAIL** — 4.1× over |
+| Budget threshold (47.2 M ≤ 15 min) | ≥ **52,444 snaps/s** | 15 min | (need ≥ 4.1× the baseline) |
+| **Slice 7.2, Arrow-native path** | **~250,000 snaps/s** | **~2.5–4 min** | **PASS** — ~4.8× under budget-rate |
+
+**OVERALL: PASS.** The Arrow path clears the budget it missed by 4.1×: **~19×**
+faster than the 12,697 snaps/s baseline (and ~4.8× above the 52,444 snaps/s the
+budget requires). Against the naive loop re-timed on this dev host it measures
+~20–29× (machine-noisy, best-of-repeated-runs). The fill is bit-identical to the
+scalar `ClobFillModel` (parity gate, `tests/test_engine_fills_arrow.py`) and
+produces the **same fill count and the same Decimal cash** as the naive loop on
+the benchmark frame — the speed-up changes only the data plane, not a single fill.
 
 **Where the time now goes** (86,400-snapshot profile, best-of-5):
 
