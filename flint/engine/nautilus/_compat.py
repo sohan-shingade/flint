@@ -18,13 +18,14 @@ NAUTILUS_REQUIRED = "1.230.0"
 
 try:
     import nautilus_trader as _nt
-except ModuleNotFoundError as exc:  # pragma: no cover - exercised only without the extra
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised only on a broken install
     raise ImportError(
-        "the 'nautilus' engine requires the optional nautilus_trader dependency, "
-        "which is not installed. Install it with:\n\n"
-        '    pip install -e ".[nautilus]"\n\n'
-        "Candle-only workflows never need it — it is loaded lazily only when the "
-        "'nautilus' engine is selected (flint/engine/select.py)."
+        "nautilus_trader is not installed. It is a core dependency since N10 "
+        "(the only engine substrate) — this environment predates the fold or was "
+        "installed without dependencies. Reinstall:\n\n"
+        '    pip install -e ".[dev]"\n\n'
+        "It is loaded lazily only when an engine runs (flint/engine/select.py), "
+        "so this error can surface at first run rather than import time."
     ) from exc
 
 _INSTALLED = getattr(_nt, "__version__", "unknown")
@@ -34,7 +35,7 @@ if _INSTALLED != NAUTILUS_REQUIRED:
         "installed. Flint pins Nautilus exactly because its mark/funding data "
         "types churn between minors (the churn firewall lives in "
         "flint/engine/nautilus/_compat.py). Reinstall the pinned version:\n\n"
-        f'    pip install -e ".[nautilus]"   # resolves nautilus_trader=={NAUTILUS_REQUIRED}\n'
+        f'    pip install -e ".[dev]"   # resolves nautilus_trader=={NAUTILUS_REQUIRED}\n'
     )
 
 # --- backtest kernel ---------------------------------------------------------

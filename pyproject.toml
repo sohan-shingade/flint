@@ -34,6 +34,13 @@ dependencies = [
     "typer>=0.9",
     "rich>=13.0",
     "websockets>=12.0",
+    # The simulation core (D29) — the only engine substrate since N10, so it is a
+    # core dependency, not an extra. Exact-pinned: Nautilus is pre-1.x and its
+    # mark/funding data types churn between minors, so the version is asserted at
+    # import by flint/engine/nautilus/_compat.py and stamped into every run
+    # manifest. Still imported lazily (flint/engine/select.py) — the 156 MB wheel /
+    # ~5 s import is paid on first run, never at CLI startup.
+    "nautilus_trader==1.230.0",
 ]
 
 [project.urls]
@@ -50,15 +57,9 @@ research = ["optuna>=3.0"]
 venues = ["ccxt>=4.0"]
 mcp = ["mcp>=1.0"]
 hyperliquid = ["eth-account>=0.10", "msgpack>=1.0"]
-# The Nautilus tick-engine core (D29). Exact-pinned — Nautilus is pre-1.x and its
-# mark/funding data types churn between minors, so the version is asserted at
-# import by flint/engine/nautilus/_compat.py and stamped into every run manifest.
-# No companion constraints are listed: against this repo's venv the 1.230.0 wheel's
-# own metadata resolves cleanly (it pulls pandas 3 / msgspec / fsspec / portion /
-# pytz / tqdm as *new* deps and moves nothing already installed). Opt-in only —
-# candle-only users never pay the 156 MB wheel / ~5 s import (loaded lazily in
-# flint/engine/select.py).
-nautilus = ["nautilus_trader==1.230.0"]
+# Back-compat alias: nautilus_trader moved into core dependencies at N10 (the
+# only engine substrate). `pip install "flint[nautilus]"` keeps working.
+nautilus = []
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
@@ -71,9 +72,12 @@ exclude = ["tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Repo root on sys.path so tests importing `scripts.*` collect under the pytest
+# console script too (python -m pytest gets this for free via the cwd).
+pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
-    "parity: legacy-vs-Nautilus byte-diff parity suite (tests/parity/, §19.4, CI-required from N6)",
+    "parity: Nautilus-vs-frozen-legacy-golden byte-diff parity suite (tests/parity/, §19.4, CI-required)",
 ]
 
 # ─── Ruff — real-bug subset (hard-fail); style nits stay advisory ────────────
