@@ -69,10 +69,11 @@ class LegacyBarEngine:
     """The legacy per-bar loop as a :class:`SimulationEngine` — zero behavior change.
 
     Unpacks an :class:`EngineFeed`/:class:`EngineRunSpec`, funds a fresh
-    ``PortfolioState``, and delegates to :meth:`BacktestEngine.run` exactly as
-    ``services.backtest._execute`` did before the seam existed — same construction
-    order, same kwargs. This is the bar lane's substrate today and the parity oracle
-    the Nautilus engine is held to during the migration (§6.0, §19.4).
+    ``PortfolioState`` (or adopts ``spec.initial_state`` on a paper warm start), and
+    delegates to :meth:`BacktestEngine.run` exactly as ``services.backtest._execute``
+    did before the seam existed — same construction order, same kwargs. This is the
+    bar lane's substrate today and the parity oracle the Nautilus engine is held to
+    during the migration (§6.0, §19.4).
     """
 
     name = "legacy-bar"
@@ -85,8 +86,11 @@ class LegacyBarEngine:
         event_log: EventLog,
         spec: EngineRunSpec,
     ) -> PortfolioState:
-        state = PortfolioState()
-        state.fund(spec.fund_venue, money(spec.initial_capital))
+        # Warm start (§6.7): adopt the caller's book as-is; otherwise fund a fresh one.
+        state = spec.initial_state
+        if state is None:
+            state = PortfolioState()
+            state.fund(spec.fund_venue, money(spec.initial_capital))
         engine = BacktestEngine(
             event_log,
             config=spec.config,

@@ -74,6 +74,14 @@ class EngineRunSpec:
     synthesizing a mark from a close (the tick lane requires real marks, §6.0). Both
     knobs are stamped into the run manifest (§19.6) so a result never hides how it
     was produced.
+
+    ``initial_state`` is the paper-resume warm start (§6.7). ``None`` (the default,
+    every backtest) → the engine funds a fresh ``PortfolioState`` with
+    ``initial_capital`` at ``fund_venue``. Provided → the engine *adopts* that book
+    as its starting point (it mutates it and returns it as the final state) and does
+    **not** fund it again, so a ``PaperSession`` can fold its persisted event log
+    into a ``PortfolioState`` and resume from the exact carried book (cash, open
+    positions, accumulators). Only the bar lane supports it; the tick lane rejects it.
     """
 
     config: EngineConfig
@@ -82,6 +90,7 @@ class EngineRunSpec:
     fund_venue: str = ""
     equity_sample_interval_s: int | None = None
     mark_policy: str = "recorded"
+    initial_state: PortfolioState | None = None
 
 
 class SimulationEngine(Protocol):

@@ -188,6 +188,27 @@ def test_restart_and_reconnect_replays_gap_without_double_fill():
     assert result.final_state.account(VENUE).funding_paid != 0
 
 
+def test_paper_rejects_a_tick_native_strategy():
+    """Paper is bar-lane only in N10 — a tick adapter is rejected at construction."""
+    import pytest
+
+    from flint.engine.money import money
+
+    class _TickAdapter:
+        lane = "tick"
+
+    with pytest.raises(ValueError, match="bar lane only"):
+        PaperSession(
+            tenant=TenantContext.local(),
+            store=InMemoryUserData(),
+            run_id="tick-paper",
+            adapter=_TickAdapter(),
+            market=MARKET,
+            resolution_s=HOUR_S,
+            initial_capital=money("100000"),
+        )
+
+
 def test_resume_is_tenant_scoped():
     store = InMemoryUserData()
     _session(store, "owned").feed(ReplayWsSource([

@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 from flint.adapters import InMemoryUserData
-from flint.core.models import Candle, FundingRate, MarkSnapshot, Signal
+from flint.core.models import Candle, FundingRate, MarkSnapshot, Position, Side, Signal
 from flint.data.ranges import Kind
 from flint.engine import BacktestEngine, EngineConfig, PortfolioState, money
 from flint.engine.api import EngineFeed, EngineRunSpec
@@ -219,3 +219,152 @@ def test_close_derived_policy_synthesizes_todays_marks_exactly():
 
     legacy = build_engine_inputs(_candle_only_tables(), {VENUE})
     assert feed.marks == legacy.marks  # the fence preserves today's exact marks
+
+
+# --- warm start: paper-resume parity across both engines (§6.7, N10) --------
+
+
+def _warm_feed() -> EngineFeed:
+    """A short warm-start run: add to a carried long, then settle funding on it.
+
+    Prices sit around the carried entry so nothing liquidates — the run exercises a
+    fill on top of a seeded book and a funding settlement on the grown position, the
+    two accounting moves a paper resume must reproduce identically on both engines.
+    """
+    candles = [
+        _bar(T0, 100.0, 101.0, 99.0, 100.0),
+        _bar(T0 + HOUR_MS, 100.0, 101.0, 99.0, 100.0),
+        _bar(T0 + 2 * HOUR_MS, 100.0, 101.0, 99.0, 100.0),
+    ]
+    funding = {
+        MARKET: [
+            FundingRate(
+                market=MARKET,
+                ts=T0 + HOUR_MS + 12 * 60 * 1000,  # minute 12 of bar1
+                rate_hourly=0.001,
+                interval_s=HOUR_S,
+                price_basis="oracle",
+                rate_type="final",
+                venue=VENUE,
+            )
+        ]
+    }
+    marks = {
+        MARKET: [
+            MarkSnapshot(
+                market=MARKET,
+                ts=T0 + HOUR_MS + 12 * 60 * 1000,
+                mark_price=100.0,
+                index_price=100.0,
+                venue=VENUE,
+            )
+        ]
+    }
+    return EngineFeed(candles=candles, funding=funding, marks=marks)
+
+
+def _warm_seed_state() -> PortfolioState:
+    """A carried book: nonzero cash + one open long + nonzero accumulators (§6.7).
+
+    A fresh instance per engine — the legacy engine mutates the adopted state, so the
+    two engines must not share one object.
+    """
+    state = PortfolioState()
+    acct = state.account(VENUE)
+    acct.cash = money("10000")
+    acct.fees_paid = money("1.5")
+    acct.funding_paid = money("2.0")
+    acct.realized_pnl = money("3.0")
+    state.positions[(VENUE, MARKET)] = Position(
+        market=MARKET,
+        venue=VENUE,
+        side=Side.LONG,
+        size=5.0,
+        entry_price=100.0,
+        margin_mode="cross",
+    )
+    return state
+
+
+def _add_long_once():
+    """Add 2.0 to the carried long on bar0 (fills T+1) — no seed close, blends entry."""
+
+    class _AddOnce:
+        def __init__(self) -> None:
+            self._fired = False
+
+        def on_candle(self, candle, ctx):
+            if not self._fired:
+                self._fired = True
+                return [Signal.long(MARKET, VENUE, size=2.0)]
+            return []
+
+    return _AddOnce()
+
+
+def _stripped_rows(log: EventLog) -> list[dict]:
+    """Every event row with the honest ``engine`` field dropped from lifecycle events."""
+    rows = []
+    for e in log.read():
+        row = e.to_row()
+        if row["kind"] in ("run_started", "run_finished"):
+            row["payload"] = {k: v for k, v in row["payload"].items() if k != "engine"}
+        rows.append(row)
+    return rows
+
+
+def test_warm_start_parity_legacy_vs_nautilus():
+    """A warm-started run is byte-identical across both engines (§6.7, §19.4).
+
+    Both engines adopt the same seed book (fresh per engine), add to the carried long,
+    and settle funding on it. The event streams must be byte-equal except the honest
+    ``engine`` name on the lifecycle events — the same parity contract the cold-start
+    goldens hold, now with a non-empty starting book.
+    """
+    pytest.importorskip("nautilus_trader")
+    feed = _warm_feed()
+
+    def run(engine_name: str) -> EventLog:
+        log = _log(f"warm-{engine_name}")
+        spec = EngineRunSpec(
+            config=EngineConfig(),
+            venue_spec=HYPERLIQUID,
+            fund_venue=VENUE,
+            mark_policy="close_derived",
+            initial_state=_warm_seed_state(),
+        )
+        engine_for(engine_name)().run(
+            feed, _add_long_once(), event_log=log, spec=spec
+        )
+        return log
+
+    nautilus_rows = _stripped_rows(run("nautilus"))
+    assert _stripped_rows(run("legacy-bar")) == nautilus_rows
+
+    # The seed genuinely flowed through: EQUITY carries the seed's funding_paid, and a
+    # new fill landed on top of the seeded book.
+    assert any(
+        r["kind"] == "equity" and r["payload"]["accrued_funding"] != "0"
+        for r in nautilus_rows
+    )
+    assert any(r["kind"] == "fill" for r in nautilus_rows)
+    assert any(r["kind"] == "funding" for r in nautilus_rows)
+
+
+def test_tick_lane_rejects_a_warm_start():
+    """A warm start is bar-lane only — the tick lane rejects ``initial_state`` (N10)."""
+    pytest.importorskip("nautilus_trader")
+
+    class _TickStub:
+        lane = "tick"
+
+    spec = EngineRunSpec(
+        config=EngineConfig(),
+        venue_spec=HYPERLIQUID,
+        fund_venue=VENUE,
+        initial_state=_warm_seed_state(),
+    )
+    with pytest.raises(ValueError, match="tick lane does not support"):
+        engine_for("nautilus")().run(
+            EngineFeed(candles=[]), _TickStub(), event_log=_log("tick-warm"), spec=spec
+        )

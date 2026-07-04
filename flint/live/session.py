@@ -3,8 +3,15 @@
 Paper trading is *not* a second engine; it is the backtest engine fed by the
 :class:`~flint.data.livefeed.LiveFeed` instead of historical replay. That is the
 parity promise, and this runner keeps it by construction: it assembles the
-LiveFeed's bars into the exact keyword feeds ``BacktestEngine.run`` takes and
-runs them through the identical per-bar loop (fills, funding, liquidation).
+LiveFeed's bars into an :class:`~flint.engine.api.EngineFeed` and runs them through
+the shared engine seam (``engine_for("auto")``, the Nautilus bar lane as of N10),
+the identical per-bar loop (fills, funding, liquidation) a backtest runs.
+
+Restart is a **warm start** on that seam (§6.7): the reconstructed portfolio (folded
+from the persisted event log) is handed to the engine as ``EngineRunSpec.initial_state``
+so each connection resumes from the exact carried book — cash, open positions, and
+accumulators — rather than a fresh fund. A connection that closes no bar has nothing
+to run, so the engine is skipped and the reconstructed book is the final state.
 
 The runner is where the Phase-5 carry-forwards compose:
 
@@ -12,7 +19,8 @@ The runner is where the Phase-5 carry-forwards compose:
   class; a classic template is wrapped in ``EngineStrategy``, an ML template in
   ``MLEngineStrategy`` + a tenant-scoped ``ModelStore`` + the run seed. The
   adapter is passed to ``engine.run(strategy=...)`` and its
-  ``drain_rejections()`` / ``tearsheet_notes()`` are drained after each run.
+  ``drain_rejections()`` / ``tearsheet_notes()`` are drained after each run. Paper
+  is bar-lane only in N10 — a tick-native strategy is rejected at construction.
 * **persistence / restart**: the append-only event log *is* the persisted state
   (via ``UserDataPort``, tenant-scoped). A restart reconstructs the portfolio by
   folding that log — never a stored snapshot — and resumes the LiveFeed cursor
@@ -38,11 +46,13 @@ from flint.data.livefeed import (
     LiveFeed,
     assemble_engine_inputs,
 )
-from flint.engine import BacktestEngine, EngineConfig, PortfolioState
+from flint.engine import EngineConfig, PortfolioState
+from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.liquidation import liquidation_price
 from flint.engine.money import Money, money
 from flint.engine.portfolio import EventLog, fold
 from flint.engine.portfolio.events import EQUITY
+from flint.engine.select import engine_for
 from flint.ports import TenantContext, UserDataPort
 from flint.ports.records import RunRecord
 from flint.strategy.base import EngineStrategy, StrategyRejection
@@ -133,6 +143,14 @@ class PaperSession:
         channel: AlertChannel | None = None,
         resume_bar_start: int | None = None,
     ) -> None:
+        # Paper runs the bar lane only (N10): a tick-native strategy needs native L2
+        # matching, which the paper LiveFeed does not carry — reject it up front rather
+        # than fail deep in the engine on the first connection (§8.6/§19.1).
+        if getattr(adapter, "lane", "bar") == "tick":
+            raise ValueError(
+                "paper trading runs the bar lane only — a tick-native strategy "
+                "(lane='tick') is not supported in a paper session (N10)"
+            )
         self._tenant = tenant
         self._store = store
         self._run_id = run_id
@@ -243,10 +261,35 @@ class PaperSession:
 
         state = self._reconstruct_state()
         log = EventLog(self._store, self._tenant, self._run_id)
-        engine = BacktestEngine(
-            log, config=EngineConfig(), state=state, venue_spec=self._spec
-        )
-        engine.run(inputs.candles, strategy=self._adapter, **inputs.run_kwargs())
+        if inputs.candles:
+            # The shared engine seam (Nautilus bar lane as of N10) — the same
+            # substrate a backtest runs, warm-started from the reconstructed book so
+            # this connection resumes from the exact carried state (§6.7). The engine
+            # adopts, mutates, and returns that book as the final state.
+            spec = EngineRunSpec(
+                config=EngineConfig(),
+                venue_spec=self._spec,
+                initial_capital=str(self._initial_capital),
+                fund_venue=self._venue,
+                mark_policy="recorded",
+                initial_state=state,
+            )
+            feed = EngineFeed(
+                candles=inputs.candles,
+                marks=inputs.marks,
+                funding=inputs.funding,
+                books=inputs.books,
+                trades=inputs.trades,
+                oi=inputs.oi,
+            )
+            final_state = engine_for("auto")().run(
+                feed, self._adapter, event_log=log, spec=spec
+            )
+        else:
+            # A connection that closed no bar has nothing to run (the Nautilus bar lane
+            # rejects an empty feed): the reconstructed book is the final state, and
+            # drift / alerts / summary below run on the same path as a bar-bearing run.
+            final_state = state
 
         rejections = self._adapter.drain_rejections()
         notes = self._adapter.tearsheet_notes()
@@ -258,10 +301,10 @@ class PaperSession:
             expected_funding=self._expected_funding,
         )
 
-        ctx = self._alert_context(bars, drift, engine.state, inputs)
+        ctx = self._alert_context(bars, drift, final_state, inputs)
         alerts = self._alerts.evaluate(ctx)
 
-        self._persist_summary(engine.state, drift)
+        self._persist_summary(final_state, drift)
         return RunResult(
             bars=bars,
             processed=len(inputs.candles),
@@ -270,7 +313,7 @@ class PaperSession:
             recoveries=list(self._feed.recoveries),
             drift=drift,
             alerts=alerts,
-            final_state=engine.state,
+            final_state=final_state,
         )
 
     def heartbeat(self, now_ts: int) -> list[Alert]:

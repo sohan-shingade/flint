@@ -594,7 +594,9 @@ class FlintRecorder(Actor):
 
     # -- run-end reconciliation (§19.4) ---------------------------------------
 
-    def reconcile(self, *, portfolio, cache, venue, settlement_currency) -> None:
+    def reconcile(
+        self, *, portfolio, cache, venue, settlement_currency, seed_positions=None
+    ) -> None:
         """Assert the shadow book agrees with Nautilus's own account/positions (§19.4).
 
         Two event models describe one run; this closes the loop at run end. Shadow
@@ -602,6 +604,28 @@ class FlintRecorder(Actor):
         and every open position must match on side/size (:data:`SIZE_TOLERANCE`) and
         entry price (:data:`ENTRY_TOLERANCE`). A mismatch is an engine bug and raises
         :class:`InvariantError`.
+
+        **Warm start (§6.7).** When the run adopted a pre-seeded shadow book (paper
+        resume), ``seed_positions`` maps ``market -> signed size`` of the positions the
+        book already held at run start. Those are never materialized in Nautilus, so
+        its cache only ever holds the *delta* traded since run start. The position
+        comparison is therefore against the shadow book **minus the seed**: for each
+        market the expected Nautilus signed size is ``shadow_signed - seed_signed``
+        (a market whose delta is zero must be flat in Nautilus; a market fully closed
+        or flipped nets to the correct signed delta). Entry price is **not** compared
+        on a seeded market — the shadow blends the seed's entry with the run's fills
+        while Nautilus's average reflects only the delta, so the two legitimately
+        differ; the shadow book is the accounting authority (D26/§19.4). This also
+        leaves Nautilus's *margin* view approximate under warm start (its risk engine
+        never sees the pre-existing positions), which is acceptable for paper.
+
+        Cash stays a strict equality: Nautilus is funded with the seed cash and every
+        subsequent move is mirrored (Flint-priced fills via the tag fee model, funding
+        / liquidation via ``adjust_account``). The one move Nautilus cannot mirror is
+        realized PnL booked against an invisible seed position — a fill that reduces or
+        closes a carried position realizes on the shadow book but opens/flips a fresh
+        Nautilus position instead. Such a fill is out of scope for N10's warm start;
+        the shadow book remains authoritative and this cross-check would flag it.
         """
         shadow_cash = sum((a.cash for a in self._flint_shadow.accounts.values()), ZERO)
         account = portfolio.account(venue)
@@ -611,31 +635,45 @@ class FlintRecorder(Actor):
                 f"shadow cash {shadow_cash} != Nautilus balance {nautilus_cash} "
                 f"(tolerance {CASH_TOLERANCE}) at run end"
             )
+        seed = seed_positions or {}
         shadow_open = {
             market: pos
             for (_, market), pos in self._flint_shadow.positions.items()
             if pos.size != 0
         }
+        # Expected Nautilus holdings = the shadow book minus the invisible seed. A
+        # seeded market that was never traded (delta 0) drops out; one that was closed
+        # or flipped nets to the signed delta Nautilus actually opened.
+        expected: dict[str, float] = {}
+        for market in set(shadow_open) | set(seed):
+            pos = shadow_open.get(market)
+            shadow_signed = (pos.side.sign * pos.size) if pos is not None else 0.0
+            delta = shadow_signed - seed.get(market, 0.0)
+            if abs(delta) > SIZE_TOLERANCE:
+                expected[market] = delta
         nautilus_open = {p.instrument_id.symbol.value: p for p in cache.positions_open()}
-        if set(shadow_open) != set(nautilus_open):
+        if set(expected) != set(nautilus_open):
             raise InvariantError(
-                f"shadow open positions {sorted(shadow_open)} != Nautilus open "
-                f"positions {sorted(nautilus_open)} at run end"
+                f"expected Nautilus open positions {sorted(expected)} (shadow minus "
+                f"seed) != Nautilus open positions {sorted(nautilus_open)} at run end"
             )
-        for market, pos in shadow_open.items():
+        for market, delta in expected.items():
             np = nautilus_open[market]
-            shadow_signed = pos.side.sign * pos.size
             naut_signed = float(np.signed_qty)
-            if abs(shadow_signed - naut_signed) > SIZE_TOLERANCE:
+            if abs(delta - naut_signed) > SIZE_TOLERANCE:
                 raise InvariantError(
-                    f"{market}: shadow signed size {shadow_signed} != Nautilus "
-                    f"{naut_signed} at run end"
+                    f"{market}: expected Nautilus signed size {delta} (shadow minus "
+                    f"seed) != Nautilus {naut_signed} at run end"
                 )
-            if abs(pos.entry_price - float(np.avg_px_open)) > ENTRY_TOLERANCE:
-                raise InvariantError(
-                    f"{market}: shadow entry {pos.entry_price} != Nautilus "
-                    f"{float(np.avg_px_open)} (tolerance {ENTRY_TOLERANCE}) at run end"
-                )
+            # Entry price is comparable only where the shadow position is entirely the
+            # run's own fills (no seed to blend it with, §19.4).
+            if market not in seed:
+                pos = shadow_open[market]
+                if abs(pos.entry_price - float(np.avg_px_open)) > ENTRY_TOLERANCE:
+                    raise InvariantError(
+                        f"{market}: shadow entry {pos.entry_price} != Nautilus "
+                        f"{float(np.avg_px_open)} (tolerance {ENTRY_TOLERANCE}) at run end"
+                    )
 
 
 __all__ = ["FlintRecorder", "CASH_TOLERANCE", "ENTRY_TOLERANCE", "SIZE_TOLERANCE"]

@@ -112,9 +112,22 @@ class NautilusEngine:
         fund_venue = spec.fund_venue or venue_str
         nautilus_venue = Venue(venue_str.upper())
 
-        # Shadow book — the sole source of accounting; the recorder emits from it.
-        shadow = PortfolioState()
-        shadow.fund(fund_venue, money(spec.initial_capital))
+        # Shadow book — the sole source of accounting; the recorder emits from it. On
+        # a paper warm start (§6.7) adopt the caller's book (cash + open positions +
+        # accumulators) as-is; otherwise fund a fresh one at the fund venue.
+        shadow = spec.initial_state
+        if shadow is None:
+            shadow = PortfolioState()
+            shadow.fund(fund_venue, money(spec.initial_capital))
+        # Pre-existing positions are never materialized in Nautilus — it starts flat
+        # and only ever sees the delta traded since run start. Snapshot each open
+        # position's signed size now so the run-end reconciliation compares Nautilus's
+        # cache against the shadow book MINUS this seed (see FlintRecorder.reconcile).
+        seed_positions = {
+            market: pos.signed_size
+            for (_venue, market), pos in shadow.positions.items()
+            if pos.size != 0
+        }
 
         # The recorder (single EventLog + shadow-book writer) and the funding module
         # are built before the venue: the module needs the recorder to emit FUNDING and
@@ -157,7 +170,10 @@ class NautilusEngine:
             oms_type=OmsType.NETTING,
             account_type=AccountType.MARGIN,
             base_currency=USDC,
-            starting_balances=[Money(Decimal(spec.initial_capital), USDC)],
+            # Fund Nautilus with the shadow's cash at the fund venue (Decimal) so its
+            # account mirrors the adopted book from the first tick; on a cold start
+            # that cash is exactly ``initial_capital``, so this is behavior-neutral.
+            starting_balances=[Money(Decimal(shadow.account(fund_venue).cash), USDC)],
             # Flint prices every fill: a synthetic book pinned to Flint's price and a
             # fee model echoing Flint's fee, so Nautilus's account/positions mirror
             # the shadow book (§A7). Synchronous processing so the OrderFilled →
@@ -250,6 +266,7 @@ class NautilusEngine:
             cache=engine.cache,
             venue=nautilus_venue,
             settlement_currency=USDC,
+            seed_positions=seed_positions,
         )
         engine.dispose()
         return shadow
@@ -275,6 +292,12 @@ class NautilusEngine:
         the perp economics, funding before liquidation by registration order). The
         recorder stays the single writer and the run-end reconciliation is identical.
         """
+        if spec.initial_state is not None:
+            raise ValueError(
+                "the tick lane does not support a warm start (initial_state) — paper "
+                "resume is bar-lane only (N10); a tick run always starts from a freshly "
+                "funded book"
+            )
         venue_str = spec.fund_venue or self._infer_tick_venue(feed)
         if not venue_str:
             raise ValueError(
