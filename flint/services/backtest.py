@@ -80,8 +80,9 @@ class BacktestRequest:
     initial_capital: str = "100000"
     overrides: Mapping[str, Any] = field(default_factory=dict)
     signal_venues: tuple[str, ...] = ()
-    # Which simulation substrate to run on (§6.0, D29). "auto" resolves to the
-    # legacy bar loop today; N9 flips "auto" to Nautilus once parity is green.
+    # Which simulation substrate to run on (§6.0, D29). As of the N9 flip "auto"
+    # resolves to the Nautilus engine (the default backtest substrate); "legacy-bar"
+    # stays explicitly selectable (deprecated for backtests, paper-lane until N10).
     engine: str = "auto"
     # The market-data granularity tier the run consumes (§B7): "auto" (highest
     # fully-covered tier, candles floor), or an explicit "candles"/"ticks"/"book"
@@ -241,8 +242,9 @@ def _require_nautilus_for_tick(adapter: object, engine_name: str) -> None:
     no ``process``-driven perp economics to give it. Rather than let it reach an
     engine that would mishandle it (or raise a raw error deep in dispatch), the front
     door rejects it with a structured :class:`ValidationError` naming the fix: select
-    ``engine="nautilus"`` (or ``"auto"`` once N9 flips the default). The guard reads
-    the adapter's ``lane`` marker, so it fires for both the raw and the wrapped forms.
+    ``engine="nautilus"`` (or ``"auto"``, which resolves to Nautilus as of the N9
+    flip). The guard reads the adapter's ``lane`` marker, so it fires for both the
+    raw and the wrapped forms.
     """
     if getattr(adapter, "lane", "bar") == "tick" and engine_name != "nautilus":
         raise ValidationError(

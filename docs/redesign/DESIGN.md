@@ -1450,7 +1450,7 @@ flint/
     time/          #   bar alignment + the no-look-ahead guarantees
   engine/          # the simulator/executor shared by backtest + paper
     api.py         #   the engine seam (D29): EngineFeed, EngineRunSpec, SimulationEngine Protocol
-    select.py      #   engine_for(name) -- lazy Nautilus import; legacy default until the N9 flip
+    select.py      #   engine_for(name) -- lazy Nautilus import; "auto" -> nautilus (N9 default flip)
     signals.py     #   shared pure signal routing/validation + T+1 buffering (bar lane, §6.1)
     context/       #   ExecutionContext + the 7 state managers
     fills/         #   FillModel interface + CLOB + oracle-pool models (shared by both engines)
@@ -1559,7 +1559,7 @@ Phases 1–7 above build the bar-driven v1. The D29 swap to the Nautilus substra
 - **N6 — Parity harness** (`tests/parity/`), **CI-required from here.** Input-parity layer + full byte-diff layer (§19.4) over the §19.3 goldens + one recorded HL day.
 - **N7 — Services + sandbox wiring.** Engine field on the sandbox child, Nautilus import inside the child before strategy exec (warm-up excluded from budgets), RLIMIT_AS raised. Default remains legacy.
 - **N8 — Tick lane** (needs D1+D2). `strategy/tick.py`, new core models (QuoteTick/BookDelta), interval EQUITY, hand-authored book goldens, throughput measurement vs §19.4.
-- **N9 — Default flip.** `engine="auto"` resolves to nautilus; bar-semantics tests parameterized over both engines. Gated on a full green release of the parity suite.
+- **N9 — Default flip.** `engine="auto"` resolves to nautilus; bar-semantics tests parameterized over both engines. Gated on a full green release of the parity suite. **Default flipped 2026-07-04**, with parity 18/18 zero-tolerance green at flip time; `engine="legacy-bar"` stays explicitly selectable (deprecated for backtests, paper-lane substrate until N10).
 - **N10 — Paper-lane migration + legacy deletion** (separate plan). PaperSession migrated off the legacy walk; legacy engine deleted once parity is green through one release soak. See the sunset gates in §6.0.
 
 **Data track (tick kinds, coverage honesty, tiers):**

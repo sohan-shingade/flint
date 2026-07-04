@@ -142,8 +142,10 @@ def test_legacy_engine_via_seam_is_byte_identical_to_a_direct_run():
     assert any(r["kind"] == LIQUIDATION for r in seam_rows)
 
 
-def test_auto_resolves_to_legacy_bar_and_unknown_engines_are_rejected():
-    assert engine_for("auto") is LegacyBarEngine
+def test_engine_for_maps_legacy_bar_and_rejects_unknown_engines():
+    # "auto" now resolves to Nautilus (the N9 default flip); see the guarded
+    # test below. The legacy factory and the unknown-engine rejection run in
+    # every environment, extra or not.
     assert engine_for("legacy-bar") is LegacyBarEngine
     with pytest.raises(UnknownEngineError, match="unknown engine"):
         engine_for("does-not-exist")
@@ -152,10 +154,13 @@ def test_auto_resolves_to_legacy_bar_and_unknown_engines_are_rejected():
 def test_nautilus_resolves_when_the_extra_is_installed():
     # N2: "nautilus" now resolves to the real engine when the optional extra is
     # present, and is loaded lazily (this import is the only place Nautilus enters).
+    # N9: "auto" resolves to that same Nautilus engine — the default backtest
+    # substrate as of the flip.
     pytest.importorskip("nautilus_trader")
     from flint.engine.nautilus import NautilusEngine
 
     assert engine_for("nautilus") is NautilusEngine
+    assert engine_for("auto") is NautilusEngine
     assert NautilusEngine.name == "nautilus"
 
 

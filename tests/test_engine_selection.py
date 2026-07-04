@@ -103,10 +103,12 @@ def _request(**over) -> BacktestRequest:
 # -- select seam (pure string resolution, no heavy imports) -------------------
 
 
-def test_resolve_engine_name_maps_auto_to_legacy_until_the_n9_flip():
-    assert resolve_engine_name("auto") == "legacy-bar"
-    assert resolve_engine_name("legacy-bar") == "legacy-bar"
+def test_resolve_engine_name_maps_auto_to_nautilus_after_the_n9_flip():
+    # Pure string resolution — no Nautilus import, so this runs in every env.
+    # As of the N9 flip "auto" resolves to the Nautilus core (the default).
+    assert resolve_engine_name("auto") == "nautilus"
     assert resolve_engine_name("nautilus") == "nautilus"
+    assert resolve_engine_name("legacy-bar") == "legacy-bar"
 
 
 def test_resolve_engine_name_rejects_unknown_names():
@@ -148,17 +150,39 @@ def test_run_backtest_source_unknown_engine_is_a_uniform_validation_error():
 # -- services: resolved-engine stamping (§19.4/§19.6) --------------------------
 
 
-def test_template_run_stamps_the_resolved_engine_auto_is_legacy_bar():
+def test_template_run_default_engine_auto_stamps_nautilus_and_pin():
+    # N9: with no explicit engine the request defaults to "auto", which now
+    # resolves to Nautilus (the default backtest substrate). The summary and the
+    # persisted manifest record what actually ran — nautilus plus its exact pin —
+    # never the "auto" request alias (§19.4/§19.6).
+    pytest.importorskip("nautilus_trader")
+    from flint.engine.nautilus._compat import NAUTILUS_REQUIRED
+
     ud = InMemoryUserData()
     out = run_backtest(ALICE, _request(engine="auto"), user_data=ud, data=_data())
     assert out.verdict == "ok"
-    # "auto" resolves to the legacy bar loop until the N9 flip — the summary
-    # records what actually ran, never the request alias.
+    assert out.summary["engine"] == "nautilus"
+    assert out.summary["engine_versions"] == {"nautilus_trader": NAUTILUS_REQUIRED}
+    line = f"engine: nautilus (nautilus_trader=={NAUTILUS_REQUIRED})"
+    assert line in out.summary["fidelity_lines"]
+    # The persisted Run-Library head carries the same attribution in its
+    # manifest fidelity block (§19.6).
+    record = ud.load_run(ALICE, "r1")
+    assert line in record.summary["fidelity"]["lines"]
+
+
+def test_template_run_on_legacy_bar_stamps_legacy_bar():
+    # engine="legacy-bar" stays fully selectable after the flip (deprecated for
+    # backtests, retained as the paper-lane substrate until N10). It stamps the
+    # legacy engine with no Nautilus pin — this path needs no extra.
+    ud = InMemoryUserData()
+    out = run_backtest(
+        ALICE, _request(engine="legacy-bar"), user_data=ud, data=_data()
+    )
+    assert out.verdict == "ok"
     assert out.summary["engine"] == "legacy-bar"
     assert "engine: legacy-bar" in out.summary["fidelity_lines"]
     assert "engine_versions" not in out.summary  # no extra pins behind legacy
-    # The persisted Run-Library head carries the same attribution in its
-    # manifest fidelity block (§19.6).
     record = ud.load_run(ALICE, "r1")
     assert "engine: legacy-bar" in record.summary["fidelity"]["lines"]
 
@@ -295,3 +319,35 @@ def test_source_backtest_runs_on_nautilus_inside_the_sandbox_end_to_end():
     assert record.status == "done"
     assert record.summary["strategy_source"] == SOURCE
     assert line in record.summary["fidelity"]["lines"]
+
+
+def test_source_backtest_default_engine_runs_on_nautilus_in_the_sandbox():
+    """N9: a user-source run with the engine unspecified goes through Nautilus.
+
+    ``run_backtest_source`` defaults ``engine="auto"``, which resolves to Nautilus
+    (the default backtest substrate) *before* the child spawns; the sandbox child
+    receives the concrete ``"nautilus"`` name and walks the source on the new core.
+    This pins the default sandbox path — N7's source test pins engine explicitly.
+    """
+    pytest.importorskip("nautilus_trader")
+    from flint.engine.nautilus._compat import NAUTILUS_REQUIRED
+
+    ud = InMemoryUserData()
+    out = run_backtest_source(
+        ALICE,
+        source=SOURCE,
+        run_id="u-default",
+        universe=(MARKET,),
+        venues=(VENUE,),
+        start_ms=T0,
+        end_ms=COVERED_END,
+        # engine unspecified → defaults to "auto" → Nautilus after the N9 flip.
+        user_data=ud,
+        data=_data(),
+    )
+    assert out.verdict == "ok"
+    assert out.summary["engine"] == "nautilus"
+    assert out.summary["engine_versions"] == {"nautilus_trader": NAUTILUS_REQUIRED}
+    assert out.summary["metrics"]["n_returns"] == N - 1
+    record = ud.load_run(ALICE, "u-default")
+    assert record.status == "done"

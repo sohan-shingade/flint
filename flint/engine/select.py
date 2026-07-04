@@ -1,12 +1,13 @@
 """Engine dispatch — pick the simulation substrate by name (§6.0, D29, plan §A1).
 
 :func:`engine_for` maps an engine name to its :class:`SimulationEngine` factory. The
-legacy bar loop is imported eagerly — it is the default and its cost is already
-paid — while the Nautilus engine is imported **lazily** inside its branch so a
-candle-only user never loads the 443 MB / ~5 s dependency. Consequently
-``flint/engine/__init__`` (which imports this module) never pulls anything
-Nautilus-related into the process; that import lives only inside the ``"nautilus"``
-branch, which N2 fills in.
+legacy bar loop is imported eagerly — its cost is already paid and it stays the
+paper-lane substrate until N10 — while the Nautilus engine (the default backtest
+substrate as of the N9 flip) is imported **lazily** inside its branch so a
+candle-only user never loads the 443 MB / ~5 s dependency until a run actually
+selects it. Consequently ``flint/engine/__init__`` (which imports this module)
+never pulls anything Nautilus-related into the process; that import lives only
+inside the ``"nautilus"`` branch.
 """
 
 from __future__ import annotations
@@ -31,16 +32,18 @@ def resolve_engine_name(name: str) -> str:
     """Map a requested engine name to the substrate that will actually run (§6.0).
 
     Pure string resolution — imports nothing, so services can validate and stamp
-    the resolved engine (§19.6) without paying the Nautilus import. ``"auto"``
-    resolves to ``"legacy-bar"`` today; N9 flips it to ``"nautilus"`` once parity
-    is green. Raises :class:`UnknownEngineError` on anything outside
-    :data:`KNOWN_ENGINES` — services surface that as the uniform §19.1
-    validation error.
+    the resolved engine (§19.6) without paying the Nautilus import. As of the N9
+    default flip (2026-07-04, parity 18/18 zero-tolerance) ``"auto"`` resolves to
+    ``"nautilus"`` — the Nautilus core is the default backtest substrate.
+    ``"legacy-bar"`` stays explicitly selectable (deprecated for backtests; it
+    remains the paper-lane substrate until N10). Raises :class:`UnknownEngineError`
+    on anything outside :data:`KNOWN_ENGINES` — services surface that as the
+    uniform §19.1 validation error.
     """
-    if name in ("auto", "legacy-bar"):
-        return "legacy-bar"
-    if name == "nautilus":
+    if name in ("auto", "nautilus"):
         return "nautilus"
+    if name == "legacy-bar":
+        return "legacy-bar"
     raise UnknownEngineError(
         f"unknown engine {name!r} — expected one of 'auto', 'legacy-bar', 'nautilus'"
     )
@@ -105,23 +108,21 @@ class LegacyBarEngine:
 def engine_for(name: str) -> type:
     """Return the :class:`SimulationEngine` factory for ``name`` (§6.0, D29).
 
-    ``"auto"`` resolves to the legacy bar loop for now; N9 flips ``"auto"`` to
-    Nautilus once parity is green. ``"legacy-bar"`` selects it explicitly.
-    ``"nautilus"`` raises until N2 builds the engine — the import is structured
-    lazily inside the branch so this module (and therefore ``flint/engine``) never
-    imports Nautilus.
+    Resolves ``name`` through :func:`resolve_engine_name` — the single source of
+    truth for the ``"auto"`` default (Nautilus as of the N9 flip) and for the
+    ``UnknownEngineError`` on an unrecognized name. ``"legacy-bar"`` returns the
+    legacy bar loop (deprecated for backtests, retained as the paper-lane substrate
+    until N10); the resolved-Nautilus branch structures its import lazily so this
+    module (and therefore ``flint/engine``) never imports Nautilus at load time.
     """
-    if name in ("auto", "legacy-bar"):
+    resolved = resolve_engine_name(name)
+    if resolved == "legacy-bar":
         return LegacyBarEngine
-    if name == "nautilus":
-        # Lazy import: the 156 MB wheel / ~5 s cold start is paid only when the
-        # Nautilus engine is actually selected. Importing here (never at module
-        # load) is what keeps ``flint/engine`` Nautilus-free for candle-only users.
-        # A missing/mispinned extra surfaces as an actionable ImportError from
-        # ``_compat`` rather than a silent fallback to the legacy engine.
-        from .nautilus import NautilusEngine
+    # resolved == "nautilus" — lazy import: the 156 MB wheel / ~5 s cold start is
+    # paid only when the Nautilus engine is actually selected. Importing here (never
+    # at module load) is what keeps ``flint/engine`` Nautilus-free for candle-only
+    # users. A missing/mispinned extra surfaces as an actionable ImportError from
+    # ``_compat`` rather than a silent fallback to the legacy engine.
+    from .nautilus import NautilusEngine
 
-        return NautilusEngine
-    raise UnknownEngineError(
-        f"unknown engine {name!r} — expected one of 'auto', 'legacy-bar', 'nautilus'"
-    )
+    return NautilusEngine

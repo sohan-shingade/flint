@@ -98,9 +98,12 @@ def _request(**over) -> BacktestRequest:
     return BacktestRequest(**base)
 
 
-def test_backtest_runs_through_the_real_engine():
+def test_backtest_runs_through_the_real_engine(engine):
+    # Bar-semantics end-to-end: same assertions must hold on both substrates
+    # (legacy-bar always; nautilus when the extra is present) — the N9 flip is
+    # behavior-preserving at the service level, not only in the byte-parity goldens.
     ud = InMemoryUserData()
-    out = run_backtest(ALICE, _request(), user_data=ud, data=_data())
+    out = run_backtest(ALICE, _request(engine=engine), user_data=ud, data=_data())
 
     assert out.verdict == "ok"
     m = out.summary["metrics"]
@@ -149,9 +152,9 @@ def test_no_funding_data_at_all_rejects():
 # --- equity wire shape: [ts_ms, value] pairs end-to-end (§B7) ---------------
 
 
-def test_equity_curve_is_timestamped_pairs():
+def test_equity_curve_is_timestamped_pairs(engine):
     ud = InMemoryUserData()
-    out = run_backtest(ALICE, _request(), user_data=ud, data=_data())
+    out = run_backtest(ALICE, _request(engine=engine), user_data=ud, data=_data())
     curve = out.summary["equity_curve"]
     assert len(curve) == N
     # Every point is a [ts_ms, value] pair, not a bare float.
