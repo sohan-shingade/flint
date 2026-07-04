@@ -351,6 +351,100 @@ def test_warm_start_parity_legacy_vs_nautilus():
     assert any(r["kind"] == "funding" for r in nautilus_rows)
 
 
+def _close_once():
+    """Close the carried long on bar0 (fills T+1) — realizes PnL against the seed."""
+
+    class _CloseOnce:
+        def __init__(self) -> None:
+            self._fired = False
+
+        def on_candle(self, candle, ctx):
+            if not self._fired:
+                self._fired = True
+                return [Signal.close(MARKET, VENUE)]
+            return []
+
+    return _CloseOnce()
+
+
+def _reduce_half_once():
+    """Halve the carried long on bar0 (fills T+1) — partial realize against the seed."""
+
+    class _ReduceHalfOnce:
+        def __init__(self) -> None:
+            self._fired = False
+
+        def on_candle(self, candle, ctx):
+            if not self._fired:
+                self._fired = True
+                return [Signal.short(MARKET, VENUE, size=2.5)]
+            return []
+
+    return _ReduceHalfOnce()
+
+
+def _run_warm(engine_name: str, strategy, feed: EngineFeed) -> EventLog:
+    """Run one warm-started engine from the shared seed book (fresh state per engine)."""
+    log = _log(f"warm-{engine_name}")
+    spec = EngineRunSpec(
+        config=EngineConfig(),
+        venue_spec=HYPERLIQUID,
+        fund_venue=VENUE,
+        mark_policy="close_derived",
+        initial_state=_warm_seed_state(),
+    )
+    engine_for(engine_name)().run(feed, strategy, event_log=log, spec=spec)
+    return log
+
+
+def test_warm_start_seed_close_parity_legacy_vs_nautilus():
+    """Closing a carried position under warm start is byte-identical (§6.7, §19.4).
+
+    Regression for the silently-dropped close: the seed long is materialized inside
+    Nautilus at run start, so the strategy's reduce-only close fills against a real
+    Nautilus position (rather than being denied against a flat book) and realizes PnL
+    against the same entry basis on both engines. Before the fix Nautilus produced
+    zero fills here while legacy produced one.
+    """
+    pytest.importorskip("nautilus_trader")
+    feed = _warm_feed()
+
+    nautilus_rows = _stripped_rows(_run_warm("nautilus", _close_once(), feed))
+    assert _stripped_rows(_run_warm("legacy-bar", _close_once(), feed)) == nautilus_rows
+
+    fills = [r for r in nautilus_rows if r["kind"] == "fill"]
+    assert len(fills) == 1  # exactly the close — the seed materialization emits nothing
+    fill = fills[0]["payload"]
+    assert fill["side"] == Side.SHORT and fill["size"] == 5.0  # full close of the long
+    assert float(fill["realized_pnl"]) != 0.0  # PnL realized against the carried seed
+    # The seed materialization is Nautilus-internal bookkeeping — it leaks no event
+    # (no extra fill, no order-lifecycle row referencing a seed order).
+    assert all(
+        "seed" not in str(r["payload"].get("client_order_id", "")) for r in nautilus_rows
+    )
+
+
+def test_warm_start_partial_reduce_parity_legacy_vs_nautilus():
+    """Halving a carried position under warm start is byte-identical (§6.7, §19.4).
+
+    A partial reduce nets the seed long down and realizes PnL on the closed half; the
+    materialized seed lets Nautilus net against a real position, matching the shadow.
+    """
+    pytest.importorskip("nautilus_trader")
+    feed = _warm_feed()
+
+    nautilus_rows = _stripped_rows(_run_warm("nautilus", _reduce_half_once(), feed))
+    assert (
+        _stripped_rows(_run_warm("legacy-bar", _reduce_half_once(), feed))
+        == nautilus_rows
+    )
+
+    fills = [r for r in nautilus_rows if r["kind"] == "fill"]
+    assert len(fills) == 1
+    assert fills[0]["payload"]["size"] == 2.5  # half the carried long closed
+    assert float(fills[0]["payload"]["realized_pnl"]) != 0.0
+
+
 def test_tick_lane_rejects_a_warm_start():
     """A warm start is bar-lane only — the tick lane rejects ``initial_state`` (N10)."""
     pytest.importorskip("nautilus_trader")

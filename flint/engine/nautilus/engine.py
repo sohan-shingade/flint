@@ -114,20 +114,14 @@ class NautilusEngine:
 
         # Shadow book — the sole source of accounting; the recorder emits from it. On
         # a paper warm start (§6.7) adopt the caller's book (cash + open positions +
-        # accumulators) as-is; otherwise fund a fresh one at the fund venue.
+        # accumulators) as-is; otherwise fund a fresh one at the fund venue. Carried
+        # positions are materialized inside Nautilus at the first bar (the shim's
+        # ``_materialize_seed``), so the book mirrors the shadow from run start and the
+        # run-end reconciliation stays a strict cross-check (see FlintRecorder.reconcile).
         shadow = spec.initial_state
         if shadow is None:
             shadow = PortfolioState()
             shadow.fund(fund_venue, money(spec.initial_capital))
-        # Pre-existing positions are never materialized in Nautilus — it starts flat
-        # and only ever sees the delta traded since run start. Snapshot each open
-        # position's signed size now so the run-end reconciliation compares Nautilus's
-        # cache against the shadow book MINUS this seed (see FlintRecorder.reconcile).
-        seed_positions = {
-            market: pos.signed_size
-            for (_venue, market), pos in shadow.positions.items()
-            if pos.size != 0
-        }
 
         # The recorder (single EventLog + shadow-book writer) and the funding module
         # are built before the venue: the module needs the recorder to emit FUNDING and
@@ -266,7 +260,6 @@ class NautilusEngine:
             cache=engine.cache,
             venue=nautilus_venue,
             settlement_currency=USDC,
-            seed_positions=seed_positions,
         )
         engine.dispose()
         return shadow

@@ -115,6 +115,9 @@ class BarLaneStrategy(Strategy):
         self._flint_candle_by_key: dict[tuple[str, int], Candle] = {
             (c.market, c.ts): c for c in feed.candles
         }
+        # Warm start (§6.7): a carried shadow book is mirrored into Nautilus's own
+        # book on the FIRST per-bar sequence (see ``_materialize_seed``), once.
+        self._flint_seeded = False
 
     # -- lifecycle -------------------------------------------------------------
 
@@ -154,6 +157,13 @@ class BarLaneStrategy(Strategy):
     # -- the locked per-bar sequence (§6.1, funding/liquidation are N4/N5) ------
 
     def _process_bar(self, candle: Candle) -> None:
+        # (0) Warm start (§6.7): mirror the carried shadow book into Nautilus before
+        # anything else on the first bar, so its book agrees from the first fill.
+        # Fills are synchronous (``use_message_queue=False``), so the seed positions
+        # exist in Nautilus before step (2)'s T+1 fills and the strategy's signals.
+        if not self._flint_seeded:
+            self._flint_seeded = True
+            self._materialize_seed()
         venue = candle.venue
         market = candle.market
         start = candle.ts
@@ -383,6 +393,54 @@ class BarLaneStrategy(Strategy):
         self.submit_order(nautilus_order)
 
     # -- (4) liquidation forced-close (module-planned, shim-submitted) ---------
+
+    # -- (0) warm-start seed materialization (§6.7, liquidation close in reverse) --
+
+    def _materialize_seed(self) -> None:
+        """Open each carried shadow position inside Nautilus at run start (§6.7).
+
+        A paper warm start adopts a pre-seeded shadow book, but Nautilus's own book
+        starts flat. Mirror every carried position into Nautilus with a tagged
+        zero-fee fill pinned to the position's **entry** price — the liquidation
+        forced-close machinery run in reverse (open instead of flatten) — so
+        Nautilus's cache and account track the shadow book from bar one. A later fill
+        that reduces or closes a carried position then fills against a real Nautilus
+        position instead of being denied reduce-only against a flat book, and the
+        run-end reconciliation stays a strict mirror (§19.4).
+
+        The ``seed`` tag tells the recorder to ignore the fill: the shadow already
+        carries the position (it was adopted at run start) and the zero fee leaves the
+        account untouched, so this is pure Nautilus-side bookkeeping, not a FILL event.
+        The entry-priced open realizes nothing, so cash equality holds; a later close
+        realizes PnL against the same entry basis on both books.
+        """
+        for (venue, market), pos in self._flint_shadow.positions.items():
+            if pos.size == 0:
+                continue
+            instrument = self._flint_instruments.get(market)
+            if instrument is None:
+                raise ValueError(
+                    f"warm-start seed position on {market} has no instrument in this "
+                    "run — every seeded market must be present for the mirror to hold"
+                )
+            self._flint_submission_seq += 1
+            payload = {
+                "price": pos.entry_price,  # entry → Nautilus opens at the shadow basis
+                "fee": 0.0,  # zero fee → the seed leaves the account balance untouched
+                "market": market,
+                "venue": venue,
+                "seed": True,
+            }
+            nautilus_order = self.order_factory.market(
+                instrument_id=instrument.id,
+                order_side=_NAUTILUS_SIDE[pos.side],
+                quantity=Quantity.from_str(f"{pos.size:.{instrument.size_precision}f}"),
+                time_in_force=TimeInForce.IOC,
+                client_order_id=ClientOrderId(f"nseed{self._flint_submission_seq}"),
+                reduce_only=False,
+                tags=[encode_fill_tag(payload)],
+            )
+            self.submit_order(nautilus_order)
 
     def _submit_liquidation_close(self, close) -> None:
         """Flatten one liquidated position on Nautilus at its entry price (§6.5).
