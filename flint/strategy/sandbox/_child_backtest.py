@@ -52,7 +52,7 @@ def _run(job: dict[str, Any]) -> dict[str, Any]:
 
     # Engine selection happens through the same seam as the in-process template
     # path (flint/engine/select.py, §6.0) — the child never hand-rolls a substrate.
-    resolved = resolve_engine_name(job.get("engine", "legacy-bar"))
+    resolved = resolve_engine_name(job.get("engine", "nautilus"))
     engine_versions: dict[str, str] = {}
     if resolved == "nautilus":
         # Import the Nautilus wheel NOW — before the RLIMIT clamp (a low memory
@@ -65,7 +65,7 @@ def _run(job: dict[str, Any]) -> dict[str, Any]:
 
         engine_versions["nautilus_trader"] = _compat.NAUTILUS_REQUIRED
 
-    engine_cls = engine_for(job.get("engine", "legacy-bar"))
+    engine_cls = engine_for(job.get("engine", "nautilus"))
 
     # Clamp RLIMIT_AS/CPU only AFTER the heavy infra above is imported (pyarrow/
     # engine/nautilus are large), so a low memory floor bounds the strategy's own
@@ -108,10 +108,9 @@ def _run(job: dict[str, Any]) -> dict[str, Any]:
         overrides=dict(job["overrides"]),
     )
     log = EventLog(InMemoryUserData(), tenant, job["run_id"])
-    # The engine seam (§6.0): both substrates take the same feed/spec and fund the
-    # portfolio themselves. The legacy branch is behavior-identical to the direct
-    # ``BacktestEngine`` construction this child used pre-N7 (``LegacyBarEngine``
-    # replays the exact same construction order and kwargs).
+    # The engine seam (§6.0): the substrate takes the feed/spec and funds the
+    # portfolio itself. As of N10 the only substrate is the Nautilus core; the child
+    # dispatches through ``engine_for`` exactly as the in-process path does.
     feed = EngineFeed(candles=candles, funding=funding, marks=marks)
     spec = EngineRunSpec(
         config=EngineConfig(),

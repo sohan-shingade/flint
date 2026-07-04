@@ -20,8 +20,8 @@ so a disconnect is detected as a jump in the first post-reconnect event's bar:
 The feed emits :class:`~flint.data.livefeed.aggregator.LiveBar`s and does **no**
 engine wiring itself — the runner (slice 5.6) is the surface that owns the
 engine, strategy adapter, and order state. :func:`assemble_engine_inputs` turns
-an emitted bar stream into the exact keyword feeds ``BacktestEngine.run`` takes,
-so paper trades run the identical loop as backtest (the parity promise). T+1
+an emitted bar stream into the per-market feeds a run consumes, so paper trades run
+the identical Nautilus bar lane as backtest (the parity promise). T+1
 execution and the latency model are the engine's and are untouched here: a bar's
 ``ts`` is its venue-event bar start, so ``close_event_ts + latency`` eligibility
 falls out of the same code the backtest uses.
@@ -62,12 +62,11 @@ DEFAULT_RECORD_CHANNELS = frozenset({"trades", "bbo", "activeAssetCtx"})
 
 @dataclass
 class EngineInputs:
-    """The per-market feeds a bar stream lowers to, ready for ``engine.run`` (§6.7).
+    """The per-market feeds a bar stream lowers to, ready for the engine (§6.7).
 
-    Mirrors ``BacktestEngine.run``'s signature exactly so the runner does
-    ``engine.run(inputs.candles, strategy=adapter, **inputs.run_kwargs())`` — the
-    same call a backtest makes, which is what makes paper/live provably the same
-    loop.
+    Mirrors :class:`~flint.engine.api.EngineFeed`'s slots so the paper runner
+    assembles the exact feed a backtest runs through the engine seam — which is
+    what makes paper/live provably the same loop.
     """
 
     candles: list[Candle] = field(default_factory=list)
@@ -76,15 +75,6 @@ class EngineInputs:
     oi: dict[str, list[OpenInterestSnapshot]] = field(default_factory=dict)
     books: dict[str, list[OrderbookSnapshot]] = field(default_factory=dict)
     trades: dict[str, list[TradePrint]] = field(default_factory=dict)
-
-    def run_kwargs(self) -> dict:
-        return {
-            "marks": self.marks,
-            "funding": self.funding,
-            "oi": self.oi,
-            "books": self.books,
-            "trades": self.trades,
-        }
 
 
 def assemble_engine_inputs(bars: Iterable[LiveBar]) -> EngineInputs:

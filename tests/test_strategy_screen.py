@@ -21,7 +21,7 @@ from random import Random
 import pytest
 
 from flint.adapters import InMemoryUserData
-from flint.engine import BacktestEngine, EngineConfig, PortfolioState
+from flint.engine import PortfolioState
 from flint.engine.loop import EngineContext
 from flint.engine.portfolio import EventLog
 from flint.ports import ResourceQuota, TenantContext
@@ -166,7 +166,7 @@ def test_screen_true_lets_clean_source_run():
 
 # --- ctx as a value object across the boundary (§8.3) -------------------------
 
-_SENSITIVE = (TenantContext, UserDataPort, EventLog, BacktestEngine)
+_SENSITIVE = (TenantContext, UserDataPort, EventLog, EngineContext)
 
 
 def _reachable(root, *, cap=50_000):
@@ -213,16 +213,29 @@ def _reachable(root, *, cap=50_000):
 
 
 def _live_ctx():
+    # The live bar lane hands the strategy an EngineContext whose ``submit_order_fn``
+    # is the shim's ``_submit`` — a bound method of the ``FlintRecorder``, the single
+    # in-process EventLog writer (§A6). We build that same leak shape directly: the
+    # recorder holds the EventLog (hence the store and the tenant), so a holder of the
+    # ctx can walk ``submit_order_fn.__self__`` straight to them. This is exactly why
+    # untrusted code is never handed the in-process ctx — only its serialized value
+    # object across the sandbox boundary. Needs the Nautilus recorder, so skip cleanly
+    # without the extra.
+    pytest.importorskip("nautilus_trader")
+    from flint.engine.nautilus.translate import FlintRecorder
+
     store = InMemoryUserData()
     log = EventLog(store, TenantContext.local(), run_id="vo")
-    engine = BacktestEngine(log, config=EngineConfig(), state=PortfolioState())
+    recorder = FlintRecorder(
+        event_log=log, shadow=PortfolioState(), engine_name="nautilus"
+    )
     ctx = EngineContext(
-        state=engine.state,
+        state=recorder._flint_shadow,
         default_venue="hyperliquid",
         now=0,
         rng=Random(0),
         venue_spec=HYPERLIQUID,
-        submit_order_fn=engine._submit,
+        submit_order_fn=recorder.record_placed,
     )
     return ctx
 
@@ -236,7 +249,7 @@ def test_walker_actually_finds_planted_sensitive_objects():
 
 def test_live_in_process_ctx_can_reach_tenant_and_store():
     # The live engine ctx is NOT a value object: submit_order_fn.__self__ is the
-    # engine, which holds the event log, the store, and the tenant. This is why
+    # recorder, which holds the event log, the store, and the tenant. This is why
     # untrusted code is NEVER handed it in-process — only across the boundary.
     reached = _reachable(_live_ctx())
     assert any(isinstance(o, TenantContext) for o in reached)

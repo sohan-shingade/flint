@@ -2,8 +2,9 @@
 
 Pure domain logic: it reaches infrastructure only through ports and consumes
 market data as already-loaded in-memory fixtures, never doing I/O itself (§4,
-§6, §17). Slice 3.1 ships the per-bar loop (``BacktestEngine``) and the state,
-fill, funding, and liquidation primitives it composes.
+§6, §17). Every backtest now runs on the Nautilus core (§6.0); this package
+owns the state, fill, funding, and liquidation primitives it composes, plus the
+engine seam (``SimulationEngine`` / ``engine_for``) that dispatches to it.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ from __future__ import annotations
 from .api import EngineFeed, EngineRunSpec, SimulationEngine
 from .context import AccountView, OpenInterestSnapshot
 from .loop import (
-    BacktestEngine,
     EngineConfig,
     EngineContext,
     NoopStrategy,
@@ -21,12 +21,11 @@ from .loop import (
 from .money import ZERO, Money, money
 from .orders import OrderRecord, OrderStatus
 from .portfolio import BookState, fold
-from .select import LegacyBarEngine, UnknownEngineError, engine_for
+from .select import UnknownEngineError, engine_for
 from .state import Account, PortfolioState
 from .tearsheet import InvariantError, Tearsheet, build_tearsheet, check_invariants
 
 __all__ = [
-    "BacktestEngine",
     "EngineConfig",
     "EngineContext",
     "Strategy",
@@ -52,6 +51,5 @@ __all__ = [
     "EngineRunSpec",
     "SimulationEngine",
     "engine_for",
-    "LegacyBarEngine",
     "UnknownEngineError",
 ]

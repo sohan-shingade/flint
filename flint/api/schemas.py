@@ -20,8 +20,8 @@ Granularity = Literal["auto", "candles", "ticks", "book"]
 # The wire vocabulary for the simulation substrate (§6.0, D29) — mirrors
 # ``flint.engine.select.KNOWN_ENGINES``. Enum-validated here so an unknown engine
 # is the uniform ``validation`` error at the surface; "auto" resolves to the
-# Nautilus engine as of the N9 parity flip ("legacy-bar" stays selectable).
-Engine = Literal["auto", "legacy-bar", "nautilus"]
+# Nautilus engine as of the N9 parity flip (the legacy bar engine was removed in N10).
+Engine = Literal["auto", "nautilus"]
 
 
 class RangeModel(BaseModel):

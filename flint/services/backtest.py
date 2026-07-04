@@ -12,7 +12,7 @@ pieces the earlier phases built, in one direction only:
   wrapped by :func:`flint.live.build_adapter` — classic → ``EngineStrategy``,
   ML → ``MLEngineStrategy`` + tenant-scoped ``ModelStore`` + seed. The exact
   runner contract paper uses (5.6), reused here rather than re-implemented.
-* **engine** (§6): :class:`~flint.engine.BacktestEngine` walks the candles; after
+* **engine** (§6): the Nautilus core walks the candles through ``engine_for``; after
   the run the adapter's ``drain_rejections()`` / ``tearsheet_notes()`` are drained
   into the result, and the per-bar EQUITY event stream folds into the trust report
   (§11) via :func:`flint.research.build_report`.
@@ -81,8 +81,8 @@ class BacktestRequest:
     overrides: Mapping[str, Any] = field(default_factory=dict)
     signal_venues: tuple[str, ...] = ()
     # Which simulation substrate to run on (§6.0, D29). As of the N9 flip "auto"
-    # resolves to the Nautilus engine (the default backtest substrate); "legacy-bar"
-    # stays explicitly selectable (deprecated for backtests, paper-lane until N10).
+    # resolves to the Nautilus engine — the only backtest substrate since the legacy
+    # bar engine was removed in N10.
     engine: str = "auto"
     # The market-data granularity tier the run consumes (§B7): "auto" (highest
     # fully-covered tier, candles floor), or an explicit "candles"/"ticks"/"book"
@@ -229,7 +229,7 @@ def validate_engine(name: str) -> str:
     except UnknownEngineError as exc:
         raise ValidationError(
             str(exc),
-            detail="engine must be one of 'auto', 'legacy-bar', 'nautilus'",
+            detail="engine must be one of 'auto', 'nautilus'",
             hint="omit the field (or pass 'auto') to use the default substrate",
         ) from exc
 
@@ -238,20 +238,20 @@ def _require_nautilus_for_tick(adapter: object, engine_name: str) -> None:
     """Reject a tick-native strategy routed onto anything but Nautilus (§8.6/§19.1).
 
     A :class:`~flint.strategy.tick.TickStrategy` runs *only* on the Nautilus core's
-    native L2 matching lane — the legacy bar loop has no tick tape, no L2 book, and
-    no ``process``-driven perp economics to give it. Rather than let it reach an
-    engine that would mishandle it (or raise a raw error deep in dispatch), the front
-    door rejects it with a structured :class:`ValidationError` naming the fix: select
-    ``engine="nautilus"`` (or ``"auto"``, which resolves to Nautilus as of the N9
-    flip). The guard reads the adapter's ``lane`` marker, so it fires for both the
+    native L2 matching lane — it needs a tick tape, an L2 book, and ``process``-driven
+    perp economics. Since N10 the Nautilus core is the only substrate, so this is a
+    defensive guard: it fires only if a future non-Nautilus substrate is ever routed a
+    tick strategy, rejecting it at the front door with a structured
+    :class:`ValidationError` naming the fix rather than raising a raw error deep in
+    dispatch. The guard reads the adapter's ``lane`` marker, so it fires for both the
     raw and the wrapped forms.
     """
     if getattr(adapter, "lane", "bar") == "tick" and engine_name != "nautilus":
         raise ValidationError(
             f"a tick-native strategy requires engine='nautilus', not {engine_name!r}",
             detail="tick strategies use native L2 matching, which only the Nautilus "
-            "core provides — the legacy bar loop cannot run them",
-            hint="pass engine='nautilus' (tick strategies never run on 'legacy-bar')",
+            "core provides",
+            hint="pass engine='nautilus' (or 'auto', which resolves to it)",
         )
 
 
@@ -260,8 +260,8 @@ def _stamp_engine(
 ) -> None:
     """Stamp the substrate that actually ran into the run's summary (§19.4/§19.6).
 
-    ``summary["engine"]`` carries the resolved name (``legacy-bar`` | ``nautilus``
-    — never ``auto``); ``summary["engine_versions"]`` the exact dependency pins
+    ``summary["engine"]`` carries the resolved name (``nautilus`` — never ``auto``);
+    ``summary["engine_versions"]`` the exact dependency pins
     behind it (the Nautilus pin, so a churn-induced numeric change is attributable,
     never silent — §19.4). The same facts are appended as a fidelity line, which
     the caller threads into the Run-Library manifest (``_manifest(fidelity_lines=…)``)

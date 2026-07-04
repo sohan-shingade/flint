@@ -7,10 +7,12 @@ summary/manifest (§19.4/§19.6 attribution), and the headline D25 path — a
 trivial user-source strategy walked by the **Nautilus** engine inside the OS
 sandbox via ``run_backtest_source(engine="nautilus")`` (§13.2 on the new core).
 
-Legacy-lane tests run in every environment; Nautilus tests guard with a
-function-level ``importorskip`` so this module still collects and the
-legacy/validation coverage still runs without the ``nautilus`` extra. Inputs
-are hand-authored (D26).
+The legacy bar engine was removed in N10, so ``engine="legacy-bar"`` now rejects
+like any unknown name — the former legacy-lane stamping tests are rejection tests
+here (structured §19.1 payload through services and the API route), and they run in
+every environment. Nautilus tests guard with a function-level ``importorskip`` so
+this module still collects and the validation/rejection coverage still runs without
+the ``nautilus`` extra. Inputs are hand-authored (D26).
 """
 
 from __future__ import annotations
@@ -108,7 +110,13 @@ def test_resolve_engine_name_maps_auto_to_nautilus_after_the_n9_flip():
     # As of the N9 flip "auto" resolves to the Nautilus core (the default).
     assert resolve_engine_name("auto") == "nautilus"
     assert resolve_engine_name("nautilus") == "nautilus"
-    assert resolve_engine_name("legacy-bar") == "legacy-bar"
+
+
+def test_resolve_engine_name_rejects_the_removed_legacy_bar_engine():
+    # The legacy bar engine was deleted in N10, so its name rejects like any unknown
+    # one — with an actionable message pointing at the surviving substrate.
+    with pytest.raises(UnknownEngineError, match="legacy bar engine was removed"):
+        resolve_engine_name("legacy-bar")
 
 
 def test_resolve_engine_name_rejects_unknown_names():
@@ -171,41 +179,34 @@ def test_template_run_default_engine_auto_stamps_nautilus_and_pin():
     assert line in record.summary["fidelity"]["lines"]
 
 
-def test_template_run_on_legacy_bar_stamps_legacy_bar():
-    # engine="legacy-bar" stays fully selectable after the flip (deprecated for
-    # backtests, retained as the paper-lane substrate until N10). It stamps the
-    # legacy engine with no Nautilus pin — this path needs no extra.
+def test_template_run_on_legacy_bar_is_rejected():
+    # engine="legacy-bar" was removed in N10; the services front door rejects it with
+    # the uniform §19.1 validation error (str of the UnknownEngineError), before
+    # anything runs — no dangling "running" head is persisted. This path needs no extra.
     ud = InMemoryUserData()
-    out = run_backtest(
-        ALICE, _request(engine="legacy-bar"), user_data=ud, data=_data()
-    )
-    assert out.verdict == "ok"
-    assert out.summary["engine"] == "legacy-bar"
-    assert "engine: legacy-bar" in out.summary["fidelity_lines"]
-    assert "engine_versions" not in out.summary  # no extra pins behind legacy
-    record = ud.load_run(ALICE, "r1")
-    assert "engine: legacy-bar" in record.summary["fidelity"]["lines"]
+    with pytest.raises(ValidationError, match="legacy bar engine was removed"):
+        run_backtest(ALICE, _request(engine="legacy-bar"), user_data=ud, data=_data())
+    with pytest.raises(KeyError):
+        ud.load_run(ALICE, "r1")
 
 
-def test_source_run_stamps_the_resolved_engine_legacy_bar():
+def test_source_run_on_legacy_bar_is_rejected():
     ud = InMemoryUserData()
-    out = run_backtest_source(
-        ALICE,
-        source=SOURCE,
-        run_id="u-legacy",
-        universe=(MARKET,),
-        venues=(VENUE,),
-        start_ms=T0,
-        end_ms=COVERED_END,
-        engine="legacy-bar",
-        user_data=ud,
-        data=_data(),
-    )
-    assert out.verdict == "ok"
-    assert out.summary["engine"] == "legacy-bar"
-    assert "engine: legacy-bar" in out.summary["fidelity_lines"]
-    record = ud.load_run(ALICE, "u-legacy")
-    assert "engine: legacy-bar" in record.summary["fidelity"]["lines"]
+    with pytest.raises(ValidationError, match="legacy bar engine was removed"):
+        run_backtest_source(
+            ALICE,
+            source=SOURCE,
+            run_id="u-legacy",
+            universe=(MARKET,),
+            venues=(VENUE,),
+            start_ms=T0,
+            end_ms=COVERED_END,
+            engine="legacy-bar",
+            user_data=ud,
+            data=_data(),
+        )
+    with pytest.raises(KeyError):
+        ud.load_run(ALICE, "u-legacy")
 
 
 # -- API surface: enum-validated wire field ------------------------------------
@@ -253,16 +254,30 @@ def test_api_source_backtest_rejects_unknown_engine_with_uniform_validation_erro
     assert resp.json()["error"]["code"] == "validation"
 
 
-def test_api_backtest_threads_engine_through_to_the_run_record():
-    client = _client()
-    run_id = client.post(
+def test_api_backtest_rejects_the_removed_legacy_bar_engine():
+    # The wire enum no longer admits "legacy-bar" (removed in N10), so the route
+    # rejects it with the uniform §19.1 validation payload — never a 500, and the
+    # rejection runs in every environment (no engine actually starts).
+    resp = _client().post(
         "/api/v1/backtests", json=_body(engine="legacy-bar"), headers=_auth()
-    ).json()["run_id"]
-    summary = client.get(f"/api/v1/backtests/{run_id}", headers=_auth()).json()
-    assert summary["engine"] == "legacy-bar"
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "validation"
 
 
 # -- Nautilus lane (guarded per-test so the legacy coverage above always runs) --
+
+
+def test_api_backtest_threads_resolved_engine_through_to_the_run_record():
+    # The engine chosen at the wire lands in the persisted run record: with no engine
+    # the request defaults to "auto", which resolves to and stamps "nautilus".
+    pytest.importorskip("nautilus_trader")
+    client = _client()
+    run_id = client.post(
+        "/api/v1/backtests", json=_body(), headers=_auth()
+    ).json()["run_id"]
+    summary = client.get(f"/api/v1/backtests/{run_id}", headers=_auth()).json()
+    assert summary["engine"] == "nautilus"
 
 
 def test_template_run_on_nautilus_stamps_engine_and_exact_pin():

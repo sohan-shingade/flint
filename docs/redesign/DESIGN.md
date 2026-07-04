@@ -633,7 +633,7 @@ The core runs in **two lanes** over that one substrate:
 - **The bar lane** (§6.1) — the candle-driven path, with **exact T+1-at-next-open semantics preserved**. It is a thin shim (`BarLaneStrategy`, §8) over the Nautilus substrate: signal routing/validation is extracted into shared pure `flint/engine/signals.py`, held signals submit at bar *t+1*'s open exactly as the legacy loop did, and Flint's own fill models price every tier (the shim submits marketable IOC limits at that price). This is the tier-1 path the average trader lives on and it must keep working unchanged as bars become derived events.
 - **The tick lane** (§8, tick-native `TickStrategy`) — event-driven L2 matching done **Nautilus-native**, **no T+1** (a real venue latency model replaces the next-bar-open rule), for tick/quote/book strategies. This is the new capability; its fills are covered by hand-authored book goldens, not by bar-lane parity.
 
-**Shared pure modules are the single implementation both engines call during migration.** `funding/settlement.py`, `liquidation/check.py` + the new `liquidation/cascade.py` (the cascade orchestration extracted from the legacy loop into a pure function, §6.5), and the fill models are called *verbatim* by both the legacy `BacktestEngine` and the `NautilusEngine` — parity (§19.4) reduces to "the same inputs reach the same pure math." The legacy bar loop is retained as a **parity oracle and the paper substrate** during migration and is deleted at N10 (§18) once parity is green through a release soak and the paper lane has migrated — it is **not** permanent.
+**Shared pure modules are the single implementation both engines call during migration.** `funding/settlement.py`, `liquidation/check.py` + the new `liquidation/cascade.py` (the cascade orchestration extracted from the legacy loop into a pure function, §6.5), and the fill models are called *verbatim* by both the legacy `BacktestEngine` and the `NautilusEngine` — parity (§19.4) reduces to "the same inputs reach the same pure math." The legacy bar loop is retained as a **parity oracle and the paper substrate** during migration and is deleted at N10 (§18) once parity is green through a release soak and the paper lane has migrated — it is **not** permanent. **(Deleted 2026-07-04 at N10.** The pure modules survive as the single implementation; the parity contract survives as frozen goldens recorded from the legacy engine's final run — see §19.4 and `tests/parity/README.md`.)
 
 **Two run-manifest knobs the substrate swap introduces** (both always recorded in the run manifest, §19.6, so a result never hides how it was produced):
 
@@ -1524,7 +1524,7 @@ flint/
 ui/                # focused React app (5 screens) -> API only
 docs/              # guides, this spec, plans, the research dossier
 tests/             # all mocked; engine tests inject fake ports
-  parity/          #   legacy-engine-vs-Nautilus byte-diff harness (§19.4; CI-required from N6)
+  parity/          #   Nautilus-vs-frozen-legacy-golden byte-diff harness (§19.4; goldens frozen at N10)
   fixtures/
     tardis/        #     committed real Tardis first-of-month fragments, truncated (D26, §9.2)
 ```
@@ -1560,7 +1560,7 @@ Phases 1–7 above build the bar-driven v1. The D29 swap to the Nautilus substra
 - **N7 — Services + sandbox wiring.** Engine field on the sandbox child, Nautilus import inside the child before strategy exec (warm-up excluded from budgets), RLIMIT_AS raised. Default remains legacy.
 - **N8 — Tick lane** (needs D1+D2). `strategy/tick.py`, new core models (QuoteTick/BookDelta), interval EQUITY, hand-authored book goldens, throughput measurement vs §19.4.
 - **N9 — Default flip.** `engine="auto"` resolves to nautilus; bar-semantics tests parameterized over both engines. Gated on a full green release of the parity suite. **Default flipped 2026-07-04**, with parity 18/18 zero-tolerance green at flip time; `engine="legacy-bar"` stays explicitly selectable (deprecated for backtests, paper-lane substrate until N10).
-- **N10 — Paper-lane migration + legacy deletion** (separate plan). PaperSession migrated off the legacy walk; legacy engine deleted once parity is green through one release soak. See the sunset gates in §6.0.
+- **N10 — Paper-lane migration + legacy deletion** (separate plan). PaperSession migrated off the legacy walk; legacy engine deleted once parity is green through one release soak. See the sunset gates in §6.0. **Completed 2026-07-04**: PaperSession runs the Nautilus bar lane, warm-started from the folded event log (`EngineRunSpec.initial_state`, seed positions materialized inside Nautilus at the first bar so carried positions close correctly and the run-end reconciliation stays strict); the legacy bar walk is deleted and `engine="legacy-bar"` rejects with an actionable §19.1 error; the parity suite asserts Nautilus against **goldens frozen from the legacy engine's final run** (`tests/parity/goldens/`, recorded at pre-deletion commit `300e9b2` — regenerating them requires pre-N10 history).
 
 **Data track (tick kinds, coverage honesty, tiers):**
 

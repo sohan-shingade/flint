@@ -19,10 +19,12 @@ import pytest
 
 from flint.adapters import InMemoryUserData
 from flint.core.models import Candle, Signal
-from flint.engine import BacktestEngine, PortfolioState, build_tearsheet
-from flint.engine.fills import NaiveFillModel
+from flint.engine import EngineConfig, build_tearsheet
+from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.portfolio import EventLog
+from flint.engine.select import engine_for
 from flint.ports import TenantContext
+from flint.venues import HYPERLIQUID
 from flint.research import (
     ParamSpace,
     WalkForwardConfig,
@@ -80,16 +82,25 @@ class _LongThenClose:
 
 
 def _engine_runner(params, start, end):
-    """Fixture ``BacktestRunner``: run the honest per-bar engine over ``CANDLES[start:end]``
+    """Fixture ``BacktestRunner``: run the Nautilus bar lane over ``CANDLES[start:end]``
     with a ``size_usd``-parametrized long, and score on realized net PnL."""
     window = CANDLES[start:end]
     first_ts = window[0].ts
     close_ts = window[-2].ts  # exit decided here fills on window[-1] (T+1)
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
     log = EventLog(InMemoryUserData(), TenantContext.local(), run_id="wf-fixture")
-    engine = BacktestEngine(log, state=state, fill_model=NaiveFillModel())
-    engine.run(window, strategy=_LongThenClose(params["size_usd"], first_ts, close_ts))
+    spec = EngineRunSpec(
+        config=EngineConfig(),
+        venue_spec=HYPERLIQUID,
+        initial_capital="100000",
+        fund_venue=VENUE,
+        mark_policy="close_derived",
+    )
+    engine_for("nautilus")().run(
+        EngineFeed(candles=window),
+        _LongThenClose(params["size_usd"], first_ts, close_ts),
+        event_log=log,
+        spec=spec,
+    )
     return float(build_tearsheet(log.read()).net_pnl)
 
 
@@ -209,6 +220,7 @@ def test_walk_forward_is_deterministic_under_a_fixed_seed():
 
 
 def test_fixture_engine_run_surfaces_overfit_when_the_regime_flips():
+    pytest.importorskip("nautilus_trader")
     # 3 windows over the rise-then-fall path. Every window's in-sample fit looks
     # profitable (it trains through the rising leg), but the last OOS block sits on
     # the falling leg — so the tuned long loses there. That gap is the whole point.
@@ -226,7 +238,12 @@ def test_fixture_engine_run_surfaces_overfit_when_the_regime_flips():
     # the fit that produced the losing OOS looked good in-sample — OOS < in-sample.
     assert result.windows[2].train_score > 0.0
     assert result.windows[2].oos_score < result.windows[2].train_score
-    # TPE pushes size toward the top of the range on a profitable train window.
-    assert result.windows[0].best_params["size_usd"] > 2000.0
+    # TPE actually tuned the size on the profitable train window — it explored above
+    # the floor rather than degenerately pinning the minimum. (Under the venue's
+    # market-impact fills the profit-maximizing size is interior, not the ceiling:
+    # larger size pays more impact, so this no longer maxes out the range the way the
+    # impact-free NaiveFillModel the legacy engine used did.)
+    assert result.windows[0].train_score > 0.0
+    assert result.windows[0].best_params["size_usd"] > 100.0
     # the trial count is displayed, not just recorded.
     assert "36 trials total" in result.describe()

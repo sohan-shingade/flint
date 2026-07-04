@@ -2,8 +2,9 @@
 
 The headline is parity: a Flint strategy driven through ``engine_for("nautilus")``
 produces the *same event log* (ORDER_PLACED / FILL / EQUITY / ORDER_REJECTED /
-ORDER_CANCELLED) as the legacy bar engine on the same feed — byte-identical except
-the intentional ``engine`` name on the run-lifecycle events. Flint's own fill models
+ORDER_CANCELLED) as the legacy bar engine did on the same feed — byte-identical to
+the **frozen legacy golden** (``tests/parity/goldens/barlane_*.json``; the legacy
+engine was deleted in N10). Flint's own fill models
 price every fill (Tier-C parametric and Tier-A/B book-walk); the Nautilus core only
 holds the account and positions so the run-end reconciliation can cross-check them.
 
@@ -38,6 +39,7 @@ from flint.ports import TenantContext  # noqa: E402
 from flint.strategy.base import EngineStrategy  # noqa: E402
 from flint.strategy.templates.technical import MaCrossStrategy  # noqa: E402
 from flint.venues import HYPERLIQUID  # noqa: E402
+from parity.golden_store import assert_matches_golden  # noqa: E402
 
 VENUE = "hyperliquid"
 MARKET = "SOL-PERP"
@@ -184,17 +186,6 @@ def _run(engine_name: str, strategy, feed: EngineFeed):
     return log, state
 
 
-def _rows_without_engine_name(log: EventLog) -> list[dict]:
-    """Event rows with the run-lifecycle ``engine`` field dropped (the one honest diff)."""
-    rows = []
-    for e in log.read():
-        row = e.to_row()
-        if row["kind"] in ("run_started", "run_finished"):
-            row["payload"] = {k: v for k, v in row["payload"].items() if k != "engine"}
-        rows.append(row)
-    return rows
-
-
 CASES = {
     "long_then_close": (lambda: _LongThenClose(), _feed_ohlcv),
     "open_long": (lambda: _OpenLong(), _feed_ohlcv),
@@ -211,11 +202,10 @@ CASES = {
 
 
 @pytest.mark.parametrize("case", list(CASES))
-def test_bar_lane_matches_legacy_byte_for_byte(case):
+def test_bar_lane_matches_frozen_golden_byte_for_byte(case):
     make_strategy, make_feed = CASES[case]
-    legacy_log, _ = _run("legacy-bar", make_strategy(), make_feed())
     nautilus_log, _ = _run("nautilus", make_strategy(), make_feed())
-    assert _rows_without_engine_name(nautilus_log) == _rows_without_engine_name(legacy_log)
+    assert_matches_golden(nautilus_log, f"barlane_{case}")
 
 
 def test_zero_volume_and_reject_paths_are_exercised():

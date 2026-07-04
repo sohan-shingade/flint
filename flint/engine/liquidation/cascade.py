@@ -1,12 +1,12 @@
 """The liquidation cascade — pure orchestration over the mark-based check (§6.5).
 
-Extracted from the legacy loop (§6.0, D29) so both the legacy ``BacktestEngine``
-and the future Nautilus liquidation module apply **one** implementation of the
-cross-pool cascade + isolated close-whole logic. Pure: positions / cash / marks /
-spec in, an ordered list of :class:`LiquidationDecision` out — no mutation, no I/O.
-The caller applies each decision in order (credit the realized amount to the venue
-account, delete the position, emit the LIQUIDATION event), exactly as the legacy
-loop did; the arithmetic — including the running-cash coupling between successive
+Extracted from the legacy loop in N1 (§6.0, D29) as the **one** implementation of
+the cross-pool cascade + isolated close-whole logic; since N10 the Nautilus
+liquidation module is its only caller (the legacy loop was deleted). Pure:
+positions / cash / marks / spec in, an ordered list of :class:`LiquidationDecision`
+out — no mutation, no I/O. The caller applies each decision in order (credit the
+realized amount to the venue account, delete the position, emit the LIQUIDATION
+event); the arithmetic — including the running-cash coupling between successive
 liquidations in the cascade — is reproduced here so the caller stays a thin applier.
 
 ``check.py`` holds the pure per-position primitives (maintenance, liquidation /

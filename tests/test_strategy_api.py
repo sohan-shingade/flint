@@ -23,10 +23,12 @@ from flint import Signal as TopLevelSignal
 from flint import Strategy as TopLevelStrategy
 from flint.adapters import InMemoryUserData
 from flint.core.models import Candle, Side, Signal
-from flint.engine import BacktestEngine, EngineConfig, PortfolioState
-from flint.engine.fills import NaiveFillModel
+from flint.engine import EngineConfig
+from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.portfolio import EventLog
+from flint.engine.select import engine_for
 from flint.ports import TenantContext
+from flint.venues import HYPERLIQUID
 from flint.strategy import (
     EXECUTABLE_VENUES,
     EngineStrategy,
@@ -58,14 +60,25 @@ def _bar(ts, open_, *, close=None, venue=VENUE, market=MARKET) -> Candle:
     )
 
 
-def _engine(state=None):
+def _run(strategy, candles, *, capital="100000"):
+    """Drive ``strategy`` through the Nautilus bar lane via the engine seam; return
+    ``(final_state, log)``. The seam funds fresh ``capital`` and resolves the venue's
+    fill model (ClobFillModel for Hyperliquid) — the strategy surface never picks
+    one, so this is the production path (§6.0)."""
+    pytest.importorskip("nautilus_trader")
     store = InMemoryUserData()
     log = EventLog(store, TenantContext.local(), run_id="run-5.1")
-    engine = BacktestEngine(
-        log, config=EngineConfig(), state=state or PortfolioState(),
-        fill_model=NaiveFillModel(),
+    spec = EngineRunSpec(
+        config=EngineConfig(),
+        venue_spec=HYPERLIQUID,
+        initial_capital=capital,
+        fund_venue=VENUE,
+        mark_policy="close_derived",
     )
-    return engine, log
+    state = engine_for("nautilus")().run(
+        EngineFeed(candles=candles), strategy, event_log=log, spec=spec
+    )
+    return state, log
 
 
 class _FakeCtx:
@@ -215,10 +228,6 @@ def test_empty_venue_defaults_to_the_bars_venue_and_routes():
 
 
 def test_public_strategy_trades_end_to_end_on_hyperliquid():
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, _ = _engine(state=state)
-
     class Buy(Strategy):
         params = dict(size_usd=5000.0)
 
@@ -227,23 +236,21 @@ def test_public_strategy_trades_end_to_end_on_hyperliquid():
                 return Signal.long(MARKET, VENUE, size_usd=self.params["size_usd"])
             return []
 
-    engine.run(
+    state, _ = _run(
+        EngineStrategy(Buy()),
         [_bar(T0, 100.0, close=100.0), _bar(T0 + HOUR_MS, 105.0)],
-        strategy=EngineStrategy(Buy()),
     )
     pos = state.position(VENUE, MARKET)
     assert pos is not None
-    assert pos.entry_price == 105.0  # sized + filled at the execution bar's open
-    assert pos.size == 47.61  # floor(5000/105, 2dp)
+    assert pos.size == 47.61  # floor(5000/105, 2dp) — sized at the execution bar's open
+    # Filled at bar1 with Tier-C market impact on top of the 105 open (never near the
+    # 100 decision close); the exact price the barlane_size_usd golden froze.
+    assert pos.entry_price == 107.3
 
 
 def test_sizing_helper_sizes_off_current_venue_equity():
     # size_for_target_leverage(2.0) off 10_000 equity → 20_000 notional; at the next
     # bar's open (100) that is 200 base — 2× equity, compounding with the account.
-    state = PortfolioState()
-    state.fund(VENUE, "10000")
-    engine, _ = _engine(state=state)
-
     class Lever(Strategy):
         def on_candle(self, candle, history, ctx):
             if candle.ts == T0 and ctx.position(MARKET) is None:
@@ -251,9 +258,10 @@ def test_sizing_helper_sizes_off_current_venue_equity():
                 return Signal.long(MARKET, VENUE, size_usd=notional)
             return []
 
-    engine.run(
+    state, _ = _run(
+        EngineStrategy(Lever()),
         [_bar(T0, 100.0, close=100.0), _bar(T0 + HOUR_MS, 100.0)],
-        strategy=EngineStrategy(Lever()),
+        capital="10000",
     )
     pos = state.position(VENUE, MARKET)
     assert pos is not None
@@ -261,10 +269,6 @@ def test_sizing_helper_sizes_off_current_venue_equity():
 
 
 def test_submit_order_escape_hatch_trades_and_earns_the_tearsheet_note():
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, _ = _engine(state=state)
-
     class Imperative(Strategy):
         def on_candle(self, candle, history, ctx):
             if candle.ts == T0:
@@ -272,8 +276,8 @@ def test_submit_order_escape_hatch_trades_and_earns_the_tearsheet_note():
             return []
 
     adapter = EngineStrategy(Imperative())
-    engine.run(
-        [_bar(T0, 100.0, close=100.0), _bar(T0 + HOUR_MS, 105.0)], strategy=adapter
+    state, _ = _run(
+        adapter, [_bar(T0, 100.0, close=100.0), _bar(T0 + HOUR_MS, 105.0)]
     )
     pos = state.position(VENUE, MARKET)
     assert pos is not None and pos.size == 1.0  # same Order path as a Signal
@@ -287,5 +291,5 @@ def test_signal_only_strategy_earns_no_imperative_note():
             return []
 
     adapter = EngineStrategy(Buy())
-    _engine()  # unused engine; assert the note is absent without any run
+    # The note is absent without any run — no engine needed to prove it.
     assert adapter.tearsheet_notes() == []

@@ -19,10 +19,12 @@ import pytest
 
 from flint.adapters import InMemoryUserData
 from flint.core.models import Candle, FundingRate, MarkSnapshot, Signal
-from flint.engine import BacktestEngine, PortfolioState, build_tearsheet
-from flint.engine.fills import NaiveFillModel
+from flint.engine import EngineConfig, build_tearsheet
+from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.portfolio import EventLog
+from flint.engine.select import engine_for
 from flint.ports import TenantContext
+from flint.venues import HYPERLIQUID
 from flint.research import (
     HOURS_PER_YEAR_365,
     annualize_hourly,
@@ -196,7 +198,13 @@ def test_basis_skips_undefined_index_never_fabricates():
 # --- ACCEPTANCE: HL funding-harvest → funding-dominated cost attribution (§19.8) ---
 
 N_BARS = 8
-HARVEST_RATE = 0.001  # 0.1%/h predicted & final, well under HL's 4%/h cap (§6.4)
+# 1%/h predicted & final, well under HL's 4%/h cap (§6.4). Sized so the funding
+# harvested over the window genuinely dominates the venue's one-time entry market
+# impact — under the legacy engine's impact-free NaiveFillModel even 0.1%/h cleared
+# a near-zero entry cost, but the Nautilus bar lane prices a realistic ClobFill
+# entry (~$307 slippage on the $10k short), so the thesis "funding-dominated, curve
+# rises" is only true once the funding line clears that fixed cost.
+HARVEST_RATE = 0.01
 
 
 def _candles() -> list[Candle]:
@@ -231,22 +239,31 @@ class _FundingHarvester:
 
 
 def _run_harvest():
+    pytest.importorskip("nautilus_trader")
     candles = _candles()
     # Predicted rate visible every bar; final rate settles once per bar (in-bar ts).
     predicted = [_fr(c.ts, HARVEST_RATE, VENUE, rate_type="predicted") for c in candles]
     final = [_fr(c.ts, HARVEST_RATE, VENUE, rate_type="final") for c in candles]
     marks = [_mark(c.ts, 100.0, 100.0) for c in candles]  # oracle price for settlement
 
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
     log = EventLog(InMemoryUserData(), TenantContext.local(), run_id="harvest")
-    engine = BacktestEngine(log, state=state, fill_model=NaiveFillModel())
     strat = _FundingHarvester(size_usd=10_000.0)
-    engine.run(
-        candles,
-        marks={MARKET: marks},
-        funding={MARKET: predicted + final},
-        strategy=strat,
+    spec = EngineRunSpec(
+        config=EngineConfig(),
+        venue_spec=HYPERLIQUID,
+        initial_capital="100000",
+        fund_venue=VENUE,
+        mark_policy="close_derived",
+    )
+    engine_for("nautilus")().run(
+        EngineFeed(
+            candles=candles,
+            marks={MARKET: marks},
+            funding={MARKET: predicted + final},
+        ),
+        strat,
+        event_log=log,
+        spec=spec,
     )
     return log, strat
 

@@ -1,11 +1,11 @@
 """Signal→order conversion + size_usd materialization — the bar lane's pure routing (§8.1).
 
-Extracted from the legacy loop (§6.0, D29) so both the legacy ``BacktestEngine``
-and the future Nautilus bar-lane shim apply **one** implementation of the §8.1
-conversion rules. This module is pure: no engine state, no I/O, no order state
-machine. Signals in, an ordered list of order requests / deferred USD intents out —
-the caller owns coid assignment, submission, and the state machine, so the legacy
-loop's exact ordering (and therefore its determinism) is preserved.
+Extracted from the legacy loop in N1 (§6.0, D29) as the **one** implementation of
+the §8.1 conversion rules; since N10 the Nautilus bar-lane shim is its only caller
+(the legacy loop was deleted). This module is pure: no engine state, no I/O, no
+order state machine. Signals in, an ordered list of order requests / deferred USD
+intents out — the caller owns coid assignment, submission, and the state machine, so
+the routing's exact ordering (and therefore its determinism) is preserved.
 
 The three §8.1 rules this owns:
 

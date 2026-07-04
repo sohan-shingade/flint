@@ -9,6 +9,12 @@ Proven here, all on hand-built inputs (D26):
    start, closed-only, None-over-stale; one truncated-frame test each.
 3. **Full-cost tearsheet + §19.2 invariants** — the MA-cross acceptance run
    decomposes cost honestly and its order/funding ledger conserves.
+
+Everything runs on the Nautilus bar lane through the engine seam (the legacy walk
+was deleted in N10); the strategy interface, §8.1 routing, and the §8.2
+``EngineContext`` are the same pure modules the seam drives, so these tests pin
+that shared surface, not the substrate. Engine-running tests skip cleanly without
+the ``nautilus`` extra; the pure sizing-helper unit test always runs.
 """
 
 from __future__ import annotations
@@ -28,8 +34,8 @@ from flint.core.models import (
 )
 from flint.engine import (
     AccountView,
-    BacktestEngine,
     EngineConfig,
+    NoopStrategy,
     OpenInterestSnapshot,
     OrderStatus,
     PortfolioState,
@@ -37,9 +43,10 @@ from flint.engine import (
     build_tearsheet,
     check_invariants,
 )
-from flint.engine.fills import NaiveFillModel
+from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.funding.settlement import FundingCoverageError
-from flint.engine.portfolio import ORDER_PLACED, EventLog
+from flint.engine.portfolio import ORDER_PLACED, EventLog, fold
+from flint.engine.select import engine_for
 from flint.engine.tearsheet import InvariantError
 from flint.ports import TenantContext
 from flint.venues import HYPERLIQUID
@@ -51,16 +58,32 @@ HOUR_MS = 3600 * 1000
 T0 = 1_700_000_000_000
 
 
-def _engine(state=None, fill_model=None, config=None):
+def _run(strategy, candles, *, capital="100000", initial_state=None, config=None, **feed_kw):
+    """Drive ``strategy`` through the Nautilus bar lane; return ``(final_state, log)``.
+
+    ``feed_kw`` (marks / funding / books / oi) flow into the :class:`EngineFeed`;
+    ``initial_state`` warm-starts the run (§6.7) instead of funding fresh capital.
+    """
+    pytest.importorskip("nautilus_trader")
     store = InMemoryUserData()
     log = EventLog(store, TenantContext.local(), run_id="run-3.6")
-    engine = BacktestEngine(
-        log,
+    feed = EngineFeed(candles=candles, **feed_kw)
+    spec = EngineRunSpec(
         config=config or EngineConfig(),
-        state=state or PortfolioState(),
-        fill_model=fill_model,
+        venue_spec=HYPERLIQUID,
+        initial_capital=capital,
+        fund_venue=VENUE,
+        mark_policy="close_derived",
+        initial_state=initial_state,
     )
-    return engine, log
+    state = engine_for("nautilus")().run(feed, strategy, event_log=log, spec=spec)
+    return state, log
+
+
+def _orders(log: EventLog) -> dict:
+    """The reconstructed order book from the event log (§2.10) — the seam's
+    equivalent of the legacy engine's ``_orders`` dict."""
+    return fold(log.read()).orders
 
 
 def _bar(ts, open_, *, high=None, low=None, close=None, volume=1000.0) -> Candle:
@@ -93,18 +116,18 @@ def test_size_usd_sizes_at_the_execution_bars_open_not_the_decision_close():
     # long(size_usd=5000) decided on bar0 (close 100) must size at bar1's OPEN
     # (105) — 5000/105 = 47.61 base after lot floor — NOT at 100 (which would give
     # 50.0). Sizing on the decision close is a look-ahead no linter can see (§8.1).
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, log = _engine(state=state, fill_model=NaiveFillModel())
     script = _Script({T0: [Signal.long(MARKET, VENUE, size_usd=5000.0)]})
-    engine.run(
-        [_bar(T0, 100.0, close=100.0), _bar(T0 + HOUR_MS, 105.0)], strategy=script
+    state, log = _run(
+        script, [_bar(T0, 100.0, close=100.0), _bar(T0 + HOUR_MS, 105.0)]
     )
 
     pos = state.position(VENUE, MARKET)
     assert pos is not None
-    assert pos.entry_price == 105.0
     assert pos.size == 47.61  # floor(5000/105, 2 dp) — sized at the OPEN, not 100
+    # The fill executes at bar1 with Tier-C market impact on top of the 105 open
+    # (never near the 100 decision close) — the exact price the barlane_size_usd
+    # golden froze.
+    assert pos.entry_price == 107.3
     placed = next(e for e in log.read() if e.kind == ORDER_PLACED)
     assert placed.payload["size_usd"] == 5000.0
     assert placed.payload["size_residual"] == pytest.approx(5000 / 105 - 47.61, abs=1e-9)
@@ -113,64 +136,49 @@ def test_size_usd_sizes_at_the_execution_bars_open_not_the_decision_close():
 def test_size_usd_that_rounds_below_one_lot_is_placed_then_rejected():
     # $1 at price 105 → 0.0095 base → floors to 0.00 (< one 2-dp lot) → the order
     # is placed then rejected (no size), never silently grown to a lot (§8.1 rule 2).
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, log = _engine(state=state, fill_model=NaiveFillModel())
     script = _Script({T0: [Signal.long(MARKET, VENUE, size_usd=1.0)]})
-    engine.run([_bar(T0, 100.0), _bar(T0 + HOUR_MS, 105.0)], strategy=script)
+    state, log = _run(script, [_bar(T0, 100.0), _bar(T0 + HOUR_MS, 105.0)])
 
-    (rec,) = list(engine._orders.values())
+    (rec,) = list(_orders(log).values())
     assert rec.status is OrderStatus.REJECTED
     assert rec.reason == "size_rounds_to_zero"
     assert state.position(VENUE, MARKET) is None
 
 
 def test_close_is_reduce_only_full_size_and_cannot_flip():
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, log = _engine(state=state, fill_model=NaiveFillModel())
     script = _Script(
         {
             T0: [Signal.long(MARKET, VENUE, size=2.0)],
             T0 + 2 * HOUR_MS: [Signal.close(MARKET, VENUE)],
         }
     )
-    engine.run(
+    state, _ = _run(
+        script,
         [
             _bar(T0, 100.0),
             _bar(T0 + HOUR_MS, 100.0),
             _bar(T0 + 2 * HOUR_MS, 100.0),
             _bar(T0 + 3 * HOUR_MS, 100.0),
         ],
-        strategy=script,
     )
     assert state.position(VENUE, MARKET) is None  # closed flat, not flipped short
 
 
 def test_open_with_no_sizing_raises():
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, _ = _engine(state=state, fill_model=NaiveFillModel())
     script = _Script({T0: [Signal(market=MARKET, venue=VENUE, action="long")]})
     with pytest.raises(SignalValidationError):
-        engine.run([_bar(T0, 100.0), _bar(T0 + HOUR_MS, 100.0)], strategy=script)
+        _run(script, [_bar(T0, 100.0), _bar(T0 + HOUR_MS, 100.0)])
 
 
 def test_open_with_both_sizings_raises():
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, _ = _engine(state=state, fill_model=NaiveFillModel())
     script = _Script(
         {T0: [Signal.long(MARKET, VENUE, size=1.0, size_usd=100.0)]}
     )
     with pytest.raises(SignalValidationError):
-        engine.run([_bar(T0, 100.0), _bar(T0 + HOUR_MS, 100.0)], strategy=script)
+        _run(script, [_bar(T0, 100.0), _bar(T0 + HOUR_MS, 100.0)])
 
 
 def test_duplicate_market_venue_action_in_one_bar_raises():
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, _ = _engine(state=state, fill_model=NaiveFillModel())
     script = _Script(
         {
             T0: [
@@ -180,25 +188,22 @@ def test_duplicate_market_venue_action_in_one_bar_raises():
         }
     )
     with pytest.raises(SignalValidationError):
-        engine.run([_bar(T0, 100.0), _bar(T0 + HOUR_MS, 100.0)], strategy=script)
+        _run(script, [_bar(T0, 100.0), _bar(T0 + HOUR_MS, 100.0)])
 
 
 def test_submit_order_escape_hatch_routes_through_the_shared_path():
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, log = _engine(state=state, fill_model=NaiveFillModel())
-
     class _Imperative:
         def on_candle(self, candle, ctx):
             if candle.ts == T0:
                 ctx.submit_order(MARKET, VENUE, Side.LONG, 1.5)
             return []
 
-    engine.run([_bar(T0, 100.0), _bar(T0 + HOUR_MS, 105.0)], strategy=_Imperative())
+    state, _ = _run(_Imperative(), [_bar(T0, 100.0), _bar(T0 + HOUR_MS, 105.0)])
     pos = state.position(VENUE, MARKET)
     assert pos is not None
     assert pos.size == 1.5
-    assert pos.entry_price == 105.0  # filled T+1 like any market order
+    # Filled T+1 at bar1 (105 open + Tier-C impact), never at the bar0 decision.
+    assert pos.entry_price == 105.42
 
 
 # --- §8.2 visibility contract: one truncated-frame test per accessor -------
@@ -218,12 +223,9 @@ class _Probe:
         return []
 
 
-def _capture(fn, candles, **run_kw):
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, _ = _engine(state=state)
+def _capture(fn, candles, **feed_kw):
     probe = _Probe(candles[-1].ts, fn)
-    engine.run(candles, strategy=probe, **run_kw)
+    _run(probe, candles, **feed_kw)
     return probe.value
 
 
@@ -284,9 +286,6 @@ def test_candles_accessor_returns_closed_bars_only_excluding_the_current():
 
 
 def test_account_view_reflects_equity_and_is_a_plain_value_object():
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, _ = _engine(state=state)
     captured = {}
 
     class _P:
@@ -294,7 +293,7 @@ def test_account_view_reflects_equity_and_is_a_plain_value_object():
             captured["acct"] = ctx.account(VENUE)
             return []
 
-    engine.run([_bar(T0, 100.0)], strategy=_P())
+    _run(_P(), [_bar(T0, 100.0)])
     acct = captured["acct"]
     assert isinstance(acct, AccountView)
     assert acct.equity == 100000.0
@@ -342,9 +341,6 @@ class _MaCross:
 
 
 def _ma_cross_run():
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    engine, log = _engine(state=state, fill_model=NaiveFillModel())
     candles = [_bar(T0 + i * HOUR_MS, c, close=c) for i, c in enumerate(_CLOSES)]
     # Funding settles on bar4 and bar5 — the position is open across both.
     settle4 = T0 + 4 * HOUR_MS + 12 * 60 * 1000
@@ -356,23 +352,22 @@ def _ma_cross_run():
             FundingRate(MARKET, settle5, 0.0001, HOUR_S, "oracle", "final", VENUE),
         ]
     }
-    engine.run(candles, marks=marks, funding=funding, strategy=_MaCross(2, 3, 5000.0))
-    return engine, log
+    return _run(_MaCross(2, 3, 5000.0), candles, marks=marks, funding=funding)
 
 
 def test_ma_cross_acceptance_trades_records_fidelity_and_conserves():
-    engine, log = _ma_cross_run()
+    state, log = _ma_cross_run()
     ts = build_tearsheet(log.read())
 
     # It actually traded a full round trip (a buy + a close both filled).
     assert ts.fills >= 2
-    assert engine.state.position(VENUE, MARKET) is None  # flat after the close
+    assert state.position(VENUE, MARKET) is None  # flat after the close
     # Per-fill fidelity is recorded — Tier C here (no book supplied).
     assert ts.fills_by_tier.get("C", 0) == ts.fills
     # Funding settled exactly twice (bar4 + bar5, position open across both).
     assert ts.funding_settlements == 2
     # §19.2 invariants hold: orders conserve and funding matches the expected count.
-    check_invariants(ts, engine._orders, expected_funding_settlements=2)
+    check_invariants(ts, _orders(log), expected_funding_settlements=2)
     assert ts.orders_placed == ts.orders_filled + ts.orders_rejected + ts.orders_cancelled
     # The cost block decomposes net PnL into its honest lines.
     assert ts.net_pnl == ts.trading_pnl + ts.funding + ts.fees
@@ -381,24 +376,28 @@ def test_ma_cross_acceptance_trades_records_fidelity_and_conserves():
 
 
 def test_invariant_check_raises_when_a_settlement_count_is_wrong():
-    engine, log = _ma_cross_run()
+    _, log = _ma_cross_run()
     ts = build_tearsheet(log.read())
     with pytest.raises(InvariantError):
-        check_invariants(ts, engine._orders, expected_funding_settlements=99)
+        check_invariants(ts, _orders(log), expected_funding_settlements=99)
 
 
 def test_missing_funding_coverage_hard_gates_the_run():
     # §16 hard gate: an oracle-priced final settlement with no mark to price it
     # rejects the run loudly rather than pricing on the close.
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
-    state.positions[(VENUE, MARKET)] = Position(
+    seed = PortfolioState()
+    seed.fund(VENUE, "100000")
+    seed.positions[(VENUE, MARKET)] = Position(
         market=MARKET, venue=VENUE, side=Side.LONG, size=1.0,
         entry_price=100.0, margin_mode="cross",
     )
-    engine, _ = _engine(state=state)
     funding = {
         MARKET: [FundingRate(MARKET, T0 + 12 * 60 * 1000, 0.0001, HOUR_S, "oracle", "final", VENUE)]
     }
     with pytest.raises(FundingCoverageError):
-        engine.run([_bar(T0, 100.0, high=101.0, low=99.0)], funding=funding)
+        _run(
+            NoopStrategy(),
+            [_bar(T0, 100.0, high=101.0, low=99.0)],
+            initial_state=seed,
+            funding=funding,
+        )

@@ -19,6 +19,8 @@ Coverage:
 
 from __future__ import annotations
 
+import pytest
+
 from flint.adapters import InMemoryUserData
 from flint.core.models import Candle, FundingRate, MarkSnapshot, Signal
 from flint.data.ingest.recorders import ReplayWsSource
@@ -28,11 +30,13 @@ from flint.data.livefeed import (
     PaperClock,
     assemble_engine_inputs,
 )
-from flint.engine import BacktestEngine, EngineConfig, PortfolioState
+from flint.engine import EngineConfig
+from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.context import OpenInterestSnapshot
-from flint.engine.fills import NaiveFillModel
 from flint.engine.portfolio import EventLog
+from flint.engine.select import engine_for
 from flint.ports import TenantContext
+from flint.venues import HYPERLIQUID
 
 VENUE = "hyperliquid"
 COIN = "SOL"
@@ -225,13 +229,30 @@ def test_reconnect_replays_lake_gap_through_the_same_engine_loop():
     # Drive the SAME engine over the full stream: a long opened on bar 0 fills at
     # bar 1's open, then funding settles on a replayed gap bar — proving the gap
     # updates positions/funding as if live.
+    # Lower the live + gap-replayed bars into an EngineFeed and drive the SAME engine
+    # seam the paper lane uses (flint/live/session.py) — the Nautilus bar lane as of
+    # N10. A long opened on bar 0 fills at bar 1's open, then funding settles on a
+    # replayed gap bar, proving the gap updates positions/funding as if live.
+    pytest.importorskip("nautilus_trader")
     all_bars = bars1 + bars2 + feed.close_session()
     inputs = assemble_engine_inputs(all_bars)
-    state = PortfolioState()
-    state.fund(VENUE, "100000")
     store = InMemoryUserData()
     log = EventLog(store, TenantContext.local(), run_id="livefeed-5.5")
-    engine = BacktestEngine(log, config=EngineConfig(), state=state, fill_model=NaiveFillModel())
+    spec = EngineRunSpec(
+        config=EngineConfig(),
+        venue_spec=HYPERLIQUID,
+        initial_capital="100000",
+        fund_venue=VENUE,
+        mark_policy="close_derived",
+    )
+    feed_in = EngineFeed(
+        candles=inputs.candles,
+        marks=inputs.marks,
+        funding=inputs.funding,
+        books=inputs.books,
+        trades=inputs.trades,
+        oi=inputs.oi,
+    )
 
     class _OpenOnce:
         def __init__(self) -> None:
@@ -243,7 +264,9 @@ def test_reconnect_replays_lake_gap_through_the_same_engine_loop():
                 return [Signal.long(MARKET, VENUE, size_usd=1000.0)]
             return []
 
-    engine.run(inputs.candles, strategy=_OpenOnce(), **inputs.run_kwargs())
+    state = engine_for("nautilus")().run(
+        feed_in, _OpenOnce(), event_log=log, spec=spec
+    )
 
     assert state.position(VENUE, MARKET) is not None  # position carried across the gap
     assert state.account(VENUE).funding_paid != 0  # gap's final funding settled

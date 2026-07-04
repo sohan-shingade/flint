@@ -434,8 +434,8 @@ def _run_source_in_sandbox(
             f"a tick-native strategy requires engine='nautilus', not "
             f"{resolved_engine!r}",
             detail="tick strategies use native L2 matching, which only the Nautilus "
-            "core provides — the legacy bar loop cannot run them",
-            hint="pass engine='nautilus' (tick strategies never run on 'legacy-bar')",
+            "core provides",
+            hint="pass engine='nautilus' (or 'auto', which resolves to it)",
         )
     with _timed(timing, "engine_run_ms"):
         sandboxed = run_backtest_in_sandbox(

@@ -4,8 +4,9 @@ The skeleton's acceptance test (§A10-N2): a hand-authored 10-bar :class:`Engine
 driven through ``engine_for("nautilus")`` emits ``RUN_STARTED`` / per-bar
 ``EQUITY`` / ``RUN_FINISHED`` through the injected Flint ``EventLog``, the equity
 line holds at initial capital (no trades), ``build_tearsheet`` folds it, and
-``check_invariants`` passes. The run is also deterministic and its EQUITY payloads
-are byte-identical to the legacy engine's on the same feed.
+``check_invariants`` passes. The run is also deterministic and its event log is
+byte-identical to the **frozen legacy golden** on the same feed
+(``tests/parity/goldens/skeleton_noop.json``; the legacy engine was deleted in N10).
 
 Gated on the ``nautilus`` extra (``importorskip``). Hand-authored inputs (D26).
 """
@@ -28,6 +29,7 @@ from flint.engine.select import engine_for  # noqa: E402
 from flint.engine.tearsheet import build_tearsheet, check_invariants  # noqa: E402
 from flint.ports import TenantContext  # noqa: E402
 from flint.venues import HYPERLIQUID  # noqa: E402
+from parity.golden_store import assert_matches_golden  # noqa: E402
 
 VENUE = "hyperliquid"
 MARKET = "SOL-PERP"
@@ -121,11 +123,8 @@ def test_run_is_deterministic():
     assert [e.to_row() for e in log_a.read()] == [e.to_row() for e in log_b.read()]
 
 
-def test_equity_payloads_match_the_legacy_engine_byte_for_byte():
-    # The recorder's per-bar EQUITY is the legacy _emit_equity payload, unchanged.
+def test_event_log_matches_the_frozen_legacy_golden_byte_for_byte():
+    # The recorder's per-bar EQUITY is the legacy _emit_equity payload, unchanged; the
+    # whole run (RUN_STARTED + 10×EQUITY + RUN_FINISHED) is frozen as skeleton_noop.
     naut_log, _ = _run("parity-naut")
-    legacy_log = EventLog(InMemoryUserData(), TenantContext.local(), run_id="parity-legacy")
-    engine_for("legacy-bar")().run(_feed(), NoopStrategy(), event_log=legacy_log, spec=_spec())
-    naut_eq = [dict(e.payload) for e in naut_log.read() if e.kind == EQUITY]
-    legacy_eq = [dict(e.payload) for e in legacy_log.read() if e.kind == EQUITY]
-    assert naut_eq == legacy_eq
+    assert_matches_golden(naut_log, "skeleton_noop")

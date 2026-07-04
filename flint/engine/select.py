@@ -1,22 +1,17 @@
 """Engine dispatch — pick the simulation substrate by name (§6.0, D29, plan §A1).
 
-:func:`engine_for` maps an engine name to its :class:`SimulationEngine` factory. The
-legacy bar loop is imported eagerly — its cost is already paid and it stays the
-paper-lane substrate until N10 — while the Nautilus engine (the default backtest
-substrate as of the N9 flip) is imported **lazily** inside its branch so a
-candle-only user never loads the 443 MB / ~5 s dependency until a run actually
-selects it. Consequently ``flint/engine/__init__`` (which imports this module)
-never pulls anything Nautilus-related into the process; that import lives only
-inside the ``"nautilus"`` branch.
+:func:`engine_for` maps an engine name to its :class:`SimulationEngine` factory.
+As of N10 there is exactly one executable substrate — the Nautilus core (the
+default backtest engine since the N9 flip, and the paper-lane substrate since
+N10.1) — imported **lazily** inside its branch so a candle-only user never loads
+the 443 MB / ~5 s dependency until a run actually selects it. Consequently
+``flint/engine/__init__`` (which imports this module) never pulls anything
+Nautilus-related into the process; that import lives only inside the
+``"nautilus"`` branch. The legacy bar loop was deleted in N10, so its name now
+rejects like any other unknown engine.
 """
 
 from __future__ import annotations
-
-from .api import EngineFeed, EngineRunSpec
-from .loop import BacktestEngine
-from .money import money
-from .portfolio import EventLog
-from .state import PortfolioState
 
 
 class UnknownEngineError(ValueError):
@@ -25,7 +20,7 @@ class UnknownEngineError(ValueError):
 
 #: The wire vocabulary for ``BacktestRequest.engine`` (§6.0, D29). Surfaces
 #: enum-validate against this; services resolve through :func:`resolve_engine_name`.
-KNOWN_ENGINES: tuple[str, ...] = ("auto", "legacy-bar", "nautilus")
+KNOWN_ENGINES: tuple[str, ...] = ("auto", "nautilus")
 
 
 def resolve_engine_name(name: str) -> str:
@@ -34,18 +29,21 @@ def resolve_engine_name(name: str) -> str:
     Pure string resolution — imports nothing, so services can validate and stamp
     the resolved engine (§19.6) without paying the Nautilus import. As of the N9
     default flip (2026-07-04, parity 18/18 zero-tolerance) ``"auto"`` resolves to
-    ``"nautilus"`` — the Nautilus core is the default backtest substrate.
-    ``"legacy-bar"`` stays explicitly selectable (deprecated for backtests; it
-    remains the paper-lane substrate until N10). Raises :class:`UnknownEngineError`
-    on anything outside :data:`KNOWN_ENGINES` — services surface that as the
-    uniform §19.1 validation error.
+    ``"nautilus"`` — the Nautilus core is the only backtest substrate. The legacy
+    bar engine was removed in N10, so ``"legacy-bar"`` rejects like any other
+    unknown name. Raises :class:`UnknownEngineError` on anything outside
+    :data:`KNOWN_ENGINES` — services surface that as the uniform §19.1 validation
+    error.
     """
     if name in ("auto", "nautilus"):
         return "nautilus"
     if name == "legacy-bar":
-        return "legacy-bar"
+        raise UnknownEngineError(
+            "legacy bar engine was removed in N10 — every backtest now runs on the "
+            "Nautilus core; use engine='auto'"
+        )
     raise UnknownEngineError(
-        f"unknown engine {name!r} — expected one of 'auto', 'legacy-bar', 'nautilus'"
+        f"unknown engine {name!r} — expected one of 'auto', 'nautilus'"
     )
 
 
@@ -65,68 +63,21 @@ def installed_nautilus_version() -> str:
     return _compat.NAUTILUS_REQUIRED
 
 
-class LegacyBarEngine:
-    """The legacy per-bar loop as a :class:`SimulationEngine` — zero behavior change.
-
-    Unpacks an :class:`EngineFeed`/:class:`EngineRunSpec`, funds a fresh
-    ``PortfolioState`` (or adopts ``spec.initial_state`` on a paper warm start), and
-    delegates to :meth:`BacktestEngine.run` exactly as ``services.backtest._execute``
-    did before the seam existed — same construction order, same kwargs. This is the
-    bar lane's substrate today and the parity oracle the Nautilus engine is held to
-    during the migration (§6.0, §19.4).
-    """
-
-    name = "legacy-bar"
-
-    def run(
-        self,
-        feed: EngineFeed,
-        strategy: object,
-        *,
-        event_log: EventLog,
-        spec: EngineRunSpec,
-    ) -> PortfolioState:
-        # Warm start (§6.7): adopt the caller's book as-is; otherwise fund a fresh one.
-        state = spec.initial_state
-        if state is None:
-            state = PortfolioState()
-            state.fund(spec.fund_venue, money(spec.initial_capital))
-        engine = BacktestEngine(
-            event_log,
-            config=spec.config,
-            state=state,
-            venue_spec=spec.venue_spec,
-        )
-        engine.run(
-            feed.candles,
-            marks=feed.marks,
-            funding=feed.funding,
-            books=feed.books,
-            trades=feed.trades,
-            oi=feed.oi,
-            strategy=strategy,
-        )
-        return engine.state
-
-
 def engine_for(name: str) -> type:
     """Return the :class:`SimulationEngine` factory for ``name`` (§6.0, D29).
 
     Resolves ``name`` through :func:`resolve_engine_name` — the single source of
     truth for the ``"auto"`` default (Nautilus as of the N9 flip) and for the
-    ``UnknownEngineError`` on an unrecognized name. ``"legacy-bar"`` returns the
-    legacy bar loop (deprecated for backtests, retained as the paper-lane substrate
-    until N10); the resolved-Nautilus branch structures its import lazily so this
-    module (and therefore ``flint/engine``) never imports Nautilus at load time.
+    ``UnknownEngineError`` on an unrecognized name (including the legacy bar engine
+    removed in N10). The resolved-Nautilus branch structures its import lazily so
+    this module (and therefore ``flint/engine``) never imports Nautilus at load
+    time.
     """
-    resolved = resolve_engine_name(name)
-    if resolved == "legacy-bar":
-        return LegacyBarEngine
-    # resolved == "nautilus" — lazy import: the 156 MB wheel / ~5 s cold start is
-    # paid only when the Nautilus engine is actually selected. Importing here (never
-    # at module load) is what keeps ``flint/engine`` Nautilus-free for candle-only
-    # users. A missing/mispinned extra surfaces as an actionable ImportError from
-    # ``_compat`` rather than a silent fallback to the legacy engine.
+    resolve_engine_name(name)  # "auto"/"nautilus" pass; everything else raises.
+    # Lazy import: the 156 MB wheel / ~5 s cold start is paid only when the Nautilus
+    # engine is actually selected. Importing here (never at module load) is what keeps
+    # ``flint/engine`` Nautilus-free for candle-only users. A missing/mispinned extra
+    # surfaces as an actionable ImportError from ``_compat``.
     from .nautilus import NautilusEngine
 
     return NautilusEngine

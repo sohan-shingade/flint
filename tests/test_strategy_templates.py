@@ -8,9 +8,9 @@ series). Proven here:
 2. **Each template runs on a fixture** and emits only well-formed Signals — never
    ``ctx.submit_order``. A validity helper mirrors the engine's §8.1 rules (exactly
    one sizing per open, no duplicate action key per bar).
-3. **Real-engine validation**: representative templates drive a live ``BacktestEngine``
-   through ``EngineStrategy`` and complete without ``SignalValidationError``, opening a
-   real position.
+3. **Real-engine validation**: representative templates drive the Nautilus bar lane
+   through ``EngineStrategy`` (via the engine seam) and complete without
+   ``SignalValidationError``, opening a real position.
 4. **ML template** subclasses ``MLStrategy``, its ``features()`` passes the feature-
    causality screen, and (with lightgbm) trains + trades through ``MLEngineStrategy``.
 """
@@ -22,13 +22,15 @@ import inspect
 import pytest
 
 from flint.core.models import Candle, FundingRate, Position, Side, Signal
-from flint.engine import BacktestEngine, EngineConfig, PortfolioState
-from flint.engine.fills import NaiveFillModel
+from flint.engine import EngineConfig
+from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.portfolio import EventLog
+from flint.engine.select import engine_for
 from flint.ports import TenantContext
 from flint.strategy import EngineStrategy, get_template, list_templates, template_names
 from flint.strategy.ml import MLEngineStrategy, MLStrategy
 from flint.strategy.model_store import ModelStore
+from flint.venues import HYPERLIQUID
 from flint.strategy.sandbox import screen_source
 from flint.strategy.templates import (
     BasisTradeStrategy,
@@ -252,34 +254,42 @@ def test_no_template_calls_submit_order_on_any_fixture():
 # --- 3. real-engine validation (representative templates) ---------------------
 
 
-def _engine(state):
-    log = EventLog(InMemoryStore(), TenantContext.local(), run_id="tpl")
-    return BacktestEngine(log, config=EngineConfig(), state=state, fill_model=NaiveFillModel()), log
-
-
 try:
     from flint.adapters import InMemoryUserData as InMemoryStore
 except Exception:  # pragma: no cover
     InMemoryStore = None
 
 
+def _run(strategy, candles):
+    """Drive ``strategy`` through the Nautilus bar lane via the engine seam; return
+    the final ``PortfolioState``. The seam funds fresh capital from the spec and
+    resolves the venue's fill model (ClobFillModel for Hyperliquid) — templates never
+    pick a fill model, so this exercises the exact production path."""
+    pytest.importorskip("nautilus_trader")
+    log = EventLog(InMemoryStore(), TenantContext.local(), run_id="tpl")
+    spec = EngineRunSpec(
+        config=EngineConfig(),
+        venue_spec=HYPERLIQUID,
+        initial_capital="100000",
+        fund_venue=HL,
+        mark_policy="close_derived",
+    )
+    return engine_for("nautilus")().run(
+        EngineFeed(candles=candles), strategy, event_log=log, spec=spec
+    )
+
+
 def test_ma_cross_runs_through_real_engine_without_validation_error():
-    state = PortfolioState()
-    state.fund(HL, "100000")
-    engine, _ = _engine(state)
     strat = EngineStrategy(MaCrossStrategy(fast=2, slow=3, ma_type="sma"))
     # rising path -> a long is emitted and converted by the engine with no raise
-    engine.run(_path([100, 101, 102, 103, 104]), strategy=strat)
+    state = _run(strat, _path([100, 101, 102, 103, 104]))
     assert state.position(HL, MKT) is not None
 
 
 def test_breakout_runs_through_real_engine():
-    state = PortfolioState()
-    state.fund(HL, "100000")
-    engine, _ = _engine(state)
     strat = EngineStrategy(BreakoutStrategy(lookback=3))
     # close 25 breaks the prior 3-bar high on bar 4; bar 5 lets the T+1 order fill.
-    engine.run(_path([10, 11, 10, 11, 25, 26]), strategy=strat)
+    state = _run(strat, _path([10, 11, 10, 11, 25, 26]))
     assert state.position(HL, MKT) is not None
 
 

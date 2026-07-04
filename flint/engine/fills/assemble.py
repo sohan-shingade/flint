@@ -1,14 +1,13 @@
-"""Fill-context assembly — the one builder both engines share (§6.0, §6.3, D29).
+"""Fill-context assembly — the one builder the bar lane uses (§6.0, §6.3, D29).
 
 Turning an ``Order`` plus a bar plus the recorded microstructure into the
 :class:`FillContext` a :class:`FillModel` consumes is glue, not economics — but it
 is glue that *decides which tier a fill achieves* (book as-of the effective time,
 staleness, oracle-as-of, queue-ahead) and draws the seeded latency. Extracted from
-the legacy loop (§6.0, D29) so the legacy ``BacktestEngine`` and the Nautilus
-bar-lane shim build **the exact same** context from the same inputs — the fill a
-strategy gets is identical byte-for-byte regardless of substrate, and the rng is
-consumed in the same place (one latency draw per fill) so determinism is shared,
-not re-derived.
+the legacy loop in N1 (§6.0, D29) as the single context builder; since N10 the
+Nautilus bar-lane shim is its only caller (the legacy loop was deleted). It draws
+the rng in one place (one latency draw per fill), so a run's determinism is fixed
+here — and reproduces the frozen parity goldens the legacy engine recorded.
 
 Pure: no engine state, no I/O. Every input the legacy ``_fill_ctx`` read off
 ``self`` (the venue spec, latency model, rng, and the recorded book/trade/mark
@@ -44,9 +43,9 @@ def assemble_fill_context(
 
     Effective time = ``candle.ts`` (submit) + one seeded latency draw, so the fill
     sees the market as it had moved, not as the strategy saw it. The book and oracle
-    are selected as-of that time; with no recorded book the model runs Tier C. This
-    is the verbatim body of the legacy ``BacktestEngine._fill_ctx`` (§6.3), now
-    shared so both engines draw latency once, in the same place, per fill.
+    are selected as-of that time; with no recorded book the model runs Tier C. The
+    body is lifted verbatim from the legacy engine's ``_fill_ctx`` (§6.3) at the N1
+    extraction, so latency is drawn once, in the same place, per fill.
     """
     submit_ts = candle.ts
     effective_ts = submit_ts + int(latency.draw_ms(rng))

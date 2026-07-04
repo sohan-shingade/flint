@@ -28,21 +28,18 @@ from .state import PortfolioState
 class EngineFeed:
     """All recorded market data an engine run consumes (§6.0, plan §A1).
 
-    Mirrors the legacy ``BacktestEngine.run`` kwargs: one ascending candle stream
-    plus per-market ts-sorted dicts of funding / marks / books / trades / oi.
-    ``quotes`` and ``book_deltas`` are the tick-lane slots — their models arrive in
-    N8, so they are typed as generic sequences here to keep this seam stable before
-    those models exist; the bar lane leaves them empty and no bar-lane code reads
-    them.
+    Carries the per-market feeds a run consumes: one ascending candle stream plus
+    per-market ts-sorted dicts of funding / marks / books / trades / oi. ``quotes``
+    and ``book_deltas`` are the tick-lane slots; the bar lane leaves them empty and
+    no bar-lane code reads them.
 
     **Canonical event ordering (§19.4).** ``candles`` are normalized to ``(ts,
-    market)`` order at construction — the one seam where both engines are handed
-    the same multi-market interleaving. Both engines emit multi-market events in
-    this order: the legacy bar loop walks candles in feed order (now canonical),
-    and the Nautilus lane delivers same-ts bars market-name-sorted, so a shared
-    timestamp settles the same way byte-for-byte regardless of the caller's feed
-    order. The sort is stable, so it never reorders candles that already share a
-    ``(ts, market)`` key.
+    market)`` order at construction — so a run's multi-market interleaving is fixed
+    at the seam, independent of the caller's feed order. The Nautilus lane delivers
+    same-ts bars market-name-sorted, so a shared timestamp settles the same way
+    byte-for-byte regardless of how the feed was built (and reproduces the frozen
+    parity goldens the legacy engine recorded before its N10 deletion). The sort is
+    stable, so it never reorders candles that already share a ``(ts, market)`` key.
     """
 
     candles: list[Candle] = field(default_factory=list)

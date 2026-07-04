@@ -48,7 +48,7 @@ class SandboxBacktestResult:
     #: ``engine/select.py`` seam as the in-process path), plus the exact dependency
     #: pins behind it — ``{"nautilus_trader": "<pin>"}`` when it is Nautilus. The
     #: caller stamps both into the run record/manifest (§19.4/§19.6).
-    engine: str = "legacy-bar"
+    engine: str = "nautilus"
     engine_versions: dict[str, str] = field(default_factory=dict)
 
 
@@ -65,7 +65,7 @@ def run_backtest_in_sandbox(
     run_id: str = "sandbox",
     overrides: dict[str, Any] | None = None,
     quota: ResourceQuota | None = None,
-    engine: str = "legacy-bar",
+    engine: str = "nautilus",
 ) -> SandboxBacktestResult:
     """Run ``source``'s ``class_name`` backtest over the given inert inputs, isolated.
 
@@ -77,8 +77,8 @@ def run_backtest_in_sandbox(
     live references by design), so only copies cross the boundary.
 
     ``engine`` selects the simulation substrate (§6.0, already resolved by the
-    caller — ``"legacy-bar"`` or ``"nautilus"``, never ``"auto"``); the child
-    dispatches through ``engine/select.py`` and, for Nautilus, imports the wheel
+    caller — ``"nautilus"``, never ``"auto"``; the legacy bar engine was removed in
+    N10); the child dispatches through ``engine/select.py`` and imports the wheel
     before the user source is exec'd with the CPU budget armed after that import
     (warm-up excluded, plan §A9). The default quota is engine-aware: Nautilus
     runs get the measured-and-documented higher memory/wall ceiling
@@ -118,6 +118,6 @@ def run_backtest_in_sandbox(
         events=value["events"],
         rejections=value["rejections"],
         notes=value["notes"],
-        engine=value.get("engine", "legacy-bar"),
+        engine=value.get("engine", "nautilus"),
         engine_versions=dict(value.get("engine_versions", {})),
     )

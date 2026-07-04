@@ -1,8 +1,8 @@
 """Turn the DataManager's Arrow tables into the engine's in-memory fixtures (§9→§6).
 
-The engine is pure domain: :meth:`BacktestEngine.run` consumes already-loaded
-``list[Candle]`` + per-market ``dict``s of funding/marks, never Arrow and never
-I/O (§6). The DataManager, one layer down, resolves a run's data needs into
+The engine is pure domain: the Nautilus core consumes an :class:`EngineFeed` built
+from already-loaded ``list[Candle]`` + per-market ``dict``s of funding/marks, never
+Arrow and never I/O (§6). The DataManager, one layer down, resolves a run's data needs into
 ``PreparedData.tables`` keyed ``(venue, market, Kind)`` (§9). This module is the
 thin seam between them — it lives in ``services/`` (the composition layer) because
 that is the only place allowed to touch both.
@@ -26,14 +26,16 @@ from flint.engine.api import EngineFeed
 
 @dataclass(frozen=True)
 class EngineInputs:
-    """The exact keyword feeds ``BacktestEngine.run`` takes, assembled from Arrow."""
+    """The inert per-market feeds a backtest consumes, assembled from Arrow.
+
+    Callers read the fields directly (``candles`` / ``funding`` / ``marks``) —
+    ``build_engine_feed`` folds them into the :class:`EngineFeed` the Nautilus core
+    takes, and the sandbox path serializes them across the process boundary.
+    """
 
     candles: list[Candle] = field(default_factory=list)
     funding: dict[str, list[FundingRate]] = field(default_factory=dict)
     marks: dict[str, list[MarkSnapshot]] = field(default_factory=dict)
-
-    def run_kwargs(self) -> dict:
-        return {"marks": self.marks, "funding": self.funding}
 
 
 def _rows(table) -> list[dict]:

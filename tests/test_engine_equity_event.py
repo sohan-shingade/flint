@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 from flint.adapters import InMemoryUserData
 from flint.core.models import Candle, FundingRate, MarkSnapshot, Position, Side, Signal
-from flint.engine import BacktestEngine, EngineConfig, PortfolioState
-from flint.engine.fills import NaiveFillModel
+from flint.engine import EngineConfig, NoopStrategy, PortfolioState
+from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.portfolio import (
     FUNDING,
     RUN_FINISHED,
@@ -26,7 +28,9 @@ from flint.engine.portfolio import (
     fold,
 )
 from flint.engine.portfolio.events import EQUITY
+from flint.engine.select import engine_for
 from flint.ports import TenantContext
+from flint.venues import HYPERLIQUID
 
 
 class _Script:
@@ -45,11 +49,34 @@ HOUR_MS = 3600 * 1000
 T0 = 1_700_000_000_000
 
 
-def _engine(state):
+def _run(candles, *, state=None, capital="100000", marks=None, funding=None, strategy=None):
+    """Drive the Nautilus bar lane via the engine seam; return ``(final_state, log)``.
+
+    ``state`` warm-starts the run (§6.7) — the seam adopts the carried book (its cash
+    and any pre-seeded position) instead of funding fresh capital, so a seeded long
+    accrues funding and is valued at each bar close exactly as before the N10 deletion.
+    ``marks``/``funding`` are the per-market ``MARKET`` feeds.
+    """
+    pytest.importorskip("nautilus_trader")
     store = InMemoryUserData()
     log = EventLog(store, TenantContext.local(), run_id="run-7.3")
-    engine = BacktestEngine(log, config=EngineConfig(), state=state)
-    return engine, log
+    spec = EngineRunSpec(
+        config=EngineConfig(),
+        venue_spec=HYPERLIQUID,
+        initial_capital=capital,
+        fund_venue=VENUE,
+        mark_policy="close_derived",
+        initial_state=state,
+    )
+    feed = EngineFeed(
+        candles=candles,
+        marks={MARKET: marks} if marks else {},
+        funding={MARKET: funding} if funding else {},
+    )
+    out = engine_for("nautilus")().run(
+        feed, strategy or NoopStrategy(), event_log=log, spec=spec
+    )
+    return out, log
 
 
 def _long_10_at_100(cash: str) -> PortfolioState:
@@ -89,12 +116,11 @@ def test_per_bar_equity_components_are_the_golden_values():
     # no funding. Funding and unrealized are distinct lines of equity.
     settle1 = T0 + 12 * 60 * 1000
     settle2 = T0 + HOUR_MS + 12 * 60 * 1000
-    state = _long_10_at_100("10000")
-    engine, log = _engine(state)
-    engine.run(
+    _, log = _run(
         [_bar(T0, close=100.0), _bar(T0 + HOUR_MS, close=105.0)],
-        marks={MARKET: [_mark(settle1, 100.0), _mark(settle2, 105.0)]},
-        funding={MARKET: [_funding(settle1, 0.01)]},  # only bar 1 settles
+        state=_long_10_at_100("10000"),
+        marks=[_mark(settle1, 100.0), _mark(settle2, 105.0)],
+        funding=[_funding(settle1, 0.01)],  # only bar 1 settles
     )
 
     eq = _equity_events(log)
@@ -118,12 +144,11 @@ def test_per_bar_equity_components_are_the_golden_values():
 def test_equity_identity_holds_every_bar():
     settle1 = T0 + 12 * 60 * 1000
     settle2 = T0 + HOUR_MS + 12 * 60 * 1000
-    state = _long_10_at_100("10000")
-    engine, log = _engine(state)
-    engine.run(
+    _, log = _run(
         [_bar(T0, 100.0), _bar(T0 + HOUR_MS, 105.0)],
-        marks={MARKET: [_mark(settle1, 100.0), _mark(settle2, 105.0)]},
-        funding={MARKET: [_funding(settle1, 0.01)]},
+        state=_long_10_at_100("10000"),
+        marks=[_mark(settle1, 100.0), _mark(settle2, 105.0)],
+        funding=[_funding(settle1, 0.01)],
     )
     for e in _equity_events(log):
         p = e.payload
@@ -136,12 +161,11 @@ def test_equity_identity_holds_every_bar():
 def test_equity_event_is_additive_and_ordered():
     settle1 = T0 + 12 * 60 * 1000
     settle2 = T0 + HOUR_MS + 12 * 60 * 1000
-    state = _long_10_at_100("10000")
-    engine, log = _engine(state)
-    engine.run(
+    _, log = _run(
         [_bar(T0, 100.0), _bar(T0 + HOUR_MS, 105.0)],
-        marks={MARKET: [_mark(settle1, 100.0), _mark(settle2, 105.0)]},
-        funding={MARKET: [_funding(settle1, 0.01)]},
+        state=_long_10_at_100("10000"),
+        marks=[_mark(settle1, 100.0), _mark(settle2, 105.0)],
+        funding=[_funding(settle1, 0.01)],
     )
     kinds = [e.kind for e in log.read()]
     assert kinds[0] == RUN_STARTED
@@ -161,17 +185,12 @@ def test_replay_fold_reproduces_the_snapshot():
     seed = Decimal("100000")
     settle1 = T0 + HOUR_MS + 12 * 60 * 1000  # funding lands in bar 2, after the fill
     last_mark = 105.0
-    state = PortfolioState()
-    state.fund(VENUE, str(seed))
-    store = InMemoryUserData()
-    log = EventLog(store, TenantContext.local(), run_id="run-7.3-fold")
-    engine = BacktestEngine(log, config=EngineConfig(), state=state,
-                            fill_model=NaiveFillModel())
     script = _Script({T0: [Signal.long(MARKET, VENUE, size=10.0)]})
-    engine.run(
+    _, log = _run(
         [_bar(T0, 100.0), _bar(T0 + HOUR_MS, 100.0), _bar(T0 + 2 * HOUR_MS, last_mark)],
-        marks={MARKET: [_mark(settle1, 100.0), _mark(T0 + 2 * HOUR_MS + 60_000, last_mark)]},
-        funding={MARKET: [_funding(settle1, 0.01)]},
+        capital=str(seed),
+        marks=[_mark(settle1, 100.0), _mark(T0 + 2 * HOUR_MS + 60_000, last_mark)],
+        funding=[_funding(settle1, 0.01)],
         strategy=script,
     )
 
@@ -189,10 +208,9 @@ def test_replay_fold_reproduces_the_snapshot():
 
 def test_equity_emitted_even_on_a_flat_bar():
     # No position, no funding: a bar still emits one EQUITY snapshot = pure cash.
-    state = PortfolioState()
-    state.fund(VENUE, "5000")
-    engine, log = _engine(state)
-    engine.run([_bar(T0, 100.0)], marks={MARKET: [_mark(T0 + 60_000, 100.0)]})
+    _, log = _run(
+        [_bar(T0, 100.0)], capital="5000", marks=[_mark(T0 + 60_000, 100.0)]
+    )
     eq = _equity_events(log)
     assert len(eq) == 1
     p = eq[0].payload

@@ -88,7 +88,7 @@ class BookState:
 
     Same three surfaces the live engine exposes — per-venue ``accounts``, the
     ``positions`` book, and the ``orders`` state machine — so a folded book can be
-    compared field-for-field against ``BacktestEngine.state`` in a parity test.
+    compared field-for-field against the engine's ``PortfolioState`` in a parity test.
     """
 
     accounts: dict[str, Account] = field(default_factory=dict)

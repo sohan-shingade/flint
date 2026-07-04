@@ -3,6 +3,9 @@
 The :class:`~flint.engine.nautilus.funding.FlintFundingModule` settles **final** rows
 by wrapping the pure ``funding/settlement.py`` primitives verbatim, so the Nautilus
 lane reproduces the legacy loop's FUNDING events and ``accrued_funding`` curve exactly.
+The legacy engine was deleted in N10; the byte-for-byte gate is now the Nautilus lane
+against the **frozen legacy goldens** (``tests/parity/goldens/funding_*.json``,
+recorded at commit ``300e9b2`` — see ``tests/parity/golden_store.py``).
 The gates here are the plan's N4 gates:
 
 * the §6.4 worked example (long 10 SOL, oracle 100.00, +0.01% → −$0.10) byte-exact,
@@ -42,6 +45,7 @@ from flint.engine.portfolio.events import EQUITY, FUNDING  # noqa: E402
 from flint.engine.select import engine_for  # noqa: E402
 from flint.ports import TenantContext  # noqa: E402
 from flint.venues import HYPERLIQUID  # noqa: E402
+from parity.golden_store import assert_matches_golden  # noqa: E402
 
 VENUE = "hyperliquid"
 MARKET = "SOL-PERP"
@@ -172,16 +176,6 @@ def _run(engine_name: str, strategy, feed: EngineFeed):
     return log, state
 
 
-def _rows_without_engine_name(log: EventLog) -> list[dict]:
-    rows = []
-    for e in log.read():
-        row = e.to_row()
-        if row["kind"] in ("run_started", "run_finished"):
-            row["payload"] = {k: v for k, v in row["payload"].items() if k != "engine"}
-        rows.append(row)
-    return rows
-
-
 def _funding_events(log: EventLog) -> list[dict]:
     return [e.payload for e in log.read() if e.kind == FUNDING]
 
@@ -249,11 +243,10 @@ _PARITY_CASES = {
 
 
 @pytest.mark.parametrize("case", list(_PARITY_CASES))
-def test_funding_matches_legacy_byte_for_byte(case):
+def test_funding_matches_frozen_golden_byte_for_byte(case):
     make_strategy, make_feed = _PARITY_CASES[case]
-    legacy_log, _ = _run("legacy-bar", make_strategy(), make_feed())
     nautilus_log, _ = _run("nautilus", make_strategy(), make_feed())
-    assert _rows_without_engine_name(nautilus_log) == _rows_without_engine_name(legacy_log)
+    assert_matches_golden(nautilus_log, f"funding_{case}")
 
 
 def test_6_4_worked_example_value():
@@ -327,15 +320,14 @@ def test_reconciliation_exact_with_funding_flowing():
 
 def test_no_final_rows_registers_no_module():
     # A candle-only / predicted-only feed needs no settlement module; the run is still
-    # byte-identical to legacy (no FUNDING events at all).
+    # byte-identical to the frozen legacy golden (no FUNDING events at all).
     feed = EngineFeed(
         candles=_candles(),
         marks=_marks(),
         funding={MARKET: [_predicted(T0, 0.05)]},
     )
-    legacy_log, _ = _run("legacy-bar", _OpenLongHold(), feed)
     nautilus_log, _ = _run("nautilus", _OpenLongHold(), feed)
-    assert _rows_without_engine_name(nautilus_log) == _rows_without_engine_name(legacy_log)
+    assert_matches_golden(nautilus_log, "funding_no_final")
     assert _funding_events(nautilus_log) == []
 
 

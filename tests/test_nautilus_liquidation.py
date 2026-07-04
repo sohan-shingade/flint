@@ -6,8 +6,9 @@ and delegates to the pure ``liquidation/cascade.plan_liquidations`` verbatim, so
 Nautilus lane reproduces the legacy loop's LIQUIDATION events and post-trigger cash
 exactly. Positions are opened through **signals** (not pre-seeded) so both books —
 the shadow book and the Nautilus cache — track them and the run-end reconciliation
-(§19.4) is a real cross-check; each scenario is then byte-compared against the legacy
-engine on the identical feed.
+(§19.4) is a real cross-check; each scenario is then byte-compared against the frozen
+legacy golden (``tests/parity/goldens/liq_*.json``) on the identical feed — the
+legacy engine was deleted in N10.
 
 The gates here are the plan's N5 gates:
 
@@ -49,6 +50,7 @@ from flint.engine.portfolio.events import FUNDING, LIQUIDATION  # noqa: E402
 from flint.engine.select import engine_for  # noqa: E402
 from flint.ports import TenantContext  # noqa: E402
 from flint.venues import HYPERLIQUID  # noqa: E402
+from parity.golden_store import assert_matches_golden  # noqa: E402
 
 VENUE = "hyperliquid"
 SOL = "SOL-PERP"
@@ -157,16 +159,6 @@ def _run(engine_name: str, make_strategy, feed: EngineFeed, capital: str):
         feed, make_strategy(), event_log=log, spec=_spec(capital)
     )
     return log, state
-
-
-def _rows_without_engine_name(log: EventLog) -> list[dict]:
-    rows = []
-    for e in log.read():
-        row = e.to_row()
-        if row["kind"] in ("run_started", "run_finished"):
-            row["payload"] = {k: v for k, v in row["payload"].items() if k != "engine"}
-        rows.append(row)
-    return rows
 
 
 def _liq_events(log: EventLog) -> list[dict]:
@@ -306,13 +298,10 @@ _PARITY_CASES = {
 
 
 @pytest.mark.parametrize("case", list(_PARITY_CASES))
-def test_liquidation_matches_legacy_byte_for_byte(case):
+def test_liquidation_matches_frozen_golden_byte_for_byte(case):
     make_strategy, make_feed, capital = _PARITY_CASES[case]
-    legacy_log, _ = _run("legacy-bar", make_strategy, make_feed(), capital)
     nautilus_log, _ = _run("nautilus", make_strategy, make_feed(), capital)
-    assert _rows_without_engine_name(nautilus_log) == _rows_without_engine_name(
-        legacy_log
-    )
+    assert_matches_golden(nautilus_log, f"liq_{case}")
 
 
 # --- §6.5 worked-example value golden ----------------------------------------

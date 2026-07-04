@@ -1,12 +1,14 @@
 """The engine seam — SimulationEngine conformance + the mark-policy fence (§6.0, N1).
 
-Two proofs the N1 extraction is behavior-neutral:
+Two proofs the seam is behavior-neutral:
 
-* **Byte-compare conformance.** The legacy engine reached through the
-  :class:`SimulationEngine` seam (``engine_for("legacy-bar")``) writes an event log
-  byte-identical to a direct :meth:`BacktestEngine.run` on the same hand-authored
-  fixture — a run exercising order routing, T+1 fills, funding settlement, and the
-  liquidation cascade, so every moved code path is covered.
+* **Byte-compare conformance.** The Nautilus engine reached through the
+  :class:`SimulationEngine` seam (``engine_for("nautilus")``) writes an event log
+  byte-identical to the **frozen legacy golden** on the same hand-authored fixture —
+  a run exercising order routing, T+1 fills, funding settlement, and the liquidation
+  cascade, so every moved code path is covered. (Pre-N10 this compared the legacy
+  seam to a direct ``BacktestEngine.run``; the legacy engine was deleted in N10, so
+  the second operand is now the golden frozen from it — ``seam_scenario.json``.)
 * **Mark-policy fence.** ``mark_policy="recorded"`` on a candle-only feed lets **no**
   synthesized mark reach the engine; ``mark_policy="close_derived"`` reproduces
   today's per-market close-mark synthesis exactly.
@@ -21,13 +23,14 @@ import pytest
 from flint.adapters import InMemoryUserData
 from flint.core.models import Candle, FundingRate, MarkSnapshot, Position, Side, Signal
 from flint.data.ranges import Kind
-from flint.engine import BacktestEngine, EngineConfig, PortfolioState, money
+from flint.engine import EngineConfig, PortfolioState, money
 from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.portfolio import LIQUIDATION, EventLog
-from flint.engine.select import LegacyBarEngine, UnknownEngineError, engine_for
+from flint.engine.select import UnknownEngineError, engine_for
 from flint.ports import TenantContext
 from flint.services._engine_inputs import build_engine_feed, build_engine_inputs
 from flint.venues import HYPERLIQUID
+from parity.golden_store import assert_matches_golden, strip_lifecycle_engine
 
 VENUE = "hyperliquid"
 MARKET = "SOL-PERP"
@@ -103,26 +106,11 @@ def _log(run_id: str) -> EventLog:
     return EventLog(InMemoryUserData(), TenantContext.local(), run_id=run_id)
 
 
-def test_legacy_engine_via_seam_is_byte_identical_to_a_direct_run():
+def test_seam_run_is_byte_identical_to_the_frozen_legacy_golden():
+    pytest.importorskip("nautilus_trader")
     feed = _scenario_feed()
 
-    # (a) direct BacktestEngine.run, funded + configured exactly as the seam does.
-    direct_log = _log("direct")
-    state = PortfolioState()
-    state.fund(VENUE, money("1000"))
-    BacktestEngine(
-        direct_log, config=EngineConfig(), state=state, venue_spec=HYPERLIQUID
-    ).run(
-        feed.candles,
-        marks=feed.marks,
-        funding=feed.funding,
-        books=feed.books,
-        trades=feed.trades,
-        oi=feed.oi,
-        strategy=_strategy(),
-    )
-
-    # (b) the same run reached through the SimulationEngine seam.
+    # The scenario run reached through the SimulationEngine seam on the Nautilus lane.
     seam_log = _log("seam")
     spec = EngineRunSpec(
         config=EngineConfig(),
@@ -131,22 +119,22 @@ def test_legacy_engine_via_seam_is_byte_identical_to_a_direct_run():
         fund_venue=VENUE,
         mark_policy="close_derived",
     )
-    engine = engine_for("legacy-bar")()
-    assert engine.name == "legacy-bar"
+    engine = engine_for("nautilus")()
+    assert engine.name == "nautilus"
     engine.run(feed, _strategy(), event_log=seam_log, spec=spec)
 
-    direct_rows = [e.to_row() for e in direct_log.read()]
-    seam_rows = [e.to_row() for e in seam_log.read()]
-    assert direct_rows == seam_rows  # byte-identical event log — zero behavior change
+    # Byte-identical to the log frozen from the legacy engine on this same fixture.
+    assert_matches_golden(seam_log, "seam_scenario")
     # And the fixture genuinely exercised the cascade path.
-    assert any(r["kind"] == LIQUIDATION for r in seam_rows)
+    assert any(r["kind"] == LIQUIDATION for r in strip_lifecycle_engine(seam_log))
 
 
-def test_engine_for_maps_legacy_bar_and_rejects_unknown_engines():
-    # "auto" now resolves to Nautilus (the N9 default flip); see the guarded
-    # test below. The legacy factory and the unknown-engine rejection run in
-    # every environment, extra or not.
-    assert engine_for("legacy-bar") is LegacyBarEngine
+def test_engine_for_rejects_the_removed_legacy_bar_and_unknown_engines():
+    # "auto" now resolves to Nautilus (the N9 default flip); see the guarded test
+    # below. The legacy bar engine was removed in N10, so its name rejects like any
+    # unknown one — both rejections run in every environment, extra or not.
+    with pytest.raises(UnknownEngineError, match="legacy bar engine was removed"):
+        engine_for("legacy-bar")
     with pytest.raises(UnknownEngineError, match="unknown engine"):
         engine_for("does-not-exist")
 
@@ -302,45 +290,19 @@ def _add_long_once():
     return _AddOnce()
 
 
-def _stripped_rows(log: EventLog) -> list[dict]:
-    """Every event row with the honest ``engine`` field dropped from lifecycle events."""
-    rows = []
-    for e in log.read():
-        row = e.to_row()
-        if row["kind"] in ("run_started", "run_finished"):
-            row["payload"] = {k: v for k, v in row["payload"].items() if k != "engine"}
-        rows.append(row)
-    return rows
+def test_warm_start_add_matches_frozen_golden():
+    """A warm-started run is byte-identical to the frozen legacy golden (§6.7, §19.4).
 
-
-def test_warm_start_parity_legacy_vs_nautilus():
-    """A warm-started run is byte-identical across both engines (§6.7, §19.4).
-
-    Both engines adopt the same seed book (fresh per engine), add to the carried long,
-    and settle funding on it. The event streams must be byte-equal except the honest
-    ``engine`` name on the lifecycle events — the same parity contract the cold-start
-    goldens hold, now with a non-empty starting book.
+    The Nautilus lane adopts the seed book, adds to the carried long, and settles
+    funding on it; its event stream must equal the log frozen from the legacy engine
+    on the same warm start — the same parity contract the cold-start goldens hold, now
+    with a non-empty starting book.
     """
     pytest.importorskip("nautilus_trader")
-    feed = _warm_feed()
+    log = _run_warm("nautilus", _add_long_once(), _warm_feed())
+    assert_matches_golden(log, "warm_add_to_carried_long")
 
-    def run(engine_name: str) -> EventLog:
-        log = _log(f"warm-{engine_name}")
-        spec = EngineRunSpec(
-            config=EngineConfig(),
-            venue_spec=HYPERLIQUID,
-            fund_venue=VENUE,
-            mark_policy="close_derived",
-            initial_state=_warm_seed_state(),
-        )
-        engine_for(engine_name)().run(
-            feed, _add_long_once(), event_log=log, spec=spec
-        )
-        return log
-
-    nautilus_rows = _stripped_rows(run("nautilus"))
-    assert _stripped_rows(run("legacy-bar")) == nautilus_rows
-
+    nautilus_rows = strip_lifecycle_engine(log)
     # The seed genuinely flowed through: EQUITY carries the seed's funding_paid, and a
     # new fill landed on top of the seeded book.
     assert any(
@@ -397,21 +359,20 @@ def _run_warm(engine_name: str, strategy, feed: EngineFeed) -> EventLog:
     return log
 
 
-def test_warm_start_seed_close_parity_legacy_vs_nautilus():
+def test_warm_start_seed_close_matches_frozen_golden():
     """Closing a carried position under warm start is byte-identical (§6.7, §19.4).
 
     Regression for the silently-dropped close: the seed long is materialized inside
     Nautilus at run start, so the strategy's reduce-only close fills against a real
     Nautilus position (rather than being denied against a flat book) and realizes PnL
-    against the same entry basis on both engines. Before the fix Nautilus produced
-    zero fills here while legacy produced one.
+    against the same entry basis the frozen legacy golden recorded. Before the fix
+    Nautilus produced zero fills here while legacy produced one.
     """
     pytest.importorskip("nautilus_trader")
-    feed = _warm_feed()
+    log = _run_warm("nautilus", _close_once(), _warm_feed())
+    assert_matches_golden(log, "warm_seed_close")
 
-    nautilus_rows = _stripped_rows(_run_warm("nautilus", _close_once(), feed))
-    assert _stripped_rows(_run_warm("legacy-bar", _close_once(), feed)) == nautilus_rows
-
+    nautilus_rows = strip_lifecycle_engine(log)
     fills = [r for r in nautilus_rows if r["kind"] == "fill"]
     assert len(fills) == 1  # exactly the close — the seed materialization emits nothing
     fill = fills[0]["payload"]
@@ -424,21 +385,18 @@ def test_warm_start_seed_close_parity_legacy_vs_nautilus():
     )
 
 
-def test_warm_start_partial_reduce_parity_legacy_vs_nautilus():
+def test_warm_start_partial_reduce_matches_frozen_golden():
     """Halving a carried position under warm start is byte-identical (§6.7, §19.4).
 
     A partial reduce nets the seed long down and realizes PnL on the closed half; the
-    materialized seed lets Nautilus net against a real position, matching the shadow.
+    materialized seed lets Nautilus net against a real position, matching the frozen
+    legacy golden.
     """
     pytest.importorskip("nautilus_trader")
-    feed = _warm_feed()
+    log = _run_warm("nautilus", _reduce_half_once(), _warm_feed())
+    assert_matches_golden(log, "warm_partial_reduce")
 
-    nautilus_rows = _stripped_rows(_run_warm("nautilus", _reduce_half_once(), feed))
-    assert (
-        _stripped_rows(_run_warm("legacy-bar", _reduce_half_once(), feed))
-        == nautilus_rows
-    )
-
+    nautilus_rows = strip_lifecycle_engine(log)
     fills = [r for r in nautilus_rows if r["kind"] == "fill"]
     assert len(fills) == 1
     assert fills[0]["payload"]["size"] == 2.5  # half the carried long closed

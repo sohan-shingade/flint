@@ -1,28 +1,22 @@
-"""The §19.3 golden set through the consolidated parity harness (N6, §19.4).
+"""The §19.3 golden set — Nautilus held to the frozen legacy goldens (N10, §19.4).
 
-Every golden is a hand-authored feed (D26) driven through **both** engines with a
-real trading strategy — positions opened via signals so both books (the shadow
-book and the Nautilus cache) track them and the run-end reconciliation is a real
-cross-check. :func:`~tests.parity.harness.assert_parity` applies both §19.4
-layers: input parity first (localizer), then the full byte diff (the contract).
-
-The per-phase tests (``tests/test_nautilus_*.py``) already gate each engine phase;
-this suite is the CI-required *superset* the N9 default flip waits on.
+Every golden is a hand-authored feed (D26) driven through the **Nautilus** bar lane
+with a real trading strategy (positions opened via signals so the book, the
+Nautilus cache, and the run-end reconciliation are all real). The legacy bar engine
+was deleted in N10; each scenario's byte-exact event log was frozen from it at
+commit ``300e9b2`` (see :mod:`.golden_store` and ``README.md``), and these tests
+assert the Nautilus lane still reproduces it byte-for-byte, zero tolerance.
 
 Two goldens beyond the hand-authored set:
 
-* **cross-market** (``test_cross_market_*``) — the N3-flagged divergence, now
-  **closed**: two markets sharing timestamps in one run. The N6 finding was that
-  the legacy lane emitted per-market events in feed order while the Nautilus lane
-  emitted them market-name-sorted, so an unsorted feed diverged on the byte diff
-  (never on input parity — the settlement math was always engine-independent).
-  N9 canonicalizes ``EngineFeed`` candles to ``(ts, market)`` at the seam, so both
-  engines now emit shared-ts events in the same order and the byte diff holds for
-  either feed order.
-* **real fragment** (``test_real_fragment_golden``) — one recorded HL day, built
-  from the committed truncated real Tardis SOL 2026-06-01 fixtures: candles
-  aggregated from real trade prints + real predicted funding (settlement absent,
-  see ``real_fragment`` for the D26 honesty note).
+* **cross-market** (``test_cross_market_*``) — two markets sharing timestamps in one
+  run. ``EngineFeed`` canonicalizes candles to ``(ts, market)`` at the seam, so the
+  Nautilus lane emits shared-ts events in one order regardless of the caller's feed
+  order; the two feed orders therefore reproduce the *same* frozen golden.
+* **real fragment** (``test_real_fragment_golden``) — one recorded HL day built from
+  the committed truncated real Tardis SOL 2026-06-01 fixtures: candles aggregated
+  from real trade prints + real predicted funding (settlement absent — see
+  ``real_fragment`` for the D26 honesty note).
 """
 
 from __future__ import annotations
@@ -36,22 +30,18 @@ from flint.engine.api import EngineFeed  # noqa: E402
 from flint.engine.portfolio.events import FUNDING, LIQUIDATION  # noqa: E402
 
 from . import builders as b  # noqa: E402
-from .harness import (  # noqa: E402
-    assert_parity,
-    layer_a_matches,
-    layer_b_matches,
-    parity_diff,
-    run_both,
-)
+from .golden_store import assert_matches_golden  # noqa: E402
+from .harness import run_nautilus  # noqa: E402
 from .real_fragment import MARKET as REAL_MARKET  # noqa: E402
 from .real_fragment import feed_real_fragment  # noqa: E402
 
 pytestmark = pytest.mark.parity
 
 
-# --- the §19.3 golden set (single lane — byte-exact) -------------------------
+# --- the §19.3 golden set (Nautilus vs frozen golden — byte-exact) -----------
 #
-# case -> (strategy factory, feed factory, capital)
+# case -> (strategy factory, feed factory, capital). The case name is also the
+# golden file stem under goldens/, so the recorder and the test share one key.
 GOLDENS = {
     # §6.4 funding worked example (long 10 @ oracle 100, +0.01% → −$0.10).
     "funding_6_4": (b.OpenLongAt1, b.feed_6_4, "100000"),
@@ -82,10 +72,10 @@ GOLDENS = {
 
 
 @pytest.mark.parametrize("case", list(GOLDENS))
-def test_golden_matches_legacy_byte_for_byte(case):
+def test_golden_matches_frozen_legacy_byte_for_byte(case):
     make_strategy, make_feed, capital = GOLDENS[case]
-    legacy_log, nautilus_log = run_both(make_strategy, make_feed(), b.spec(capital))
-    assert_parity(legacy_log, nautilus_log)
+    log = run_nautilus(make_strategy, make_feed(), b.spec(capital), run_id=case)
+    assert_matches_golden(log, case)
 
 
 # --- guards: the goldens actually exercise the behaviour they claim ----------
@@ -93,13 +83,13 @@ def test_golden_matches_legacy_byte_for_byte(case):
 
 
 def test_funding_golden_actually_settles():
-    legacy_log, _ = run_both(b.OpenLongAt1, b.feed_6_4(), b.spec())
-    assert any(e.kind == FUNDING for e in legacy_log.read())
+    log = run_nautilus(b.OpenLongAt1, b.feed_6_4(), b.spec())
+    assert any(e.kind == FUNDING for e in log.read())
 
 
 def test_liquidation_golden_actually_liquidates():
-    legacy_log, _ = run_both(b.OpenLongAt0, b.feed_6_5(), b.spec("50"))
-    assert any(e.kind == LIQUIDATION for e in legacy_log.read())
+    log = run_nautilus(b.OpenLongAt0, b.feed_6_5(), b.spec("50"))
+    assert any(e.kind == LIQUIDATION for e in log.read())
 
 
 # --- cross-market golden (N3 flag): shared-ts multi-market interleaving -------
@@ -126,27 +116,25 @@ def _feed_cross_market(*, sol_first: bool, same_ts: bool) -> EngineFeed:
 
 
 def test_cross_market_shared_ts_byte_parity():
-    # SOL-first feed order at shared timestamps. Pre-N9 this diverged (legacy
-    # walked feed order, Nautilus market-sorted order); with EngineFeed now
-    # canonicalizing candles to (ts, market), the SOL-first feed is sorted to the
-    # same interleaving both engines emit, so the full byte diff holds.
-    legacy_log, nautilus_log = run_both(
+    # SOL-first feed order at shared timestamps. EngineFeed canonicalizes candles to
+    # (ts, market), so the Nautilus lane emits the same interleaving the frozen
+    # golden captured — the full byte diff holds.
+    log = run_nautilus(
         lambda: b.OpenSolAndEth(sol_at=0, eth_at=0),
         _feed_cross_market(sol_first=True, same_ts=True),
         b.spec(),
+        run_id="cross_market_shared_ts",
     )
-    assert_parity(legacy_log, nautilus_log)
+    assert_matches_golden(log, "cross_market_shared_ts")
 
 
 def test_cross_market_feed_order_is_canonicalized():
-    """The N9 fix: EngineFeed normalizes candles to (ts, market), so the feed
-    order the caller happened to build in no longer affects the event stream.
+    """The N9 fix: EngineFeed normalizes candles to (ts, market), so the feed order
+    the caller happened to build in no longer affects the event stream.
 
-    SOL-first and ETH-first feeds over the same shared-ts data are byte-identical
-    through both engines — the divergence the N6 harness flagged is closed at the
-    seam, not merely masked when the caller pre-sorts. Input parity was never the
-    issue (the settlement math is engine-independent); this proves the *ordering*
-    now agrees too, for either construction order.
+    SOL-first and ETH-first feeds over the same shared-ts data both reproduce the
+    *same* frozen golden through the Nautilus lane — the divergence the N6 harness
+    once flagged is closed at the seam, not merely masked when the caller pre-sorts.
     """
     # EngineFeed canonicalizes at construction regardless of the order passed in.
     sol_first = _feed_cross_market(sol_first=True, same_ts=True)
@@ -155,18 +143,12 @@ def test_cross_market_feed_order_is_canonicalized():
         (c.ts, c.market) for c in eth_first.candles
     ], "EngineFeed should sort candles to a canonical (ts, market) order"
 
-    # Both feed orders now agree byte-for-byte across both engines.
+    # Both feed orders reproduce the one frozen golden byte-for-byte.
     for feed in (sol_first, eth_first):
-        legacy_log, nautilus_log = run_both(
+        log = run_nautilus(
             lambda: b.OpenSolAndEth(sol_at=0, eth_at=0), feed, b.spec()
         )
-        assert layer_a_matches(legacy_log, nautilus_log), (
-            "input parity should hold — the settlement math is engine-independent:\n"
-            + parity_diff(legacy_log, nautilus_log)
-        )
-        assert layer_b_matches(legacy_log, nautilus_log), parity_diff(
-            legacy_log, nautilus_log
-        )
+        assert_matches_golden(log, "cross_market_shared_ts")
 
 
 # --- real recorded fragment (one HL day, §19.3) ------------------------------
@@ -190,14 +172,12 @@ def test_real_fragment_golden():
     # Candles aggregated from real SOL trade prints + real predicted funding
     # (settlement absent — see real_fragment). Parity holds on the fill / order /
     # per-bar-equity path over real recorded data.
-    legacy_log, nautilus_log = run_both(
-        _RealFragmentLong, feed_real_fragment(), b.spec()
-    )
-    assert_parity(legacy_log, nautilus_log)
+    log = run_nautilus(_RealFragmentLong, feed_real_fragment(), b.spec(), run_id="real_fragment")
+    assert_matches_golden(log, "real_fragment")
 
 
 def test_real_fragment_actually_trades():
     # Guard: the fragment produces a real fill (not a vacuous empty-log parity).
-    legacy_log, _ = run_both(_RealFragmentLong, feed_real_fragment(), b.spec())
-    kinds = [e.kind for e in legacy_log.read()]
+    log = run_nautilus(_RealFragmentLong, feed_real_fragment(), b.spec())
+    kinds = [e.kind for e in log.read()]
     assert "fill" in kinds and "equity" in kinds
