@@ -1,0 +1,156 @@
+[
+  {
+    "event_version": 1,
+    "kind": "run_started",
+    "payload": {},
+    "seq": 0,
+    "ts": 0
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "100000",
+      "equity": "100000.0",
+      "unrealized": "0.0"
+    },
+    "seq": 1,
+    "ts": 1700000040000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "100000",
+      "equity": "100000.0",
+      "unrealized": "0.0"
+    },
+    "seq": 2,
+    "ts": 1700003640000
+  },
+  {
+    "event_version": 1,
+    "kind": "order_placed",
+    "payload": {
+      "client_order_id": "coid-1",
+      "market": "SOL-PERP",
+      "price": 0.0,
+      "reduce_only": false,
+      "side": "long",
+      "size": 49.01,
+      "size_residual": 0.009607843137260375,
+      "size_usd": 5000.0,
+      "tif": "ioc",
+      "type": "market",
+      "venue": "hyperliquid"
+    },
+    "seq": 3,
+    "ts": 0
+  },
+  {
+    "event_version": 2,
+    "kind": "fill",
+    "payload": {
+      "client_order_id": "coid-1",
+      "fee": 2.299622715,
+      "fidelity_tier": "C",
+      "flags": [
+        "uncalibrated"
+      ],
+      "intrabar_ambiguous": false,
+      "is_partial": false,
+      "liquidity": "taker",
+      "margin_mode": "cross",
+      "market": "SOL-PERP",
+      "price": 104.27,
+      "realized_pnl": "0.0",
+      "side": "long",
+      "size": 49.01,
+      "slippage_bps": 222.38202275704325,
+      "venue": "hyperliquid"
+    },
+    "seq": 4,
+    "ts": 1700007240412
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "99997.700377285",
+      "equity": "99910.9526772850002",
+      "unrealized": "-86.7476999999998"
+    },
+    "seq": 5,
+    "ts": 1700007240000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "99997.700377285",
+      "equity": "99959.962677285000195",
+      "unrealized": "-37.737699999999805"
+    },
+    "seq": 6,
+    "ts": 1700010840000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "99997.700377285",
+      "equity": "100008.972677285000195",
+      "unrealized": "11.272300000000195"
+    },
+    "seq": 7,
+    "ts": 1700014440000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "99997.700377285",
+      "equity": "100057.98267728500019",
+      "unrealized": "60.28230000000019"
+    },
+    "seq": 8,
+    "ts": 1700018040000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "99997.700377285",
+      "equity": "100106.9926772850002",
+      "unrealized": "109.2923000000002"
+    },
+    "seq": 9,
+    "ts": 1700021640000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "99997.700377285",
+      "equity": "100156.0026772850002",
+      "unrealized": "158.3023000000002"
+    },
+    "seq": 10,
+    "ts": 1700025240000
+  },
+  {
+    "event_version": 1,
+    "kind": "run_finished",
+    "payload": {},
+    "seq": 11,
+    "ts": 0
+  }
+]

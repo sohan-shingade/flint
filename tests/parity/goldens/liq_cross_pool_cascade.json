@@ -1,0 +1,196 @@
+[
+  {
+    "event_version": 1,
+    "kind": "run_started",
+    "payload": {},
+    "seq": 0,
+    "ts": 0
+  },
+  {
+    "event_version": 1,
+    "kind": "order_placed",
+    "payload": {
+      "client_order_id": "coid-1",
+      "market": "SOL-PERP",
+      "price": 0.0,
+      "reduce_only": false,
+      "side": "long",
+      "size": 10.0,
+      "tif": "ioc",
+      "type": "market",
+      "venue": "hyperliquid"
+    },
+    "seq": 1,
+    "ts": 0
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "30",
+      "equity": "30.0",
+      "unrealized": "0.0"
+    },
+    "seq": 2,
+    "ts": 1700000040000
+  },
+  {
+    "event_version": 2,
+    "kind": "fill",
+    "payload": {
+      "client_order_id": "coid-1",
+      "fee": 0.454545,
+      "fidelity_tier": "C",
+      "flags": [
+        "uncalibrated"
+      ],
+      "intrabar_ambiguous": false,
+      "is_partial": false,
+      "liquidity": "taker",
+      "margin_mode": "cross",
+      "market": "SOL-PERP",
+      "price": 101.01,
+      "realized_pnl": "0.0",
+      "side": "long",
+      "size": 10.0,
+      "slippage_bps": 101.00000000000001,
+      "venue": "hyperliquid"
+    },
+    "seq": 3,
+    "ts": 1700003640412
+  },
+  {
+    "event_version": 1,
+    "kind": "liquidation",
+    "payload": {
+      "adl_rank": "pnl_pct_x_leverage",
+      "backstop": false,
+      "bankruptcy_price": 98.05545450000001,
+      "equity": 18.445455000000006,
+      "insurance_fund_solvent": true,
+      "insurance_shortfall": "0.0",
+      "intrabar_ambiguous": true,
+      "liq_price": 100.56969692307693,
+      "maintenance": 24.975,
+      "margin_mode": "cross",
+      "mark_price": 99.9,
+      "market": "SOL-PERP",
+      "realized_pnl": "-11.099999999999994",
+      "side": "long",
+      "size": 10.0,
+      "venue": "hyperliquid"
+    },
+    "seq": 4,
+    "ts": 1700003640000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "18.445455000000006",
+      "equity": "18.445455000000006",
+      "unrealized": "0.0"
+    },
+    "seq": 5,
+    "ts": 1700003640000
+  },
+  {
+    "event_version": 1,
+    "kind": "order_placed",
+    "payload": {
+      "client_order_id": "coid-2",
+      "market": "ETH-PERP",
+      "price": 0.0,
+      "reduce_only": false,
+      "side": "long",
+      "size": 1.0,
+      "tif": "ioc",
+      "type": "market",
+      "venue": "hyperliquid"
+    },
+    "seq": 6,
+    "ts": 0
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "18.445455000000006",
+      "equity": "18.445455000000006",
+      "unrealized": "0.0"
+    },
+    "seq": 7,
+    "ts": 1700007240000
+  },
+  {
+    "event_version": 2,
+    "kind": "fill",
+    "payload": {
+      "client_order_id": "coid-2",
+      "fee": 0.0451485,
+      "fidelity_tier": "C",
+      "flags": [
+        "uncalibrated"
+      ],
+      "intrabar_ambiguous": false,
+      "is_partial": false,
+      "liquidity": "taker",
+      "margin_mode": "cross",
+      "market": "ETH-PERP",
+      "price": 100.33,
+      "realized_pnl": "0.0",
+      "side": "long",
+      "size": 1.0,
+      "slippage_bps": 32.622776601683796,
+      "venue": "hyperliquid"
+    },
+    "seq": 8,
+    "ts": 1700010840118
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "18.400306500000006",
+      "equity": "18.0703065000000077",
+      "unrealized": "-0.3299999999999983"
+    },
+    "seq": 9,
+    "ts": 1700010840000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "18.400306500000006",
+      "equity": "18.0703065000000077",
+      "unrealized": "-0.3299999999999983"
+    },
+    "seq": 10,
+    "ts": 1700014440000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "18.400306500000006",
+      "equity": "18.0703065000000077",
+      "unrealized": "-0.3299999999999983"
+    },
+    "seq": 11,
+    "ts": 1700018040000
+  },
+  {
+    "event_version": 1,
+    "kind": "run_finished",
+    "payload": {},
+    "seq": 12,
+    "ts": 0
+  }
+]

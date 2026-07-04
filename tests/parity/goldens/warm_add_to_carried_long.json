@@ -1,0 +1,113 @@
+[
+  {
+    "event_version": 1,
+    "kind": "run_started",
+    "payload": {},
+    "seq": 0,
+    "ts": 0
+  },
+  {
+    "event_version": 1,
+    "kind": "order_placed",
+    "payload": {
+      "client_order_id": "coid-1",
+      "market": "SOL-PERP",
+      "price": 0.0,
+      "reduce_only": false,
+      "side": "long",
+      "size": 2.0,
+      "tif": "ioc",
+      "type": "market",
+      "venue": "hyperliquid"
+    },
+    "seq": 1,
+    "ts": 0
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "2.0",
+      "cash": "10000",
+      "equity": "10000.0",
+      "unrealized": "0.0"
+    },
+    "seq": 2,
+    "ts": 1700000000000
+  },
+  {
+    "event_version": 2,
+    "kind": "fill",
+    "payload": {
+      "client_order_id": "coid-1",
+      "fee": 0.090414,
+      "fidelity_tier": "C",
+      "flags": [
+        "uncalibrated"
+      ],
+      "intrabar_ambiguous": false,
+      "is_partial": false,
+      "liquidity": "taker",
+      "margin_mode": "cross",
+      "market": "SOL-PERP",
+      "price": 100.46,
+      "realized_pnl": "0.0",
+      "side": "long",
+      "size": 2.0,
+      "slippage_bps": 45.721359549995796,
+      "venue": "hyperliquid"
+    },
+    "seq": 3,
+    "ts": 1700003600412
+  },
+  {
+    "event_version": 1,
+    "kind": "funding",
+    "payload": {
+      "amount": "-0.70000",
+      "interval_s": 3600,
+      "market": "SOL-PERP",
+      "oracle_price": 100.0,
+      "price_basis": "oracle",
+      "rate_capped": false,
+      "rate_hourly": 0.001,
+      "rate_type": "final",
+      "settled_rate_hourly": 0.001,
+      "size": 7.0,
+      "venue": "hyperliquid"
+    },
+    "seq": 4,
+    "ts": 1700004320000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "1.30000",
+      "cash": "9999.209586",
+      "equity": "9998.2895859999999983",
+      "unrealized": "-0.9200000000000017"
+    },
+    "seq": 5,
+    "ts": 1700003600000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "1.30000",
+      "cash": "9999.209586",
+      "equity": "9998.2895859999999983",
+      "unrealized": "-0.9200000000000017"
+    },
+    "seq": 6,
+    "ts": 1700007200000
+  },
+  {
+    "event_version": 1,
+    "kind": "run_finished",
+    "payload": {},
+    "seq": 7,
+    "ts": 0
+  }
+]

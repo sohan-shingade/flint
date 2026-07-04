@@ -1,0 +1,128 @@
+[
+  {
+    "event_version": 1,
+    "kind": "run_started",
+    "payload": {},
+    "seq": 0,
+    "ts": 0
+  },
+  {
+    "event_version": 1,
+    "kind": "order_placed",
+    "payload": {
+      "client_order_id": "coid-1",
+      "market": "SOL-PERP",
+      "price": 0.0,
+      "reduce_only": false,
+      "side": "long",
+      "size": 10.0,
+      "tif": "ioc",
+      "type": "market",
+      "venue": "hyperliquid"
+    },
+    "seq": 1,
+    "ts": 0
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "50",
+      "equity": "50.0",
+      "unrealized": "0.0"
+    },
+    "seq": 2,
+    "ts": 1700000040000
+  },
+  {
+    "event_version": 2,
+    "kind": "fill",
+    "payload": {
+      "client_order_id": "coid-1",
+      "fee": 0.45,
+      "fidelity_tier": "A",
+      "flags": [],
+      "intrabar_ambiguous": false,
+      "is_partial": false,
+      "liquidity": "taker",
+      "margin_mode": "cross",
+      "market": "SOL-PERP",
+      "price": 100.0,
+      "realized_pnl": "0.0",
+      "side": "long",
+      "size": 10.0,
+      "slippage_bps": 0.0,
+      "venue": "hyperliquid"
+    },
+    "seq": 3,
+    "ts": 1700003640412
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "49.55",
+      "equity": "49.55",
+      "unrealized": "0.0"
+    },
+    "seq": 4,
+    "ts": 1700003640000
+  },
+  {
+    "event_version": 1,
+    "kind": "liquidation",
+    "payload": {
+      "adl_rank": "pnl_pct_x_leverage",
+      "backstop": false,
+      "bankruptcy_price": 95.045,
+      "equity": 19.549999999999997,
+      "insurance_fund_solvent": true,
+      "insurance_shortfall": "0.0",
+      "intrabar_ambiguous": false,
+      "liq_price": 97.48205128205129,
+      "maintenance": 24.25,
+      "margin_mode": "cross",
+      "mark_price": 97.0,
+      "market": "SOL-PERP",
+      "realized_pnl": "-30.0",
+      "side": "long",
+      "size": 10.0,
+      "venue": "hyperliquid"
+    },
+    "seq": 5,
+    "ts": 1700007240000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "19.55",
+      "equity": "19.55",
+      "unrealized": "0.0"
+    },
+    "seq": 6,
+    "ts": 1700007240000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "0",
+      "cash": "19.55",
+      "equity": "19.55",
+      "unrealized": "0.0"
+    },
+    "seq": 7,
+    "ts": 1700010840000
+  },
+  {
+    "event_version": 1,
+    "kind": "run_finished",
+    "payload": {},
+    "seq": 8,
+    "ts": 0
+  }
+]

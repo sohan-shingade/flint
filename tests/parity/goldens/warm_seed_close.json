@@ -1,0 +1,94 @@
+[
+  {
+    "event_version": 1,
+    "kind": "run_started",
+    "payload": {},
+    "seq": 0,
+    "ts": 0
+  },
+  {
+    "event_version": 1,
+    "kind": "order_placed",
+    "payload": {
+      "client_order_id": "coid-1",
+      "market": "SOL-PERP",
+      "price": 0.0,
+      "reduce_only": true,
+      "side": "short",
+      "size": 5.0,
+      "tif": "ioc",
+      "type": "market",
+      "venue": "hyperliquid"
+    },
+    "seq": 1,
+    "ts": 0
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "2.0",
+      "cash": "10000",
+      "equity": "10000.0",
+      "unrealized": "0.0"
+    },
+    "seq": 2,
+    "ts": 1700000000000
+  },
+  {
+    "event_version": 2,
+    "kind": "fill",
+    "payload": {
+      "client_order_id": "coid-1",
+      "fee": 0.22338675,
+      "fidelity_tier": "C",
+      "flags": [
+        "uncalibrated"
+      ],
+      "intrabar_ambiguous": false,
+      "is_partial": false,
+      "liquidity": "taker",
+      "margin_mode": "cross",
+      "market": "SOL-PERP",
+      "price": 99.283,
+      "realized_pnl": "-3.5849999999999937",
+      "side": "short",
+      "size": 5.0,
+      "slippage_bps": 71.71067811865476,
+      "venue": "hyperliquid"
+    },
+    "seq": 3,
+    "ts": 1700003600412
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "2.0",
+      "cash": "9996.1916132500000063",
+      "equity": "9996.1916132500000063",
+      "unrealized": "0.0"
+    },
+    "seq": 4,
+    "ts": 1700003600000
+  },
+  {
+    "event_version": 1,
+    "kind": "equity",
+    "payload": {
+      "accrued_funding": "2.0",
+      "cash": "9996.1916132500000063",
+      "equity": "9996.1916132500000063",
+      "unrealized": "0.0"
+    },
+    "seq": 5,
+    "ts": 1700007200000
+  },
+  {
+    "event_version": 1,
+    "kind": "run_finished",
+    "payload": {},
+    "seq": 6,
+    "ts": 0
+  }
+]
