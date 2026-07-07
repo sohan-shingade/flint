@@ -265,8 +265,6 @@ async def run_validation() -> dict:
         return candles[-1] if candles else None
 
     # Run the strategy tick loop with a bar limit
-    original_running = ctx._running
-
     async def _run_limited():
         nonlocal tick_count
         ctx._running = True

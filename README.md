@@ -52,26 +52,21 @@ rewrite.
 
 ## Quick start
 
-Requires **Python ≥ 3.11** (the repo targets 3.12).
+Requires **Python 3.12–3.14** (the nautilus_trader support window; the repo targets 3.12).
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"        # editable install + pytest/ruff
 pytest tests/ -q               # the whole suite — fully mocked, no network, no keys
 
-flint serve                    # local API at http://127.0.0.1:8000 (prints the session token)
+cd ui && npm install && npm run build && cd ..   # build the web UI once
+flint serve                    # API + web UI at http://127.0.0.1:8000
 ```
 
-For the web UI, run the Vite dev server against the API (serving the built UI
-straight from `flint serve` is a v1.x deferral):
-
-```bash
-cd ui && npm install
-VITE_FLINT_TOKEN=<token printed by flint serve> npm run dev   # UI at http://localhost:5173
-```
-
-`flint serve` binds `127.0.0.1` and prints a per-session bearer token; every API
-route requires it. Everything runs on your machine.
+`flint serve` binds `127.0.0.1` and prints a per-session bearer token; the served
+page carries it (`window.__FLINT_TOKEN__`), so the browser is authenticated without
+a prompt and every API route requires it. Everything runs on your machine. For UI
+development, `cd ui && npm run dev` gives hot reload against the same API.
 
 ---
 
@@ -82,17 +77,17 @@ Every surface talks **only** to `services/` — never to the engine or a store d
 
 | Surface | Entry | What it is |
 |---|---|---|
-| **CLI** | `flint …` | `backtest`, `optimize`, `paper`, `live`, `serve`, `data {coverage,cache,import-legacy}`, `export`, `recorder start`. |
+| **CLI** | `flint …` | `backtest`, `optimize`, `paper`, `live`, `serve`, `data {coverage,cache,import-legacy}`, `export`, `reproduce`, `recorder start`. |
 | **SDK** | `from flint.sdk import Lab` | `Lab.backtest/optimize/paper`; `result.tearsheet()` renders the §11 report. |
 | **REST/WS API** | `flint serve` | FastAPI under `/api/v1`; per-session bearer token + Origin check on the code-executing server. |
-| **Web UI** | `cd ui && npm run dev` | Results/tearsheet, funding+basis heatmap, data explorer, live monitor, run library. Pure API client over the served API. |
+| **Web UI** | `flint serve` → browser | Results/tearsheet, funding+basis heatmap, data explorer, live monitor, run library. Pure API client over the served API. |
 | **MCP agent** | `python -m flint.mcp_srv.server` | Eight JSON tools (`validate_strategy`, `run_backtest`, `get_results`, `explain_failure`, `optimize`, `compare`, …) for an LLM author→validate→backtest→revise loop. |
 
 ---
 
 ## A look around
 
-| The Lab — 10 built-in templates (basis, funding, technical, ML, flow) | Funding Lab — carry per market × venue, honest coverage fallback |
+| The Lab — 14 built-in templates (basis, funding, technical, ML, flow) | Funding Lab — carry per market × venue, honest coverage fallback |
 |---|---|
 | ![Lab](docs/assets/v2/lab.png) | ![Funding Lab](docs/assets/v2/funding-lab.png) |
 

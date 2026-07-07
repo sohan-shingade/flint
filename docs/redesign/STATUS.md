@@ -148,9 +148,12 @@ Commit hashes are the last commit of each slice on `redesign/greenfield`.
   backed by the durable lake adapter.
 - **`fill_mode` override** — recorded in the run summary but does not override the
   engine's structure-driven fill-tier selection (Tier A/B/C is data-driven).
-- **Reproduce CLI verb** — `export --run-id` emits the ReproBundle and
+- ~~**Reproduce CLI verb** — `export --run-id` emits the ReproBundle and
   `runlib.reproduce`/`BundleRunner` exist as library functions, but no `flint
-  reproduce` verb was added.
+  reproduce` verb was added.~~ **Closed post-2.0.0:** `flint reproduce --run-id`
+  re-runs a template run into a throwaway store via `services.reproduce_run` and
+  verifies the event stream bit-for-bit (exit 1 on divergence). User-source
+  re-runs through the sandbox remain future work.
 - **Recorder WebSocket connect** — `recorder start` prints the capture plan; the live
   venue WebSocket connect is a foreground self-hosted process not exercised in the
   mocked suite (§20).
@@ -158,10 +161,11 @@ Commit hashes are the last commit of each slice on `redesign/greenfield`.
   Arrow fill path is anchored to the canonical recorded baseline instead.
 
 **UI cleanup (v1.x, non-blocking — from the 7.4b close-out):**
-- `ui/package.json` still declares `@monaco-editor/react`, `lightweight-charts`, and
-  `recharts` — unused after the legacy-page purge (D1). The production build
-  tree-shakes them (260KB / 81KB gzip verified); removing the declarations + lockfile
-  entries is deferred cleanup.
+- ~~`ui/package.json` still declares `@monaco-editor/react`, `lightweight-charts`, and
+  `recharts` — unused after the legacy-page purge (D1).~~ **Closed post-2.0.0, with a
+  correction:** only `lightweight-charts` was actually dead (removed);
+  `@monaco-editor/react` (Lab source editor) and `recharts` (ResultPanel equity +
+  drawdown charts) are in active use and stay.
 - `ui` eslint reports 5 findings in an accepted-idiom class (the set-state-in-effect
   fetch/loading pattern + a pre-existing `no-explicit-any` in `test/setup.ts`). The
   gates are `vitest` / `tsc` / `vite build` (all green); eslint tightening is deferred.
