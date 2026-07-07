@@ -8,6 +8,32 @@ patch on additive features and fixes.
 
 ---
 
+## [2.0.0] — 2026-07-07
+
+Ground-up rewrite (the `redesign/greenfield` build). [Release notes](https://github.com/sohan-shingade/flint/releases/tag/v2.0.0).
+
+**Changed (BREAKING — new architecture, new APIs)**
+- Ports-and-adapters architecture: `core/` → `engine/` → `services/` →
+  surfaces (`api/`, `sdk/`, `mcp_srv/`, `agent/`). Surfaces talk only to
+  `services/`; every service call takes a `TenantContext`.
+- Nautilus Trader is the only simulation substrate — the legacy bar
+  engine and the Rust (`rust/flint_core`) engine are deleted. Bar
+  strategies run via the bar-lane shim; tick strategies (`TickStrategy`)
+  get native L2 matching.
+- Tick-data foundations: Tardis vendor adapter, live tick recorder
+  (BBO quotes + predicted funding), BOOK_DELTA streaming, coverage
+  ledger, granularity tiers with structured rejections.
+- Funding is a hard gate: backtests over windows without real funding
+  data are rejected with available ranges — never zero-filled.
+- No synthetic data anywhere (D26): tests use hand-authored inputs or
+  real recorded fragments.
+- User strategy code runs in an OS-isolated sandbox subprocess (D25);
+  the AST allowlist is lint-grade UX, not the security boundary.
+- New web UI (v1 shell), templates registry, funding lab, HL live
+  executor with caps + kill switch, one-shot legacy v1.x DuckDB importer.
+
+---
+
 ## [1.5.4] — 2026-04-25
 
 Fix the `"drift"` hardcode flagged externally. [Release notes](https://github.com/sohan-shingade/flint/releases/tag/v1.5.4).

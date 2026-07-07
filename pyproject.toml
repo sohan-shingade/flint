@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flint"
-version = "2.0.0.dev0"
+version = "2.0.0"
 description = "Local-first backtesting, paper, and live lab for perp/DEX strategies. Hyperliquid-native; ports-and-adapters core, honest fills, event-sourced runs."
 requires-python = ">=3.11"
 license = {text = "MIT"}
