@@ -14,12 +14,15 @@ per-session bearer token + Origin check guard the code-executing endpoints (§12
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.websockets import WebSocket
 
 from flint.adapters import EnvSecrets, InMemoryUserData, InProcessJobRunner
@@ -120,7 +123,68 @@ def create_app(
 
     _install_error_handlers(app)
     _install_routes(app)
+    _install_ui(app)  # after the API routes so registration order keeps /api first
     return app
+
+
+# -- built web UI (served from ui/dist when present) ---------------------------
+
+
+def _ui_dist_dir() -> Path | None:
+    """The built UI directory, or ``None`` (API-only server, behavior unchanged).
+
+    ``FLINT_UI_DIST`` overrides for tests and nonstandard layouts; the default is
+    the repo checkout's ``ui/dist`` (an installed wheel has no UI yet — shipping
+    it in the wheel stays a v1.x item).
+    """
+    override = os.environ.get("FLINT_UI_DIST")
+    candidate = (
+        Path(override)
+        if override
+        else Path(__file__).resolve().parents[2] / "ui" / "dist"
+    )
+    return candidate if (candidate / "index.html").is_file() else None
+
+
+def _install_ui(app: FastAPI) -> None:
+    """Serve the built SPA with the session token injected into the page.
+
+    The UI reads ``window.__FLINT_TOKEN__`` first (see ``ui/src/api/config.ts``),
+    so the index page gets a one-line script tag carrying this session's token —
+    the browser is authenticated without a prompt. Static assets are served
+    as-is; every non-file, non-``/api`` path falls back to the index (SPA
+    routing). The UI pages themselves are tokenless by design: they are the
+    vehicle that delivers the token, on a server bound to 127.0.0.1.
+    """
+    dist = _ui_dist_dir()
+    if dist is None:
+        return
+
+    raw = (dist / "index.html").read_text(encoding="utf-8")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def _ui(request: Request, path: str):
+        if path.startswith(("api/", "ws/")):
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": {
+                        "code": "not_found",
+                        "message": f"no such API route: /{path}",
+                        "detail": "",
+                        "hint": "see /api/v1 in the docs",
+                    }
+                },
+            )
+        if path:
+            file = (dist / path).resolve()
+            if file.is_file() and file.is_relative_to(dist.resolve()):
+                return FileResponse(file)
+        tag = (
+            "<script>window.__FLINT_TOKEN__ = "
+            f"{json.dumps(request.app.state.token)};</script>"
+        )
+        return HTMLResponse(raw.replace("</head>", f"{tag}</head>", 1))
 
 
 # -- dependencies (security) -------------------------------------------------
