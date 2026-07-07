@@ -4,7 +4,29 @@
   <br/>
   <em>Hyperliquid-native · funding-honest · no synthetic data · ports-and-adapters</em>
   <br/>
+  <br/>
+  <a href="https://github.com/sohan-shingade/flint/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/sohan-shingade/flint?color=e8a33d&label=release"></a>
+  <a href="https://github.com/sohan-shingade/flint/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/sohan-shingade/flint/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Python" src="https://img.shields.io/badge/python-3.12%E2%80%933.14-3776ab">
+  <img alt="Engine" src="https://img.shields.io/badge/engine-nautilus__trader-2b6cb0">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-3da639">
 </p>
+
+<p align="center">
+  <img alt="Flint dashboard" src="docs/assets/v2/dashboard.png" width="920">
+</p>
+
+---
+
+## v2.0 — the greenfield rewrite
+
+Flint 2.0 is a ground-up rewrite (~930 files changed vs v1.5.4): a strict
+ports-and-adapters core, [Nautilus Trader](https://nautilustrader.io) as the only
+simulation substrate (the legacy bar and Rust engines are deleted — parity goldens
+were frozen first), tick-data foundations (Tardis vendor lane, live recorder,
+BOOK_DELTA streaming), a native-L2 `TickStrategy` lane, and a new terminal-styled
+web UI. Full notes: [release v2.0.0](https://github.com/sohan-shingade/flint/releases/tag/v2.0.0)
+· honest build ledger: [`docs/redesign/STATUS.md`](docs/redesign/STATUS.md).
 
 ---
 
@@ -37,11 +59,19 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"        # editable install + pytest/ruff
 pytest tests/ -q               # the whole suite — fully mocked, no network, no keys
 
-flint serve                    # local API + web UI at http://127.0.0.1:8000
+flint serve                    # local API at http://127.0.0.1:8000 (prints the session token)
 ```
 
-`flint serve` binds `127.0.0.1` and prints a per-session bearer token; the local UI
-is auto-injected with it. Everything runs on your machine.
+For the web UI, run the Vite dev server against the API (serving the built UI
+straight from `flint serve` is a v1.x deferral):
+
+```bash
+cd ui && npm install
+VITE_FLINT_TOKEN=<token printed by flint serve> npm run dev   # UI at http://localhost:5173
+```
+
+`flint serve` binds `127.0.0.1` and prints a per-session bearer token; every API
+route requires it. Everything runs on your machine.
 
 ---
 
@@ -55,8 +85,20 @@ Every surface talks **only** to `services/` — never to the engine or a store d
 | **CLI** | `flint …` | `backtest`, `optimize`, `paper`, `live`, `serve`, `data {coverage,cache,import-legacy}`, `export`, `recorder start`. |
 | **SDK** | `from flint.sdk import Lab` | `Lab.backtest/optimize/paper`; `result.tearsheet()` renders the §11 report. |
 | **REST/WS API** | `flint serve` | FastAPI under `/api/v1`; per-session bearer token + Origin check on the code-executing server. |
-| **Web UI** | `flint serve` → browser | Results/tearsheet, funding+basis heatmap, data explorer, live monitor, run library. Pure API client. |
+| **Web UI** | `cd ui && npm run dev` | Results/tearsheet, funding+basis heatmap, data explorer, live monitor, run library. Pure API client over the served API. |
 | **MCP agent** | `python -m flint.mcp_srv.server` | Eight JSON tools (`validate_strategy`, `run_backtest`, `get_results`, `explain_failure`, `optimize`, `compare`, …) for an LLM author→validate→backtest→revise loop. |
+
+---
+
+## A look around
+
+| The Lab — 10 built-in templates (basis, funding, technical, ML, flow) | Funding Lab — carry per market × venue, honest coverage fallback |
+|---|---|
+| ![Lab](docs/assets/v2/lab.png) | ![Funding Lab](docs/assets/v2/funding-lab.png) |
+
+| Data Explorer — coverage per market × venue × granularity tier | Docs — built into the served UI |
+|---|---|
+| ![Data Explorer](docs/assets/v2/data-explorer.png) | ![Docs](docs/assets/v2/docs.png) |
 
 ---
 
