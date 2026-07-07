@@ -30,7 +30,14 @@ from .lab import funding_lab
 from .live import stop_live
 from .optimize import OptimizeOutcome, OptimizeRequest, run_optimization
 from .paper import paper_snapshot, start_paper
-from .runs import compare_runs, export_run, import_legacy_runs, list_runs, run_results
+from .runs import (
+    compare_runs,
+    export_run,
+    import_legacy_runs,
+    list_runs,
+    reproduce_run,
+    run_results,
+)
 from .strategy_source import (
     ValidationReport,
     run_backtest_source,
@@ -61,6 +68,7 @@ __all__ = [
     "compare_runs",
     "export_run",
     "import_legacy_runs",
+    "reproduce_run",
     "run_results",
     # user strategy source (agent surface, §13)
     "validate_strategy",

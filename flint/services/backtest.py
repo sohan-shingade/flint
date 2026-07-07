@@ -210,6 +210,20 @@ def make_backtest_runner(
     return runner
 
 
+def rerun_events(
+    tenant: TenantContext, request: BacktestRequest, *, data: DataManager
+) -> tuple[dict[str, Any], ...]:
+    """Re-execute ``request`` into a throwaway store and return its event stream.
+
+    The production ``BundleRunner`` behind ``flint reproduce`` (§2.10): the scratch
+    store keeps a reproduction out of the tenant's Run Library, and the original
+    ``run_id`` is reused so the two streams are comparable field-for-field.
+    """
+    scratch = InMemoryUserData()
+    _execute(tenant, request, data=data, event_store=scratch)
+    return tuple(dict(e) for e in scratch.load_events(tenant, request.run_id))
+
+
 # -- internals ---------------------------------------------------------------
 
 
@@ -401,6 +415,10 @@ def _summary(
         "universe": list(request.universe),
         "venues": list(request.venues),
         "fill_mode": request.fill_mode,
+        # Recorded so `flint reproduce` can rebuild the exact request — neither
+        # field lives in the RunManifest/ReproBundle schema.
+        "resolution_s": request.resolution_s,
+        "initial_capital": request.initial_capital,
         "granularity": prepared.granularity,
         "granularity_detail": list(prepared.granularity_detail),
         "requested_range": _range(prepared.requested),

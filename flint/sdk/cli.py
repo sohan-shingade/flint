@@ -329,6 +329,20 @@ def cmd_data_import_legacy(
     return 0
 
 
+def cmd_reproduce(
+    args: argparse.Namespace, *, lab: Lab | None = None, out=print
+) -> int:
+    """Re-run a finished run and verify its event stream bit-for-bit (§2.10)."""
+    from flint.services import reproduce_run
+
+    lab = lab or _build_lab(args)
+    payload = reproduce_run(
+        lab.tenant, args.run_id, user_data=lab.user_data, data=lab.data
+    )
+    _emit(out, json.dumps(payload, sort_keys=True, default=str))
+    return 0 if payload["reproduced"] else 1
+
+
 def cmd_export(args: argparse.Namespace, *, lab: Lab | None = None, out=print) -> int:
     from flint.services import export_run
 
@@ -652,6 +666,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_imp.add_argument("--path", required=True, help="path to the legacy .duckdb file")
     p_imp.set_defaults(func=cmd_data_import_legacy)
+
+    p_rep = sub.add_parser(
+        "reproduce", help="re-run a run and verify its event stream is identical"
+    )
+    p_rep.add_argument("--run-id", required=True)
+    p_rep.set_defaults(func=cmd_reproduce)
 
     p_exp = sub.add_parser("export", help="emit a run's reproducibility bundle")
     p_exp.add_argument("--run-id", dest="run_id", required=True)

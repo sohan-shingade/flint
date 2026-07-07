@@ -13,12 +13,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from flint.data import DataManager
 from flint.ports import TenantContext, UserDataPort
 from flint.research import compare as _compare
 from flint.research import export_bundle as _export_bundle
 from flint.research import list_runs as _list_runs
+from flint.research import reproduce as _reproduce
 
-from .errors import NotFoundError
+from .backtest import BacktestRequest, rerun_events
+from .errors import NotFoundError, ValidationError
 
 
 def list_runs(
@@ -64,6 +67,72 @@ def export_run(
     except KeyError:
         raise NotFoundError(f"unknown run {run_id!r}") from None
     return bundle.to_json()
+
+
+def reproduce_run(
+    tenant: TenantContext,
+    run_id: str,
+    *,
+    user_data: UserDataPort,
+    data: DataManager,
+) -> dict[str, Any]:
+    """Re-execute ``tenant``'s run ``run_id`` and verify the event stream (§2.10).
+
+    Rebuilds the original request from the bundle + the recorded summary (which
+    carries the fields the bundle schema does not: universe/venues, requested
+    range, resolution, capital, fill mode, resolved granularity + engine), re-runs
+    it into a throwaway store, and compares streams bit-for-bit via
+    ``research.reproduce``. Covers template runs; a sandboxed user-source re-run
+    is future work and is refused loudly rather than approximated.
+    """
+    try:
+        bundle = _export_bundle(tenant, user_data, run_id)
+        record = user_data.load_run(tenant, run_id)
+    except KeyError:
+        raise NotFoundError(f"unknown run {run_id!r}") from None
+    summary: dict[str, Any] = dict(record.summary or {})
+    if bundle.strategy_source:
+        raise ValidationError(
+            "reproduce covers template runs only (for now)",
+            detail="this run was a sandboxed user-source backtest",
+            hint="re-running user source through the sandbox is a v1.x item",
+        )
+    if summary.get("verdict") == "rejected":
+        raise ValidationError(
+            f"run {run_id!r} was rejected — there is no event stream to reproduce",
+            detail=str(summary.get("note", "")),
+            hint="only verdict=ok runs are reproducible",
+        )
+
+    requested = summary.get("requested_range") or {}
+    request = BacktestRequest(
+        run_id=run_id,
+        strategy=bundle.strategy_name,
+        universe=tuple(
+            summary.get("universe") or sorted({d.market for d in bundle.data_manifest})
+        ),
+        venues=tuple(
+            summary.get("venues") or sorted({d.venue for d in bundle.data_manifest})
+        ),
+        start_ms=int(requested.get("start_ms") or bundle.effective_start_ts or 0),
+        end_ms=int(requested.get("end_ms") or bundle.effective_end_ts or 0),
+        resolution_s=int(summary.get("resolution_s") or 3600),
+        fill_mode=str(summary.get("fill_mode") or "auto"),
+        seed=int(bundle.seed or 0),
+        initial_capital=str(summary.get("initial_capital") or "100000"),
+        overrides=dict(bundle.params),
+        engine=str(summary.get("engine") or "auto"),
+        granularity=str(summary.get("granularity") or "auto"),
+    )
+    result = _reproduce(bundle, lambda _b: rerun_events(tenant, request, data=data))
+    return {
+        "run_id": run_id,
+        "reproduced": result.reproduced,
+        "n_original": result.n_original,
+        "n_reproduced": result.n_reproduced,
+        "mismatch_index": result.mismatch_index,
+        "detail": result.describe(),
+    }
 
 
 def import_legacy_runs(
