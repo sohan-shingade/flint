@@ -23,12 +23,17 @@ from flint.core.models import (  # noqa: E402
     MarkSnapshot,
     OrderbookSnapshot,
     Signal,
+    TimeInForce,
 )
 from flint.engine.api import EngineFeed, EngineRunSpec  # noqa: E402
 from flint.engine.fills import TradePrint  # noqa: E402
 from flint.engine.loop import EngineConfig  # noqa: E402
 from flint.engine.portfolio import EventLog  # noqa: E402
-from flint.engine.portfolio.events import FILL, ORDER_REJECTED  # noqa: E402
+from flint.engine.portfolio.events import (  # noqa: E402
+    FILL,
+    ORDER_CANCELLED,
+    ORDER_REJECTED,
+)
 from flint.engine.select import engine_for  # noqa: E402
 from flint.engine.tearsheet import (  # noqa: E402
     InvariantError,
@@ -270,3 +275,53 @@ def test_run_is_deterministic():
     log_a, _ = _run("nautilus", _LongThenClose(), _feed_ohlcv())
     log_b, _ = _run("nautilus", _LongThenClose(), _feed_ohlcv())
     assert [e.to_row() for e in log_a.read()] == [e.to_row() for e in log_b.read()]
+
+
+# --- post-only (ALO) — a crossing limit cancels, a resting one makes ----------
+
+
+class _PostOnlyCrossing:
+    """A post-only limit priced through the ask — must cancel, never take."""
+
+    def on_candle(self, candle, ctx):
+        if _bar_index(candle) == 1:
+            return [
+                Signal.long(
+                    MARKET, VENUE, size=10.0, limit_price=105.0,
+                    tif=TimeInForce.ALO,
+                )
+            ]
+        return []
+
+
+class _PostOnlyResting:
+    """A post-only limit safely below the touch — rests as a maker."""
+
+    def on_candle(self, candle, ctx):
+        if _bar_index(candle) == 1:
+            return [
+                Signal.long(
+                    MARKET, VENUE, size=10.0, limit_price=100.0,
+                    tif=TimeInForce.ALO,
+                )
+            ]
+        return []
+
+
+def test_post_only_crossing_limit_is_cancelled_not_taken():
+    log, _ = _run("nautilus", _PostOnlyCrossing(), _feed_with_book())
+    events = log.read()
+    assert not any(e.kind == FILL for e in events)
+    cancels = [e for e in events if e.kind == ORDER_CANCELLED]
+    assert cancels, "expected the crossing ALO to be cancelled"
+    assert "post-only" in cancels[0].payload["reason"]
+
+
+def test_post_only_resting_limit_never_takes_and_is_not_cancelled_for_crossing():
+    log, _ = _run("nautilus", _PostOnlyResting(), _feed_with_book())
+    events = log.read()
+    for e in events:
+        if e.kind == FILL:
+            assert e.payload["liquidity"] == "maker"
+        if e.kind == ORDER_CANCELLED:
+            assert "post-only" not in e.payload["reason"]  # run-end cancel is fine

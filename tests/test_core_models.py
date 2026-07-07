@@ -138,3 +138,10 @@ def test_signal_constructors():
 def test_signal_rejects_unknown_action():
     with pytest.raises(ValueError, match="action"):
         Signal("SOL-PERP", "hl", action="sideways")
+
+
+def test_signal_post_only_requires_a_limit_price():
+    with pytest.raises(ValueError, match="post-only"):
+        Signal.long("SOL-PERP", "hl", size=1.0, tif=TimeInForce.ALO)
+    ok = Signal.long("SOL-PERP", "hl", size=1.0, limit_price=99.0, tif=TimeInForce.ALO)
+    assert ok.tif is TimeInForce.ALO

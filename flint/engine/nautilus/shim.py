@@ -35,6 +35,7 @@ from __future__ import annotations
 from random import Random
 
 from flint.core.models import Candle, Order, OrderType, Side
+from flint.core.models import TimeInForce as FlintTimeInForce
 from flint.core.time import bar_end
 from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.fills import assemble_fill_context, fill_model_for
@@ -279,6 +280,17 @@ class BarLaneStrategy(Strategy):
         for order in triggered:
             result = self._compute_fill(order, order.price, candle, market_marks)
             if result is None:
+                continue
+            if (
+                order.tif is FlintTimeInForce.ALO
+                and result.fill.liquidity == "taker"
+            ):
+                # Post-only: an ALO that would execute as a taker is cancelled at
+                # the moment it would cross (HL semantics), never filled.
+                self._flint_resting.remove(order)
+                self._flint_recorder.record_cancelled(
+                    order, reason="post-only (ALO) would execute as taker"
+                )
                 continue
             filled = result.fill.size
             if filled < order.size - _FILL_EPS:

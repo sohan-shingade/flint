@@ -40,6 +40,11 @@ class Signal:
             raise ValueError(
                 f"Signal.action must be one of {_ACTIONS}, got {self.action!r}"
             )
+        if self.tif is TimeInForce.ALO and self.limit_price <= 0:
+            raise ValueError(
+                "tif=ALO (post-only) requires a limit_price — a market order "
+                "can never add liquidity"
+            )
 
     @property
     def is_close(self) -> bool:

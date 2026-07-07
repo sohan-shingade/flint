@@ -35,6 +35,7 @@ from random import Random
 
 from flint.core.models import BookDelta, Candle, Order, OrderType, QuoteTick, Side
 from flint.core.models import FundingRate as FlintFundingRateModel
+from flint.core.models import TimeInForce as FlintTimeInForce
 from flint.engine.api import EngineFeed, EngineRunSpec
 from flint.engine.loop import EngineContext
 from flint.engine.signals import _UsdIntent, materialize_usd_intent, route_signals
@@ -347,6 +348,9 @@ class TickLaneStrategy(Strategy):
                 time_in_force=TimeInForce.GTC,
                 client_order_id=naut_coid,
                 reduce_only=order.reduce_only,
+                # Post-only rides Nautilus's native flag: the L2 matching engine
+                # rejects an ALO that would cross on arrival (HL semantics).
+                post_only=order.tif is FlintTimeInForce.ALO,
             )
         self.submit_order(nautilus_order)
 

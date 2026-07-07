@@ -50,3 +50,5 @@ class TimeInForce(StrEnum):
     IOC = "ioc"  # immediate-or-cancel
     GTC = "gtc"  # good-till-cancelled
     FOK = "fok"  # fill-or-kill
+    ALO = "alo"  # add-liquidity-only (post-only, HL's term): limit orders only —
+    # an ALO that would execute as a taker is cancelled, never crossed
