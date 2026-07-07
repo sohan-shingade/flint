@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "flint"
 version = "2.0.0"
 description = "Local-first backtesting, paper, and live lab for perp/DEX strategies. Hyperliquid-native; ports-and-adapters core, honest fills, event-sourced runs."
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.15"
 license = {text = "MIT"}
 readme = "README.md"
 authors = [{name = "Sohan Shingade"}]
@@ -17,8 +17,9 @@ classifiers = [
     "Intended Audience :: Financial and Insurance Industry",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Office/Business :: Financial :: Investment",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Operating System :: OS Independent",

@@ -12,7 +12,7 @@ phases in §18; each phase is a board task.
 ## Quick reference
 
 ```bash
-python3.12 -m venv .venv && source .venv/bin/activate   # Python >=3.11 required
+python3.12 -m venv .venv && source .venv/bin/activate   # Python 3.12–3.14 required
 pip install -e ".[dev]"        # editable install + pytest/ruff
 pytest tests/ -v               # all tests — fully mocked, no network, no keys
 python scripts/codemap.py      # regenerate docs/codemap/ shards after structural changes
@@ -20,7 +20,7 @@ python scripts/codemap.py --check   # CI: fail if codemap is stale
 ```
 
 The repo uses the project `.venv` (Python 3.12). Bare `python3` on this host is
-3.9 and will **not** satisfy `requires-python >=3.11` — always use `.venv/bin/python`.
+3.9 and will **not** satisfy `requires-python >=3.12,<3.15` — always use `.venv/bin/python`.
 
 ## Architecture in one screen (§4, §17)
 
@@ -85,7 +85,7 @@ Package map (`flint/`, see §17 for the full annotated tree):
 
 ## Git / workflow
 
-- Work on branch `redesign/greenfield`. Never touch `main`. Never `git push --force`.
+- The greenfield redesign merged to `main` at v2.0.0 — `main` is the working branch. Never `git push --force` on it.
 - Explicit pathspecs only on mixed working trees; never `git add -A` blindly.
 - Never commit `.env` (API keys) or user strategies under `strategies/user/`.
 - The greenfield deletes old *code*, never old *data* — the legacy DuckDB is imported,
