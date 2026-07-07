@@ -126,3 +126,43 @@ class OiMomentumStrategy(TemplateStrategy):
         else:
             desired = "short"
         return self._rebalance(candle.market, ctx, desired)
+
+
+class FundingMomentumStrategy(TemplateStrategy):
+    """Trade the *drift* of predicted funding, not its level (§8.4).
+
+    The harvester reads the level; this reads the direction of travel: a rate
+    that has been richening across the trailing window tends to keep paying its
+    receiving side. Observed predicted rates are held on the instance across
+    bars, keyed per market (ctx exposes only the current rate) — the same
+    legitimate stateful pattern as OI momentum. Short when funding is richening
+    beyond the threshold (shorts receive an improving carry), long when it is
+    cheapening, flat inside the deadband.
+    """
+
+    params = template_params(lookback=8, threshold=1e-6)
+
+    def __init__(self, **overrides: Any) -> None:
+        super().__init__(**overrides)
+        self._rates: dict[str, list[float]] = {}
+
+    def on_candle(self, candle: "Candle", history: list["Candle"], ctx: Any) -> list["Signal"]:
+        fr = ctx.funding_rate(candle.market, self.params["venue"])
+        if fr is None:
+            return []
+        lookback = self.params["lookback"]
+        rates = self._rates.setdefault(candle.market, [])
+        rates.append(fr.rate_hourly)
+        if len(rates) > lookback + 1:
+            del rates[: len(rates) - (lookback + 1)]
+        if len(rates) < lookback + 1:
+            return []
+        drift = rates[-1] - rates[0]
+        threshold = self.params["threshold"]
+        if drift > threshold:
+            desired = "short"
+        elif drift < -threshold:
+            desired = "long"
+        else:
+            desired = "flat"
+        return self._rebalance(candle.market, ctx, desired)

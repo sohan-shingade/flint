@@ -38,11 +38,15 @@ from flint.strategy.templates import (
     BreakoutStrategy,
     FundingDislocationStrategy,
     FundingHarvestStrategy,
+    FundingMomentumStrategy,
+    KeltnerStrategy,
     LightGbmTrendStrategy,
+    MacdStrategy,
     MaCrossStrategy,
     OiMomentumStrategy,
     RsiReversionStrategy,
     TemplateNotFound,
+    VwapReversionStrategy,
 )
 from flint.strategy.templates.registry import TemplateSpec, register
 
@@ -123,13 +127,13 @@ def _assert_valid(signals: list[Signal]) -> None:
 # --- 1. registry --------------------------------------------------------------
 
 
-def test_registry_has_all_ten_templates_sorted():
+def test_registry_has_all_fourteen_templates_sorted():
     names = template_names()
     assert names == sorted(names)
     assert set(names) == {
-        "funding_harvest", "funding_dislocation", "funding_svd", "basis_trade",
-        "oi_momentum", "ma_cross", "rsi_reversion", "bollinger", "breakout",
-        "lgbm_trend",
+        "funding_harvest", "funding_dislocation", "funding_momentum", "funding_svd",
+        "basis_trade", "oi_momentum", "ma_cross", "rsi_reversion", "bollinger",
+        "breakout", "vwap_reversion", "keltner", "macd", "lgbm_trend",
     }
 
 
@@ -237,6 +241,55 @@ def test_oi_momentum_needs_rising_oi_and_holds_prev_across_bars():
     # Second bar: OI rose (100 -> 110) and price rose -> long.
     sig = _drive(strat, _FakeCtx(oi=110.0, candles=bars[:-1]), bars[-1])
     assert any(s.action == "long" for s in sig)
+
+
+def test_vwap_reversion_fades_a_stretch_beyond_the_band():
+    strat = VwapReversionStrategy(period=4, band_pct=1.0)
+    fall = _path([100, 100, 100, 100, 90])  # ~7.7% below rolling VWAP -> long
+    assert [s.action for s in _drive(strat, _FakeCtx(candles=fall[:-1]), fall[-1])] == ["long"]
+    spike = _path([100, 100, 100, 100, 110])  # ~7.3% above -> short
+    assert [s.action for s in _drive(strat, _FakeCtx(candles=spike[:-1]), spike[-1])] == ["short"]
+    flat = _path([100, 100, 100, 100, 100])  # inside the band -> flat/no-op
+    assert _drive(strat, _FakeCtx(candles=flat[:-1]), flat[-1]) == []
+
+
+def test_keltner_shorts_a_band_break_and_holds_inside_the_channel():
+    strat = KeltnerStrategy(period=3, k=1.0)
+    crash = _path([100, 100, 100, 100, 70])  # close 70 < mid(85) - atr(10)
+    assert [s.action for s in _drive(strat, _FakeCtx(candles=crash[:-1]), crash[-1])] == ["short"]
+    # Inside the channel a held position is HELD (hold semantics), never flattened.
+    calm = _path([100, 100, 100, 100, 100])
+    held = _drive(strat, _FakeCtx(position=_pos(Side.LONG), candles=calm[:-1]), calm[-1])
+    assert held == []
+
+
+def test_macd_follows_the_signal_line_cross():
+    strat = MacdStrategy(fast=2, slow=4, signal=2)
+    accel_up = _path([10, 10, 10, 10, 12, 16])  # accelerating rise -> line > signal
+    assert [s.action for s in _drive(strat, _FakeCtx(candles=accel_up[:-1]), accel_up[-1])] == ["long"]
+    accel_down = _path([16, 16, 16, 16, 14, 10])
+    assert [s.action for s in _drive(strat, _FakeCtx(candles=accel_down[:-1]), accel_down[-1])] == ["short"]
+    warmup = _path([10, 10, 10])  # too short for slow+signal -> no opinion
+    assert _drive(strat, _FakeCtx(candles=warmup[:-1]), warmup[-1]) == []
+
+
+def test_funding_momentum_trades_the_drift_not_the_level():
+    strat = FundingMomentumStrategy(lookback=2, threshold=1e-6)
+    hist = _path([100, 100])
+    # Two warm-up bars observing the rate, no opinion yet.
+    assert _drive(strat, _FakeCtx(funding=0.0001, candles=hist[:-1]), hist[-1]) == []
+    assert _drive(strat, _FakeCtx(funding=0.0002, candles=hist[:-1]), hist[-1]) == []
+    # Rate has richened across the window -> short collects the improving carry.
+    sig = _drive(strat, _FakeCtx(funding=0.0003, candles=hist[:-1]), hist[-1])
+    assert [s.action for s in sig] == ["short"]
+    # A cheapening rate flips the desired state to long (close + long from short).
+    # Note the level is still positive — only the drift matters.
+    flip = _drive(
+        strat,
+        _FakeCtx(position=_pos(Side.SHORT), funding=0.00005, candles=hist[:-1]),
+        hist[-1],
+    )
+    assert [s.action for s in flip] == ["close", "long"]
 
 
 def test_no_template_calls_submit_order_on_any_fixture():

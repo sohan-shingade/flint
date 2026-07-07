@@ -3,9 +3,10 @@
 Importing this package registers every built-in template into the single
 :mod:`.registry`. Surfaces (backtest/paper/MCP) read the registry — they never
 hardcode a template list — so a template added here shows up everywhere at once.
-Perp-native first (funding harvest, funding dislocation, basis, OI momentum), then
-the classic technical set (MA/EMA cross, RSI, Bollinger, breakout), plus one ML
-template (LightGBM). Every template emits Signals only — never ``ctx.submit_order``.
+Perp-native first (funding harvest, dislocation, momentum, SVD, basis, OI momentum),
+then the classic technical set (MA/EMA cross, RSI, Bollinger, breakout, VWAP
+reversion, Keltner, MACD), plus one ML template (LightGBM). Every template emits
+Signals only — never ``ctx.submit_order``.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from .perp import (
     BasisTradeStrategy,
     FundingDislocationStrategy,
     FundingHarvestStrategy,
+    FundingMomentumStrategy,
     OiMomentumStrategy,
 )
 from .registry import (
@@ -29,8 +31,11 @@ from .registry import (
 from .technical import (
     BollingerStrategy,
     BreakoutStrategy,
+    KeltnerStrategy,
+    MacdStrategy,
     MaCrossStrategy,
     RsiReversionStrategy,
+    VwapReversionStrategy,
 )
 
 # --- register the built-ins (single source of truth, §8.4) -------------------
@@ -54,6 +59,11 @@ register(TemplateSpec(
     "basis_trade", BasisTradeStrategy,
     "Fade the perp premium: short a rich basis, long a cheap one.",
     "basis",
+))
+register(TemplateSpec(
+    "funding_momentum", FundingMomentumStrategy,
+    "Trade the drift of predicted funding: short a richening rate, long a cheapening one.",
+    "funding",
 ))
 register(TemplateSpec(
     "oi_momentum", OiMomentumStrategy,
@@ -81,6 +91,21 @@ register(TemplateSpec(
     "technical",
 ))
 register(TemplateSpec(
+    "vwap_reversion", VwapReversionStrategy,
+    "Fade closes stretched beyond a band around rolling VWAP.",
+    "technical",
+))
+register(TemplateSpec(
+    "keltner", KeltnerStrategy,
+    "Keltner-channel trend rider: enter on an ATR-band break, hold inside it.",
+    "technical",
+))
+register(TemplateSpec(
+    "macd", MacdStrategy,
+    "MACD trend follower: long above the signal line, short below.",
+    "technical",
+))
+register(TemplateSpec(
     "lgbm_trend", LightGbmTrendStrategy,
     "LightGBM trend classifier on bounded momentum features (ML).",
     "ml", is_ml=True,
@@ -97,6 +122,7 @@ __all__ = [
     # template classes
     "FundingHarvestStrategy",
     "FundingDislocationStrategy",
+    "FundingMomentumStrategy",
     "FundingSvdStrategy",
     "BasisTradeStrategy",
     "OiMomentumStrategy",
@@ -104,5 +130,8 @@ __all__ = [
     "RsiReversionStrategy",
     "BollingerStrategy",
     "BreakoutStrategy",
+    "VwapReversionStrategy",
+    "KeltnerStrategy",
+    "MacdStrategy",
     "LightGbmTrendStrategy",
 ]

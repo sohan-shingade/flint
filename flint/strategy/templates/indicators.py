@@ -81,6 +81,73 @@ def stdev(values: Sequence[float], n: int) -> float | None:
     return var ** 0.5
 
 
+def atr(history: Sequence["Candle"], n: int) -> float | None:
+    """Average True Range over the last ``n`` bars, or ``None`` if too few.
+
+    Simple average of the true ranges (needs ``n + 1`` bars for the first
+    previous-close), matching this module's bounded-trailing-window convention.
+    """
+    if n <= 0 or len(history) < n + 1:
+        return None
+    window = history[-(n + 1):]
+    trs = [
+        max(cur.high - cur.low, abs(cur.high - prev.close), abs(cur.low - prev.close))
+        for prev, cur in zip(window, window[1:])
+    ]
+    return sum(trs) / n
+
+
+def vwap(history: Sequence["Candle"], n: int) -> float | None:
+    """Volume-weighted average of typical price over the last ``n`` bars.
+
+    ``None`` if too few bars or the window traded no volume (no opinion — never a
+    fabricated level).
+    """
+    if n <= 0 or len(history) < n:
+        return None
+    window = history[-n:]
+    volume = sum(c.volume for c in window)
+    if volume <= 0:
+        return None
+    priced = sum(((c.high + c.low + c.close) / 3.0) * c.volume for c in window)
+    return priced / volume
+
+
+def _ema_series(values: Sequence[float], n: int) -> list[float]:
+    """The running EMA at each step from the ``n``-th value on (SMA-seeded)."""
+    k = 2.0 / (n + 1)
+    e = sum(values[:n]) / n
+    series = [e]
+    for v in values[n:]:
+        e = v * k + e * (1 - k)
+        series.append(e)
+    return series
+
+
+def macd(
+    values: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9
+) -> tuple[float, float] | None:
+    """``(macd_line, signal_line)`` at the last value, or ``None`` if too few.
+
+    MACD line is ``ema(fast) - ema(slow)``; the signal line is the ``signal``-EMA
+    of the MACD line's own series, so it needs ``slow + signal - 1`` values before
+    it has an opinion.
+    """
+    if fast <= 0 or slow <= fast or signal <= 0:
+        return None
+    if len(values) < slow + signal - 1:
+        return None
+    fast_series = _ema_series(values, fast)
+    slow_series = _ema_series(values, slow)
+    # Align the two series on their common (most recent) tail.
+    line = [
+        f - s
+        for f, s in zip(fast_series[len(fast_series) - len(slow_series):], slow_series)
+    ]
+    signal_series = _ema_series(line, signal)
+    return line[-1], signal_series[-1]
+
+
 def highest(values: Sequence[float], n: int) -> float | None:
     """Highest of the last ``n`` values, or ``None`` if too few."""
     if n <= 0 or len(values) < n:

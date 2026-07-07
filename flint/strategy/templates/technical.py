@@ -102,3 +102,73 @@ class BreakoutStrategy(TemplateStrategy):
         else:
             desired = "flat"
         return self._rebalance(candle.market, ctx, desired)
+
+
+class VwapReversionStrategy(TemplateStrategy):
+    """Mean-reversion to rolling VWAP: fade closes stretched beyond a band (§8.4).
+
+    VWAP is the volume-weighted typical price over the trailing ``period`` bars;
+    a close more than ``band_pct`` percent away is faded back toward it. Inside
+    the band, flat — the stretch does not clear costs.
+    """
+
+    params = template_params(period=20, band_pct=1.0)
+
+    def on_candle(self, candle: "Candle", history: list["Candle"], ctx: Any) -> list["Signal"]:
+        anchor = ind.vwap(history, self.params["period"])
+        if anchor is None or anchor <= 0:
+            return []
+        stretch_pct = (history[-1].close - anchor) / anchor * 100.0
+        if stretch_pct < -self.params["band_pct"]:
+            desired = "long"
+        elif stretch_pct > self.params["band_pct"]:
+            desired = "short"
+        else:
+            desired = "flat"
+        return self._rebalance(candle.market, ctx, desired)
+
+
+class KeltnerStrategy(TemplateStrategy):
+    """Keltner-channel trend rider: enter on a band break, hold until the flip (§8.4).
+
+    Bands are an EMA midline ± ``k`` ATRs. Unlike Bollinger (stdev of closes,
+    faded), Keltner bands are range-based and *followed*: a close beyond a band
+    opens with the move, and inside the channel the position is simply held
+    (``[]`` = no churn) rather than flattened — chop stays un-traded.
+    """
+
+    params = template_params(period=20, k=2.0)
+
+    def on_candle(self, candle: "Candle", history: list["Candle"], ctx: Any) -> list["Signal"]:
+        period = self.params["period"]
+        mid = ind.ema(ind.closes(history), period)
+        band = ind.atr(history, period)
+        if mid is None or band is None:
+            return []
+        close = history[-1].close
+        if close > mid + self.params["k"] * band:
+            return self._rebalance(candle.market, ctx, "long")
+        if close < mid - self.params["k"] * band:
+            return self._rebalance(candle.market, ctx, "short")
+        return []  # inside the channel: hold what is held
+
+
+class MacdStrategy(TemplateStrategy):
+    """MACD trend follower: long when the MACD line is above its signal line (§8.4)."""
+
+    params = template_params(fast=12, slow=26, signal=9)
+
+    def on_candle(self, candle: "Candle", history: list["Candle"], ctx: Any) -> list["Signal"]:
+        pair = ind.macd(
+            ind.closes(history),
+            fast=self.params["fast"],
+            slow=self.params["slow"],
+            signal=self.params["signal"],
+        )
+        if pair is None:
+            return []
+        line, signal_line = pair
+        if line == signal_line:
+            return []
+        desired = "long" if line > signal_line else "short"
+        return self._rebalance(candle.market, ctx, desired)
