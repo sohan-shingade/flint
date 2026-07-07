@@ -17,7 +17,7 @@ afterAll(() => server.close())
 
 // --- DOM API mocks needed by chart libraries and Monaco ---
 
-// ResizeObserver (used by recharts, lightweight-charts)
+// ResizeObserver (used by recharts)
 class ResizeObserverMock {
   observe() {}
   unobserve() {}
