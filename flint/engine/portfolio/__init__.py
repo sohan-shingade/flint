@@ -20,7 +20,7 @@ from .events import (
     RUN_STARTED,
     Event,
 )
-from .replay import BookState, apply_fill_delta, fold
+from .replay import BookState, apply_fill_delta, fold, warm_state
 from .upcasters import REGISTRY, UpcasterRegistry
 
 __all__ = [
@@ -39,5 +39,6 @@ __all__ = [
     "LIQUIDATION",
     "BookState",
     "fold",
+    "warm_state",
     "apply_fill_delta",
 ]

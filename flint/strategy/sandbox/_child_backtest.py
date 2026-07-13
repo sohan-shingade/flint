@@ -35,12 +35,28 @@ from ._child import _apply_rlimits  # reuse the exact RLIMIT floor
 
 
 def _run(job: dict[str, Any]) -> dict[str, Any]:
-    """Compile + run the user backtest inside the child; return its result data."""
+    """Compile + run the user backtest inside the child; return its result data.
+
+    The same child also runs one warm-started **paper step** (§6.7): when the job
+    carries ``prior_events`` (the run's persisted rows, inert copies), they are
+    folded into the carried book (``warm_state`` — the identical reconstruction
+    the in-process ``PaperSession`` uses) and handed to the engine as
+    ``initial_state``; only the step's *new* rows are returned. A backtest job
+    carries no ``prior_events`` and is untouched by any of this.
+    """
     from flint.adapters import InMemoryUserData
-    from flint.core.models.market import Candle, FundingRate, MarkSnapshot
+    from flint.core.models.market import (
+        Candle,
+        FundingRate,
+        MarkSnapshot,
+        OrderbookSnapshot,
+    )
+    from flint.data.normalize import TradePrint
     from flint.engine import EngineConfig
     from flint.engine.api import EngineFeed, EngineRunSpec
-    from flint.engine.portfolio import EventLog
+    from flint.engine.context import OpenInterestSnapshot
+    from flint.engine.money import money
+    from flint.engine.portfolio import EventLog, warm_state
     from flint.engine.select import engine_for, resolve_engine_name
     from flint.live import build_adapter
     from flint.ports import TenantContext
@@ -77,6 +93,29 @@ def _run(job: dict[str, Any]) -> dict[str, Any]:
     candles = [Candle(**d) for d in raw["candles"]]
     funding = {m: [FundingRate(**d) for d in lst] for m, lst in raw["funding"].items()}
     marks = {m: [MarkSnapshot(**d) for d in lst] for m, lst in raw["marks"].items()}
+    # The paper-step extras (absent on a backtest job): OI, books, trades — the
+    # remaining EngineFeed slots a LiveBar batch carries, so the sandboxed step
+    # consumes the exact feed the in-process session would.
+    oi = {
+        m: [OpenInterestSnapshot(**d) for d in lst]
+        for m, lst in raw.get("oi", {}).items()
+    }
+    books = {
+        m: [
+            OrderbookSnapshot(
+                market=d["market"],
+                ts=d["ts"],
+                bids=tuple(tuple(level) for level in d["bids"]),
+                asks=tuple(tuple(level) for level in d["asks"]),
+                venue=d["venue"],
+            )
+            for d in lst
+        ]
+        for m, lst in raw.get("books", {}).items()
+    }
+    trades = {
+        m: [TradePrint(**d) for d in lst] for m, lst in raw.get("trades", {}).items()
+    }
 
     # Compile the UNTRUSTED source under the restricted builtins — the same
     # containment the validation probe uses — and pick the Strategy subclass by the
@@ -107,16 +146,37 @@ def _run(job: dict[str, Any]) -> dict[str, Any]:
         strategy_id=job["run_id"],
         overrides=dict(job["overrides"]),
     )
-    log = EventLog(InMemoryUserData(), tenant, job["run_id"])
+    store = InMemoryUserData()
+    # Warm start (paper step, §6.7): preload the run's prior rows so the fold
+    # reconstructs the carried book AND the EventLog resumes its seq where the
+    # parent's log left off — the returned new rows slot straight after them.
+    prior_rows = list(job.get("prior_events") or [])
+    initial_state = None
+    if prior_rows:
+        store.append_events(tenant, job["run_id"], prior_rows)
+        initial_state = warm_state(
+            EventLog(store, tenant, job["run_id"]).read(),
+            initial_capital=money(job["initial_capital"]),
+            venue=job["fund_venue"],
+        )
+    log = EventLog(store, tenant, job["run_id"])
     # The engine seam (§6.0): the substrate takes the feed/spec and funds the
     # portfolio itself. As of N10 the only substrate is the Nautilus core; the child
     # dispatches through ``engine_for`` exactly as the in-process path does.
-    feed = EngineFeed(candles=candles, funding=funding, marks=marks)
+    feed = EngineFeed(
+        candles=candles,
+        funding=funding,
+        marks=marks,
+        books=books,
+        trades=trades,
+        oi=oi,
+    )
     spec = EngineRunSpec(
         config=EngineConfig(),
         venue_spec=HYPERLIQUID,
         initial_capital=job["initial_capital"],
         fund_venue=job["fund_venue"],
+        initial_state=initial_state,
         # The parent already applied close-derived mark synthesis while building
         # the inert inputs (services._engine_inputs.build_engine_inputs), so the
         # feed's marks are complete here and no engine-side synthesis exists.
@@ -124,8 +184,9 @@ def _run(job: dict[str, Any]) -> dict[str, Any]:
     engine_cls().run(feed, adapter, event_log=log, spec=spec)
 
     return {
-        # Raw stored rows, so the parent re-persists them bit-for-bit (parity).
-        "events": log.read_raw(),
+        # Raw stored rows, so the parent re-persists them bit-for-bit (parity) —
+        # on a warm-started paper step, only the rows this run appended.
+        "events": log.read_raw()[len(prior_rows) :],
         "rejections": [_rejection_row(r) for r in adapter.drain_rejections()],
         "notes": list(adapter.tearsheet_notes()),
         # Attribution (§19.4/§19.6): the substrate that actually ran, and the

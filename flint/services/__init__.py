@@ -29,7 +29,12 @@ from .jobs import BacktestJobs, JobRecord, new_run_id
 from .lab import funding_lab
 from .live import stop_live
 from .optimize import OptimizeOutcome, OptimizeRequest, run_optimization
-from .paper import paper_snapshot, start_paper
+from .paper import (
+    paper_snapshot,
+    resume_paper_source,
+    start_paper,
+    start_paper_source,
+)
 from .runs import (
     compare_runs,
     export_run,
@@ -39,6 +44,7 @@ from .runs import (
     run_results,
 )
 from .strategy_source import (
+    SourceValidationError,
     ValidationReport,
     run_backtest_source,
     validate_strategy,
@@ -74,12 +80,15 @@ __all__ = [
     "validate_strategy",
     "run_backtest_source",
     "ValidationReport",
+    "SourceValidationError",
     # alerts
     "stop_live",
     "AlertConfigStore",
-    # paper monitor
+    # paper front door + monitor
     "paper_snapshot",
     "start_paper",
+    "start_paper_source",
+    "resume_paper_source",
     # error taxonomy
     "ServiceError",
     "ValidationError",

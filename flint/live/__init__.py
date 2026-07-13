@@ -40,10 +40,11 @@ from .executor import (
     StopReport,
     stop_all_live,
 )
-from .session import PaperSession, RunResult, build_adapter
+from .session import PaperSession, RunResult, SandboxedPaperSession, build_adapter
 
 __all__ = [
     "PaperSession",
+    "SandboxedPaperSession",
     "RunResult",
     "build_adapter",
     "LiveExecutor",

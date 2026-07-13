@@ -137,6 +137,47 @@ class LiveFeed:
 
     # -- public API ------------------------------------------------------------
 
+    @property
+    def cursor(self) -> int | None:
+        """The last emitted bar start (the feed's forward-only cursor), or ``None``."""
+        return self._last_emitted_bar_start
+
+    def replay_to(self, now_ms: int) -> list[LiveBar]:
+        """Advance the feed to venue time ``now_ms`` with no live connection.
+
+        The headless counterpart of :meth:`connect` for poll-driven callers that
+        cannot hold a WS pump: the bars closed since the cursor are fetched from
+        the lake and rebuilt through the *same* gap-replay machinery a reconnect
+        uses — never skipped, never forward-filled (§6.7 / D26). The bar open at
+        ``now_ms`` is untouched (it has not closed). What the lake lacked stays
+        ahead of the cursor and is retried on the next call, recorded as a
+        degraded :class:`~flint.data.livefeed.gap.GapRecovery` each time.
+
+        On the first-ever advance (no cursor) nothing is replayed: the cursor is
+        anchored at the last bar closed before ``now_ms``, so the session starts
+        "from now" rather than replaying pre-session history. The caller must
+        persist the cursor (``PaperSession`` stores it in the run head) for the
+        anchor to survive a restart.
+        """
+        target = bar_start(now_ms, self._resolution_s)  # the still-open bar
+        if self._last_emitted_bar_start is None:
+            self._last_emitted_bar_start = target - self._res_ms
+            return []
+        expected_next = self._last_emitted_bar_start + self._res_ms
+        if target <= expected_next:
+            return []  # no bar has closed since the last advance
+        if self._gap_source is None:
+            raise ValueError(
+                "headless catch-up requires a gap_source — the lake is the only "
+                "place closed bars can come from without a live connection (§6.7)"
+            )
+        bars = self._replay_gap(expected_next, target)
+        for lb in bars:
+            # A lake candle proves venue events occurred at/after its bar start —
+            # the conservative honest observation for the session clock (§6.7).
+            self.clock.observe(lb.candle.ts)
+        return bars
+
     def connect(self, source: WsMessageSource) -> list[LiveBar]:
         """Process one WS connection; return the bars it closed, in time order.
 
@@ -281,7 +322,10 @@ class LiveFeed:
         out: list[LiveBar] = []
         for bar in bars:
             start = bar.candle.ts
-            if self._last_emitted_bar_start is not None and start <= self._last_emitted_bar_start:
+            if (
+                self._last_emitted_bar_start is not None
+                and start <= self._last_emitted_bar_start
+            ):
                 continue
             self._last_emitted_bar_start = start
             out.append(bar)

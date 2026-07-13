@@ -191,6 +191,33 @@ class ValidationReport:
         }
 
 
+class SourceValidationError(ValidationError):
+    """Invalid user source at a front door that returns a live object (§13.3).
+
+    ``run_backtest_source`` carries an invalid verdict as *data* (a
+    :class:`BacktestOutcome`); a paper-session start has no outcome record to
+    ride in, so the same :class:`ValidationReport` rides on this error instead —
+    ``to_payload`` embeds it under ``error.validation`` so every surface renders
+    the identical structured body, never a stack trace.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        report: ValidationReport,
+        detail: str = "",
+        hint: str = "",
+    ) -> None:
+        super().__init__(message, detail=detail, hint=hint)
+        self.report = report
+
+    def to_payload(self) -> dict[str, Any]:
+        payload = super().to_payload()
+        payload["error"]["validation"] = self.report.to_payload()
+        return payload
+
+
 def validate_strategy(source: str) -> ValidationReport:
     """Sandbox + static-lint a user strategy — structured errors *before* a run.
 
@@ -295,7 +322,9 @@ def run_backtest_source(
     surfaced as ``verdict="invalid"`` with a structured ``sandbox_error`` — never a
     stack trace, and nothing is persisted.
     """
-    validate_engine(engine)  # unknown engine → uniform §19.1 error, before anything runs
+    validate_engine(
+        engine
+    )  # unknown engine → uniform §19.1 error, before anything runs
     report = validate_strategy(source)
     if not report.valid:
         summary = {

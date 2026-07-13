@@ -4,9 +4,9 @@ Every port has a concrete fulfilment here that runs on a laptop with no network
 and no external service, so the whole skeleton is exercisable in tests. These
 are deliberately in-memory: they prove the *seams* (tenant isolation, the Arrow
 boundary, quota-carrying jobs) without pulling the Phase-2 data-lake schema
-forward. The durable DuckDB market/user store adapters land with the data layer
-(task #2); swapping them in is a one-line wiring change, which is the whole
-point of ports.
+forward. The durable DuckDB market/user store adapters live with the data layer
+(``flint.data.store.DuckDBUserData`` / ``DuckDBMarketData``); swapping them in
+is a one-line wiring change, which is the whole point of ports.
 """
 
 from __future__ import annotations

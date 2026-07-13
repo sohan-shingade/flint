@@ -76,9 +76,7 @@ def apply_fill_delta(
     elif remaining == 0:  # flat
         del positions[key]
     else:  # flip: close the old side, open the remainder on the fill side
-        positions[key] = replace(
-            pos, side=side, size=-remaining, entry_price=price
-        )
+        positions[key] = replace(pos, side=side, size=-remaining, entry_price=price)
     return realized
 
 
@@ -163,6 +161,30 @@ def fold(events: Iterable[Event]) -> BookState:
             if rec is not None and not rec.is_terminal:
                 rec.transition(OrderStatus.CANCELLED, reason=p.get("reason", ""))
 
-    return BookState(
-        accounts=state.accounts, positions=state.positions, orders=orders
-    )
+    return BookState(accounts=state.accounts, positions=state.positions, orders=orders)
+
+
+def warm_state(
+    events: Iterable[Event], *, initial_capital: Money, venue: str
+) -> PortfolioState:
+    """Fold ``events`` into the §6.7 warm-start book: initial capital + deltas.
+
+    ``fold`` rebuilds cash/positions as *deltas from zero* (fills, funding,
+    liquidation); true state is ``initial_capital + deltas``. This is the one
+    reconstruction both warm-start consumers share — the in-process
+    ``PaperSession`` and the sandboxed paper-step child — so a resumed book can
+    never disagree between the two paths. Working orders are deliberately not
+    carried: the engine cancels them at run end (``run_ended``, §6.2), so a
+    warm start begins with an empty order machine by contract.
+    """
+    book = fold(events)
+    state = PortfolioState()
+    state.account(venue).cash = initial_capital
+    for v, acct in book.accounts.items():
+        a = state.account(v)
+        a.cash = a.cash + acct.cash
+        a.fees_paid = acct.fees_paid
+        a.funding_paid = acct.funding_paid
+        a.realized_pnl = acct.realized_pnl
+    state.positions.update(book.positions)
+    return state
