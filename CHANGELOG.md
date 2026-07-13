@@ -8,6 +8,39 @@ patch on additive features and fixes.
 
 ---
 
+## [2.0.1] — 2026-07-12
+
+Paper trading for embedders: user-source sessions + headless (poll-driven)
+advance. [Release notes](https://github.com/sohan-shingade/flint/releases/tag/v2.0.1).
+
+**Added**
+- `services.start_paper_source` / `resume_paper_source` — paper sessions
+  over submitted user *source*, mirroring `run_backtest_source`: the
+  sandbox/lint gate runs first (invalid source raises a structured
+  `SourceValidationError` carrying the `ValidationReport`), and every
+  engine step of the returned `SandboxedPaperSession` runs inside the
+  OS-isolated sandbox child (D25) — untrusted code never executes in the
+  embedding process. Proven bit-for-bit identical to the in-process
+  template session's event stream.
+- `PaperSession.catch_up(now_ms)` + `LiveFeed.replay_to(now_ms)` —
+  advance a paper session with no live WS connection: bars closed since
+  the cursor replay from the injected `GapSource` through the same
+  engine loop as a reconnect (never skipped, never forward-filled; lake
+  shortfalls are degraded `GapRecovery`s and retried). The first call
+  anchors the cursor "from now" and persists it in the run head
+  (`cursor_bar_start`), so `resume` → `catch_up` survives a restart even
+  before any bar was processed.
+- `warm_state` — the one shared §6.7 event-log → portfolio fold, used by
+  both the in-process session and the sandbox child.
+
+**Fixed**
+- Stale `flint.adapters` docstrings claimed the durable user store was
+  still pending; they now point at `flint.data.store.DuckDBUserData(path)`
+  (ships since the data layer landed), and paper restart-safety over it
+  is covered by a test.
+
+---
+
 ## [2.0.0] — 2026-07-07
 
 Ground-up rewrite (the `redesign/greenfield` build). [Release notes](https://github.com/sohan-shingade/flint/releases/tag/v2.0.0).
