@@ -62,7 +62,7 @@ hyperliquid = ["eth-account>=0.10", "msgpack>=1.0"]
 # only engine substrate). `pip install "flint[nautilus]"` keeps working.
 nautilus = []
 dev = [
-    "pytest>=7.0",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.21",
     "ruff>=0.4",
 ]
