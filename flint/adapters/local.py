@@ -146,14 +146,12 @@ class EnvSecrets(SecretsPort):
 
     def get_secret(self, tenant: TenantContext, name: str) -> str | None:
         scoped = f"FLINT_SECRET__{tenant.tenant_id}__{name}"
-        if scoped in os.environ:
-            return os.environ[scoped]
-        if tenant.tenant_id == "local" and name in os.environ:
-            return os.environ[name]
-        if scoped in self._file_values:
-            return self._file_values[scoped]
-        if tenant.tenant_id == "local":
-            return self._file_values.get(name)
+        keys = (scoped, name) if tenant.tenant_id == "local" else (scoped,)
+        for source in (os.environ, self._file_values):
+            for key in keys:
+                value = source.get(key)
+                if value:
+                    return value
         return None
 
 

@@ -145,6 +145,22 @@ def test_env_secrets_dotenv_keeps_tenant_scoping_and_literal_values(
     assert secrets.get_secret(TenantContext.local(), "TARDIS_API_KEY") == "local-key"
 
 
+def test_env_secrets_blank_values_are_unset_and_do_not_shadow_fallback(
+    tmp_path, monkeypatch
+):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "FLINT_SECRET__local__TARDIS_API_KEY=\nTARDIS_API_KEY=from-file\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FLINT_SECRET__local__TARDIS_API_KEY", "")
+    monkeypatch.delenv("TARDIS_API_KEY", raising=False)
+
+    secrets = EnvSecrets(env_file)
+
+    assert secrets.get_secret(TenantContext.local(), "TARDIS_API_KEY") == "from-file"
+
+
 def test_env_secrets_missing_dotenv_is_a_noop(tmp_path, monkeypatch):
     monkeypatch.delenv("TARDIS_API_KEY", raising=False)
 
