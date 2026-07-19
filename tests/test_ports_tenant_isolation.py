@@ -9,11 +9,13 @@ tenant-scoped and which are not.
 from __future__ import annotations
 
 import inspect
+import os
 
 import pyarrow as pa
 import pytest
 
 from flint.adapters import (
+    EnvSecrets,
     InMemoryEventBus,
     InMemoryMarketData,
     InMemoryUserData,
@@ -96,6 +98,75 @@ def test_event_bus_is_tenant_scoped():
     bus.publish(ALICE, "fills", {"id": "alice-fill"})
 
     assert seen == ["alice-fill"]
+
+
+def test_env_secrets_loads_nearest_dotenv_without_exporting_it(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("TARDIS_API_KEY=from-file\n", encoding="utf-8")
+    child = tmp_path / "nested"
+    child.mkdir()
+    monkeypatch.chdir(child)
+    monkeypatch.delenv("TARDIS_API_KEY", raising=False)
+
+    secrets = EnvSecrets()
+
+    assert secrets.get_secret(TenantContext.local(), "TARDIS_API_KEY") == "from-file"
+    assert "TARDIS_API_KEY" not in os.environ
+
+
+def test_env_secrets_process_environment_wins_over_dotenv(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "FLINT_SECRET__local__TARDIS_API_KEY=from-file\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("TARDIS_API_KEY", "from-process")
+
+    secrets = EnvSecrets(env_file)
+
+    assert secrets.get_secret(TenantContext.local(), "TARDIS_API_KEY") == "from-process"
+
+
+def test_env_secrets_dotenv_keeps_tenant_scoping_and_literal_values(
+    tmp_path, monkeypatch
+):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "FLINT_SECRET__alice__TARDIS_API_KEY=alice-${SHARED}\n"
+        "FLINT_SECRET__bob__TARDIS_API_KEY=bob-key\n"
+        "TARDIS_API_KEY=local-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED", "expanded")
+    monkeypatch.delenv("TARDIS_API_KEY", raising=False)
+
+    secrets = EnvSecrets(env_file)
+
+    assert secrets.get_secret(ALICE, "TARDIS_API_KEY") == "alice-${SHARED}"
+    assert secrets.get_secret(BOB, "TARDIS_API_KEY") == "bob-key"
+    assert secrets.get_secret(TenantContext.local(), "TARDIS_API_KEY") == "local-key"
+
+
+def test_env_secrets_blank_values_are_unset_and_do_not_shadow_fallback(
+    tmp_path, monkeypatch
+):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "FLINT_SECRET__local__TARDIS_API_KEY=\nTARDIS_API_KEY=from-file\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FLINT_SECRET__local__TARDIS_API_KEY", "")
+    monkeypatch.delenv("TARDIS_API_KEY", raising=False)
+
+    secrets = EnvSecrets(env_file)
+
+    assert secrets.get_secret(TenantContext.local(), "TARDIS_API_KEY") == "from-file"
+
+
+def test_env_secrets_missing_dotenv_is_a_noop(tmp_path, monkeypatch):
+    monkeypatch.delenv("TARDIS_API_KEY", raising=False)
+
+    secrets = EnvSecrets(tmp_path / "missing.env")
+
+    assert secrets.get_secret(TenantContext.local(), "TARDIS_API_KEY") is None
 
 
 # --- port contract tests: the seam is in the signatures --------------------

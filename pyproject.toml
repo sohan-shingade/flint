@@ -29,6 +29,7 @@ dependencies = [
     "pyarrow>=14.0",
     "numpy>=1.24",
     "httpx>=0.25",
+    "python-dotenv>=1.0",
     "fastapi>=0.100",
     "uvicorn[standard]>=0.20",
     "pyyaml>=6.0",
