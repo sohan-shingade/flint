@@ -1,76 +1,49 @@
 # How to: Add API keys
 
-Most providers (Hyperliquid, Pyth, Raydium, Orca, GeckoTerminal, Jupiter, CoinGecko, CCXT public) need **no keys**. Core data (Hyperliquid + Pyth) is free — no API keys needed. These do:
+Most market-data paths need no key. Tardis is an optional BYO-license backfill
+source for historical Hyperliquid tick and order-book data.
 
-| Provider | Env var | Free tier | Sign-up |
+| Provider | Env var | Access | Sign-up |
 |---|---|---|---|
-| Birdeye | `FLINT_BIRDEYE_API_KEY` | yes | [birdeye.so/developers](https://birdeye.so/developers) |
-| Helius | `FLINT_HELIUS_API_KEY` | yes (no CC) | [helius.dev](https://helius.dev) |
-| Dune | `FLINT_DUNE_API_KEY` | limited | [dune.com](https://dune.com) |
-| Tardis | `FLINT_TARDIS_API_KEY` | paid | [tardis.dev](https://tardis.dev) |
-
-Plus exchange-authenticated endpoints via CCXT: `FLINT_CCXT_API_KEY` + `FLINT_CCXT_SECRET`.
+| Tardis | `TARDIS_API_KEY` | paid | [tardis.dev](https://tardis.dev) |
 
 ## Via `.env` (recommended — never commit)
 
-Create `.env` in the project root:
+Create `.env` in the project directory. Flint searches from the directory where
+it is launched upward to the nearest `.env`:
 
-```
-FLINT_BIRDEYE_API_KEY=your_key_here
-FLINT_HELIUS_API_KEY=your_key_here
-```
-
-`.gitignore` already excludes it.
-
-## Via CLI
-
-```bash
-flint data provider enable birdeye --api-key $YOUR_KEY
+```dotenv
+TARDIS_API_KEY=your_key_here
 ```
 
-Sets `providers.birdeye.enabled: true` in `flint.yaml` and appends the key to `.env`.
+`.gitignore` already excludes it. Flint loads the file when it constructs its
+local secrets adapter, so `source .env` is not required. An exported environment
+variable with the same name takes precedence over the file.
 
 ## Via env var (transient)
 
 ```bash
-FLINT_BIRDEYE_API_KEY=your_key_here flint serve
+TARDIS_API_KEY=your_key_here flint serve
 ```
 
 ## Verify
 
-```bash
-flint data provider status
-```
-
-Look for the `api_key` column — `required` means the provider is waiting for a key. After setting, `Available` should flip to `yes`.
-
-Or via API:
-
-```bash
-curl -s localhost:8000/api/v1/data/providers | jq '.providers[] | select(.requires_api_key)'
-```
-
-## System endpoint (UI-visible)
-
-The UI's Setup page calls `POST /api/v1/system/config` which appends to `.env`:
-
-```bash
-curl -X POST localhost:8000/api/v1/system/config \
-  -H 'Content-Type: application/json' \
-  -d '{"birdeye_api_key":"xxx","helius_api_key":"yyy"}'
-```
+A configured key makes Tardis available as the paid backfill lane when Flint's
+local data manager is assembled with the Tardis tier. Authentication is exercised
+only by a request for a non-first-of-month dataset; Tardis makes first-of-month
+files public.
 
 ## Rotate / revoke
 
-Edit `.env` directly. Restart `flint serve` so the new key is picked up (config loads at boot).
+Edit `.env` directly and restart Flint. Keys do not hot-reload.
 
 ## Gotchas
 
-- **Don't put keys in `flint.yaml`** if the repo is on GitHub. Use `.env`.
-- **Keys don't hot-reload.** Restart the server after changing.
-- **Birdeye free tier rate-limits.** Heavy backfills will 429; back off or upgrade.
+- **Don't put keys in tracked configuration files.** Use `.env`.
+- **Exported variables win over `.env`.** Unset the variable if a file edit seems ignored.
+- **Strategy environments are scrubbed.** Keep the project and `.env` readable only by trusted users.
 
 ## Related
 
-- [reference/config.md](../reference/config.md) — all config precedence rules
-- [reference/data-providers.md](../reference/data-providers.md) — which providers need what
+- [reference/config.md](../reference/config.md) — configuration precedence
+- [reference/data-providers.md](../reference/data-providers.md) — data-provider behavior

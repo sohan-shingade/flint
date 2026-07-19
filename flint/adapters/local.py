@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TypeVar
 
 import pyarrow as pa
+from dotenv import dotenv_values, find_dotenv
 
 from flint.ports import (
     EventBusPort,
@@ -128,19 +129,31 @@ class InProcessJobRunner(JobRunnerPort):
 
 
 class EnvSecrets(SecretsPort):
-    """Resolve secrets from the process environment (server-side ``.env``).
+    """Resolve secrets from the process environment and nearest local ``.env``.
 
     Namespaced per tenant as ``FLINT_SECRET__{tenant_id}__{name}`` so a
     multi-tenant server never returns one tenant's key to another; the ``local``
-    tenant also falls back to a bare ``name`` for convenience.
+    tenant also falls back to a bare ``name`` for convenience. Process values
+    take precedence over file values. File values remain in this trusted-host
+    adapter and are never copied into ``os.environ``.
     """
+
+    def __init__(self, env_file: str | os.PathLike[str] | None = None) -> None:
+        path = os.fspath(env_file) if env_file is not None else find_dotenv(usecwd=True)
+        self._file_values: Mapping[str, str | None] = (
+            dotenv_values(path, interpolate=False) if path else {}
+        )
 
     def get_secret(self, tenant: TenantContext, name: str) -> str | None:
         scoped = f"FLINT_SECRET__{tenant.tenant_id}__{name}"
         if scoped in os.environ:
             return os.environ[scoped]
+        if tenant.tenant_id == "local" and name in os.environ:
+            return os.environ[name]
+        if scoped in self._file_values:
+            return self._file_values[scoped]
         if tenant.tenant_id == "local":
-            return os.environ.get(name)
+            return self._file_values.get(name)
         return None
 
 

@@ -12,7 +12,8 @@ providers:
   helius: { enabled: false, api_key: "" }
 ```
 
-Core data (Hyperliquid + Pyth) is free — no API keys needed. The Drift provider classes still ship but are dormant: Drift is dropped post-hack and disabled by default.
+Core Hyperliquid data is free and needs no API key. Tardis is an optional
+BYO-license source for historical tick and order-book backfills.
 
 Or via CLI: `flint data provider enable birdeye --api-key $KEY`.
 
@@ -119,7 +120,7 @@ Live feeds for paper and live trading. All inherit `WebSocketFeed` in `flint/pro
 | Birdeye | `FLINT_BIRDEYE_API_KEY` | yes | [birdeye.so/developers](https://birdeye.so/developers) |
 | Helius | `FLINT_HELIUS_API_KEY` | yes (no CC) | [helius.dev](https://helius.dev) |
 | Dune (borrow backfill) | `FLINT_DUNE_API_KEY` | yes (limited) | [dune.com](https://dune.com) |
-| Tardis (CEX orderbooks) | `FLINT_TARDIS_API_KEY` | no | [tardis.dev](https://tardis.dev) |
+| Tardis (Hyperliquid tick/book backfill) | `TARDIS_API_KEY` | no | [tardis.dev](https://tardis.dev) |
 
 Set in `.env` (don't commit) or as env vars. Never put keys in `flint.yaml` if the config is checked into git.
 
