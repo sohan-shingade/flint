@@ -32,7 +32,7 @@ jobs:
       HL_TESTNET_KEY: ${{ secrets.HL_TESTNET_KEY }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v5
